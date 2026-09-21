@@ -22,6 +22,7 @@ import { displayNameFromUser } from "./model/displayName";
 import { resolveMediaUrl, resolveMediaUrlList } from "./model/files";
 import { calcularCosto } from "./lib/costoReserva";
 import { normalizarPlaca } from "./lib/placa";
+import { buscarCasas, ordenVinculo, type Ocupante } from "./lib/buscarCasa";
 import {
   cajaDeposito,
   crearIncidente,
@@ -815,10 +816,8 @@ async function resumenAcceso(ctx: QueryCtx | MutationCtx, vis: Doc<"visitantes">
         .withIndex("by_unidad", (q) => q.eq("unidadId", vis.unidadId))
         .collect(),
     );
-    const orden = (v: string) =>
-      v === "propietario" ? 0 : v === "residente" ? 1 : 2;
     const candidato = [...links].sort(
-      (a, b) => orden(a.vinculo) - orden(b.vinculo),
+      (a, b) => ordenVinculo(a.vinculo) - ordenVinculo(b.vinculo),
     )[0];
     if (candidato) {
       const mem = await ctx.db.get(candidato.membershipId);
@@ -1021,6 +1020,8 @@ export const recibirPaquete = mutation({
   args: {
     condominioId: v.id("condominios"),
     unidadNumero: v.string(),
+    /** La casa escogida en el selector. Si viene, manda sobre `unidadNumero`. */
+    unidadId: v.optional(v.id("unidades")),
     tipo: tipoPaqueteValidator,
     remitente: v.optional(v.string()),
     destinatario: v.optional(v.string()),
@@ -1030,19 +1031,34 @@ export const recibirPaquete = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireCondominioRole(ctx, args.condominioId, [...GUARD_ROLES]);
-    const unidadNumero = args.unidadNumero.trim();
+
+    /* La casa escogida en el selector es la buena: no hay que adivinarla por
+     * el numero, y dos torres con una 101 cada una dejan de confundirse. */
+    let unidad: Doc<"unidades"> | undefined;
+    if (args.unidadId) {
+      const escogida = await ctx.db.get(args.unidadId);
+      if (!escogida || escogida.condominioId !== args.condominioId) {
+        throw new Error("Esa casa no es de este conjunto.");
+      }
+      unidad = escogida;
+    }
+
+    const unidadNumero = unidad?.numero ?? args.unidadNumero.trim();
     if (!unidadNumero) throw new Error("La unidad es obligatoria.");
 
-    /* Se resuelve la unidad para poder avisarle a quien vive ahi. Si no
-     * cuadra con ninguna no se bloquea el registro —la porteria no puede
-     * quedarse sin recibir un paquete porque el numero venga raro—, pero el
-     * aviso no saldra y por eso conviene que el guarda escoja de la lista. */
-    const unidades = await ctx.db
-      .query("unidades")
-      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
-      .collect();
-    const norm = (x: string) => x.trim().toLowerCase().replace(/\s+/g, "");
-    const unidad = unidades.find((u) => norm(u.numero) === norm(unidadNumero));
+    /* Sin casa escogida se resuelve por el numero escrito, para poder
+     * avisarle a quien vive ahi. Si no cuadra con ninguna no se bloquea el
+     * registro —la porteria no puede quedarse sin recibir un paquete porque
+     * el numero venga raro—, pero el aviso no saldra y por eso conviene que
+     * el guarda escoja de la lista. */
+    if (!unidad) {
+      const unidades = await ctx.db
+        .query("unidades")
+        .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+        .collect();
+      const norm = (x: string) => x.trim().toLowerCase().replace(/\s+/g, "");
+      unidad = unidades.find((u) => norm(u.numero) === norm(unidadNumero));
+    }
 
     const now = Date.now();
     const id = await ctx.db.insert("paquetes", {
@@ -1623,36 +1639,101 @@ export const sembrarMotivosVehiculo = mutation({
   },
 });
 
+/** Hasta cuántas casas devuelve el selector de una vez. */
+const LIMITE_CASAS = 50;
+
 /**
- * Busca una casa por numero para senalarla en una novedad.
+ * Las casas del conjunto con quien vive en cada una, para el selector de la
+ * portería (paquetería, aporte voluntario y "otra novedad").
+ *
+ * Se busca por número o por nombre: el domiciliario dice "para Carlos", no
+ * "para la 101". Cada resultado trae el nombre de la persona que responde por
+ * la casa, porque "101" a secas no le dice al guarda si escogió bien.
  *
  * Igual que `buscarVehiculo`: el guarda no tiene permiso sobre el modulo de
- * unidades —no debe poder listar el censo del conjunto— pero si necesita
- * resolver un numero cuando esta escribiendo un reporte.
+ * unidades, así que esto devuelve lo justo para identificar la casa —número y
+ * un nombre— y nada del censo: ni correos, ni teléfonos, ni documentos.
+ *
+ * Texto vacío devuelve las primeras casas: es la lista que se ve al abrir el
+ * selector, antes de escribir nada.
  */
 export const buscarUnidad = query({
   args: { condominioId: v.id("condominios"), texto: v.string() },
   handler: async (ctx, args) => {
     await requireCondominioRole(ctx, args.condominioId, [...GUARD_ROLES]);
-    const aguja = args.texto.trim().toLowerCase();
-    if (aguja.length < 1) return [];
 
-    const unidades = await ctx.db
-      .query("unidades")
-      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
-      .collect();
+    const [unidades, vinculos] = await Promise.all([
+      ctx.db
+        .query("unidades")
+        .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+        .collect(),
+      ctx.db
+        .query("usuarioUnidad")
+        .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
+        .collect(),
+    ]);
 
-    return unidades
-      .filter((u) =>
-        `${u.torre ?? ""} ${u.numero}`.toLowerCase().includes(aguja),
-      )
-      .sort((a, b) =>
-        a.numero.localeCompare(b.numero, undefined, { numeric: true }),
-      )
-      .slice(0, 15)
-      .map((u) => ({ _id: u._id, numero: u.numero, torre: u.torre ?? null }));
+    const ocupantes = await ocupantesPorUnidad(ctx, vinculos);
+    const casas = unidades.map((u) => ({
+      _id: u._id,
+      numero: u.numero,
+      torre: u.torre ?? null,
+      bloque: u.bloque ?? null,
+      tipo: u.tipo,
+      ocupantes: ocupantes.get(u._id) ?? [],
+    }));
+
+    return buscarCasas(casas, args.texto, LIMITE_CASAS).map((c) => ({
+      _id: c._id,
+      numero: c.numero,
+      torre: c.torre,
+      residente: c.persona?.nombre ?? null,
+      vinculo: c.persona?.vinculo ?? null,
+    }));
   },
 });
+
+/**
+ * Quién vive en cada casa HOY, con el nombre que se muestra.
+ *
+ * Solo los vínculos vigentes y de cuentas activas: el arrendatario que ya se
+ * fue, o la membresía que la administración desactivó, no debe aparecer como
+ * dueño de un paquete. Lee cada membresía y cada usuario una sola vez aunque
+ * la persona tenga varias casas.
+ */
+async function ocupantesPorUnidad(
+  ctx: QueryCtx | MutationCtx,
+  vinculos: Doc<"usuarioUnidad">[],
+): Promise<Map<Id<"unidades">, Ocupante[]>> {
+  const personas = new Map<Id<"memberships">, Promise<string | null>>();
+  const nombreDe = (membershipId: Id<"memberships">) => {
+    if (!personas.has(membershipId)) {
+      personas.set(
+        membershipId,
+        (async () => {
+          const m = await ctx.db.get(membershipId);
+          if (!m || !m.isActive) return null;
+          const u = await ctx.db.get(m.userId);
+          if (!u || !u.active) return null;
+          return displayNameFromUser(u) || u.name || null;
+        })(),
+      );
+    }
+    return personas.get(membershipId)!;
+  };
+
+  const porUnidad = new Map<Id<"unidades">, Ocupante[]>();
+  await Promise.all(
+    vigentes(vinculos).map(async (l) => {
+      const nombre = await nombreDe(l.membershipId);
+      if (!nombre) return;
+      const lista = porUnidad.get(l.unidadId) ?? [];
+      lista.push({ nombre, vinculo: l.vinculo });
+      porUnidad.set(l.unidadId, lista);
+    }),
+  );
+  return porUnidad;
+}
 
 export const buscarVehiculo = query({
   args: { condominioId: v.id("condominios"), texto: v.string() },
@@ -1679,9 +1760,27 @@ export const buscarVehiculo = query({
       )
       .slice(0, 12);
 
+    /* Quién vive en la casa de cada placa, con el mismo criterio del
+     * selector de casa: el guarda ve "101 — Carlos Pérez" en los dos. */
+    const unidadIds = [...new Set(coinciden.map((v) => v.unidadId))];
+    const vinculos = (
+      await Promise.all(
+        unidadIds.map((id) =>
+          ctx.db
+            .query("usuarioUnidad")
+            .withIndex("by_unidad", (q) => q.eq("unidadId", id))
+            .collect(),
+        ),
+      )
+    ).flat();
+    const ocupantes = await ocupantesPorUnidad(ctx, vinculos);
+
     return await Promise.all(
       coinciden.map(async (v) => {
         const unidad = await ctx.db.get(v.unidadId);
+        const titular = [...(ocupantes.get(v.unidadId) ?? [])].sort(
+          (a, b) => ordenVinculo(a.vinculo) - ordenVinculo(b.vinculo),
+        )[0];
         return {
           _id: v._id,
           placa: v.placa,
@@ -1690,6 +1789,7 @@ export const buscarVehiculo = query({
             [v.marca, v.color].filter(Boolean).join(" · ") || null,
           unidadNumero: unidad?.numero ?? null,
           unidadTorre: unidad?.torre ?? null,
+          residente: titular?.nombre ?? null,
         };
       }),
     );

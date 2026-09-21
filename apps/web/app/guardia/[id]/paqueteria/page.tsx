@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
 import {
-  Package, Plus, Loader2, Check, Search, PackageCheck, Camera, Eye, Image as ImageIcon, Trash2,
+  Package, Plus, Loader2, Check, Search, PackageCheck, Camera, Eye, Image as ImageIcon, Trash2, Home, X,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id, Doc } from "@vekino/backend/dataModel";
@@ -19,6 +19,7 @@ import { PageContainer } from "@/components/layout/page-container";
 import { PageHeader } from "@/components/layout/page-header";
 import { cn } from "@/lib/utils";
 import { useUploadToS3 } from "@/hooks/use-upload-s3";
+import { SelectorUnidades, type UnidadElegida } from "@/components/guardia/selector-unidades";
 
 type Paq = Omit<Doc<"paquetes">, "fotoUrl" | "fotoEntregaUrl"> & {
   fotoUrl: string | null;
@@ -173,7 +174,10 @@ export default function GuardiaPaqueteriaPage() {
 function RecibirModal({ condominioId, onClose }: { condominioId: Id<"condominios">; onClose: () => void }) {
   const recibir = useMutation(api.guardia.recibirPaquete);
   const uploadFile = useUploadToS3();
-  const [unidadNumero, setUnidadNumero] = useState("");
+  /* La casa sale del selector; `numeroLibre` es la salida para lo que no está
+     en la lista, que el backend registra igual (sin aviso al residente). */
+  const [casa, setCasa] = useState<UnidadElegida[]>([]);
+  const [numeroLibre, setNumeroLibre] = useState<string | null>(null);
   const [tipo, setTipo] = useState<TipoPaq>("paquete");
   const [remitente, setRemitente] = useState("");
   const [destinatario, setDestinatario] = useState("");
@@ -182,7 +186,15 @@ function RecibirModal({ condominioId, onClose }: { condominioId: Id<"condominios
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const valid = unidadNumero.trim().length > 0;
+  const elegida = casa[0] ?? null;
+  const valid = elegida !== null || !!numeroLibre?.trim();
+
+  function elegirCasa(u: UnidadElegida[]) {
+    setCasa(u);
+    setNumeroLibre(null);
+    /* Quien vive ahí es el destinatario más probable; se puede cambiar. */
+    if (u[0]?.residente && !destinatario.trim()) setDestinatario(u[0].residente);
+  }
 
   async function save() {
     if (!valid) return;
@@ -197,7 +209,10 @@ function RecibirModal({ condominioId, onClose }: { condominioId: Id<"condominios
         fotoUrl = uploaded.url;
       }
       await recibir({
-        condominioId, unidadNumero, tipo,
+        condominioId,
+        unidadNumero: elegida?.numero ?? numeroLibre ?? "",
+        unidadId: elegida?._id,
+        tipo,
         remitente: remitente || undefined,
         destinatario: destinatario || undefined,
         descripcion: descripcion || undefined,
@@ -225,10 +240,33 @@ function RecibirModal({ condominioId, onClose }: { condominioId: Id<"condominios
       }
     >
       <div className="space-y-4">
-        <div className="grid grid-cols-2 gap-3">
-          <div className="space-y-1.5">
-            <label className="block text-xs font-medium text-foreground">Unidad *</label>
-            <Input value={unidadNumero} onChange={(e) => setUnidadNumero(e.target.value)} placeholder="Ej. 409" />
+        <div className="grid grid-cols-3 gap-3">
+          <div className="col-span-2 space-y-1.5">
+            <label className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+              <Home className="h-3.5 w-3.5" /> Casa *
+            </label>
+            {numeroLibre ? (
+              <span className="inline-flex max-w-full items-center gap-1.5 rounded-lg bg-amber-500/10 px-2 py-1 text-[13px] font-medium text-amber-700 dark:text-amber-400">
+                <Home className="h-3 w-3 shrink-0" aria-hidden />
+                <span className="truncate">{numeroLibre} · no está en la lista, no se avisa al residente</span>
+                <button
+                  type="button"
+                  onClick={() => setNumeroLibre(null)}
+                  aria-label="Cambiar casa"
+                  className="rounded p-0.5 hover:text-destructive"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ) : (
+              <SelectorUnidades
+                condominioId={condominioId}
+                elegidas={casa}
+                onChange={elegirCasa}
+                unica
+                onTextoLibre={setNumeroLibre}
+              />
+            )}
           </div>
           <div className="space-y-1.5">
             <label className="block text-xs font-medium text-foreground">Tipo</label>

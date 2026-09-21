@@ -82,6 +82,7 @@ export function NovedadVehiculoModal({
     descripcion: string | null;
     unidadNumero: string | null;
     unidadTorre: string | null;
+    residente: string | null;
   } | null>(null);
 
   const [motivo, setMotivo] = useState("");
@@ -233,6 +234,7 @@ export function NovedadVehiculoModal({
                 {elegido.unidadNumero
                   ? `Unidad ${[elegido.unidadTorre, elegido.unidadNumero].filter(Boolean).join(" ")}`
                   : "Sin unidad asignada"}
+                {elegido.residente ? ` — ${elegido.residente}` : ""}
                 {elegido.descripcion ? ` · ${elegido.descripcion}` : ""}
               </p>
             </div>
@@ -282,6 +284,7 @@ export function NovedadVehiculoModal({
                         {v.unidadNumero
                           ? `Unidad ${[v.unidadTorre, v.unidadNumero].filter(Boolean).join(" ")}`
                           : "Sin unidad"}
+                        {v.residente ? ` — ${v.residente}` : ""}
                         {v.descripcion ? ` · ${v.descripcion}` : ""}
                       </span>
                     </button>
