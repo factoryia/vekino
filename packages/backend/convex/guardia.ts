@@ -1735,6 +1735,29 @@ async function ocupantesPorUnidad(
   return porUnidad;
 }
 
+/**
+ * `ocupantesPorUnidad` para unas cuantas casas y no para el conjunto entero.
+ *
+ * Una consulta por casa DISTINTA, no por fila: veinte aportes de la misma
+ * casa leen sus vínculos una sola vez.
+ */
+async function ocupantesDeUnidades(
+  ctx: QueryCtx | MutationCtx,
+  unidadIds: Id<"unidades">[],
+): Promise<Map<Id<"unidades">, Ocupante[]>> {
+  const vinculos = (
+    await Promise.all(
+      [...new Set(unidadIds)].map((id) =>
+        ctx.db
+          .query("usuarioUnidad")
+          .withIndex("by_unidad", (q) => q.eq("unidadId", id))
+          .collect(),
+      ),
+    )
+  ).flat();
+  return await ocupantesPorUnidad(ctx, vinculos);
+}
+
 export const buscarVehiculo = query({
   args: { condominioId: v.id("condominios"), texto: v.string() },
   handler: async (ctx, args) => {
@@ -1762,18 +1785,10 @@ export const buscarVehiculo = query({
 
     /* Quién vive en la casa de cada placa, con el mismo criterio del
      * selector de casa: el guarda ve "101 — Carlos Pérez" en los dos. */
-    const unidadIds = [...new Set(coinciden.map((v) => v.unidadId))];
-    const vinculos = (
-      await Promise.all(
-        unidadIds.map((id) =>
-          ctx.db
-            .query("usuarioUnidad")
-            .withIndex("by_unidad", (q) => q.eq("unidadId", id))
-            .collect(),
-        ),
-      )
-    ).flat();
-    const ocupantes = await ocupantesPorUnidad(ctx, vinculos);
+    const ocupantes = await ocupantesDeUnidades(
+      ctx,
+      coinciden.map((v) => v.unidadId),
+    );
 
     return await Promise.all(
       coinciden.map(async (v) => {
@@ -1839,9 +1854,36 @@ export const listNovedadReportes = query({
       .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
       .order("desc")
       .take(100);
+
+    const unidadesDe = (n: Doc<"guardiaNovedadReportes">) =>
+      n.unidades ??
+      (n.unidadId && n.unidadNumero
+        ? [{ unidadId: n.unidadId, numero: n.unidadNumero }]
+        : []);
+
+    /* El propietario de la casa de cada aporte voluntario (los reportes con
+     * placa), para que el guarda y la administración vean a quién se le
+     * cobra sin ir al censo. Se resuelve de la relación de hoy —no se copió
+     * al reportar—, así que los aportes viejos también lo muestran. Las
+     * demás novedades no lo necesitan y no se consultan. */
+    const esAporte = (n: Doc<"guardiaNovedadReportes">) => !!n.vehiculoPlaca;
+    const ocupantes = await ocupantesDeUnidades(
+      ctx,
+      reportes.filter(esAporte).flatMap((n) => unidadesDe(n).map((u) => u.unidadId)),
+    );
+    const propietariosDe = (n: Doc<"guardiaNovedadReportes">) =>
+      esAporte(n)
+        ? unidadesDe(n).flatMap((u) =>
+            (ocupantes.get(u.unidadId) ?? [])
+              .filter((o) => o.vinculo === "propietario")
+              .map((o) => ({ unidadId: u.unidadId, numero: u.numero, nombre: o.nombre })),
+          )
+        : [];
+
     return await Promise.all(
       reportes.map(async (n) => ({
         ...n,
+        propietarios: propietariosDe(n),
         archivoUrl:
           (await resolveMediaUrl(ctx, {
             url: n.archivoUrl,
@@ -1853,11 +1895,7 @@ export const listNovedadReportes = query({
         /* Las novedades viejas traen una sola unidad en los campos sueltos.
          * Se normalizan aquí para que la interfaz vea siempre un arreglo y
          * no tenga que conocer las dos formas. */
-        unidades:
-          n.unidades ??
-          (n.unidadId && n.unidadNumero
-            ? [{ unidadId: n.unidadId, numero: n.unidadNumero }]
-            : []),
+        unidades: unidadesDe(n),
         /* Sin hora del hecho, ocurrió cuando se registró. */
         ocurrioEn: n.ocurrioEn ?? n.createdAt,
         fotos: n.fotos

@@ -34,6 +34,17 @@ function fmtFechaHora(ts: number) {
   return new Date(ts).toLocaleString("es-CO", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 }
 
+/**
+ * "Propietario: Carlos Pérez". Con varias casas se dice de cuál es cada uno;
+ * sin propietario registrado (aportes viejos, casas sin dueño cargado) la
+ * línea no sale.
+ */
+function textoPropietarios(ps: { unidadId: string; numero: string; nombre: string }[]) {
+  const variasCasas = new Set(ps.map((p) => p.unidadId)).size > 1;
+  const nombres = ps.map((p) => (variasCasas ? `${p.numero} ${p.nombre}` : p.nombre));
+  return `${ps.length > 1 ? "Propietarios" : "Propietario"}: ${nombres.join(" · ")}`;
+}
+
 export default function GuardiaNovedadesPage() {
   const params = useParams<{ id: string }>();
   const condominioId = params.id as Id<"condominios">;
@@ -98,6 +109,11 @@ export default function GuardiaNovedadesPage() {
                           </span>
                         ))}
                       </div>
+                    )}
+                    {n.propietarios.length > 0 && (
+                      <p className="mt-1 text-[13px] text-muted-foreground">
+                        {textoPropietarios(n.propietarios)}
+                      </p>
                     )}
                     <p className="mt-1 whitespace-pre-line text-sm text-foreground">{n.descripcion}</p>
                     {n.fotos && n.fotos.length > 0 && (
