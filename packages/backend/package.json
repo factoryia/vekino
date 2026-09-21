@@ -51,6 +51,10 @@
     "./filtroAporte": {
       "types": "./convex/lib/filtroAporte.ts",
       "default": "./convex/lib/filtroAporte.ts"
+    },
+    "./cierreTurno": {
+      "types": "./convex/lib/cierreTurno.ts",
+      "default": "./convex/lib/cierreTurno.ts"
     }
   },
   "dependencies": {

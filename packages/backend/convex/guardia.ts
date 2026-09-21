@@ -21,6 +21,7 @@ import {
 import { displayNameFromUser } from "./model/displayName";
 import { resolveMediaUrl, resolveMediaUrlList } from "./model/files";
 import { calcularCosto } from "./lib/costoReserva";
+import { validarCierreTurno } from "./lib/cierreTurno";
 import { normalizarPlaca } from "./lib/placa";
 import { buscarCasas, ordenVinculo, type Ocupante } from "./lib/buscarCasa";
 import {
@@ -136,52 +137,66 @@ export const turnoActivo = query({
   },
 });
 
-/** Usuarios con rol guardia en el condominio (para turno compartido). */
+/**
+ * Los guardas que hoy pueden estar en la portería de un conjunto, activos.
+ *
+ * Un solo criterio para dos usos: el catálogo de compañeros y relevos
+ * (`equipo`) y la comprobación del relevo en `cerrarTurno`. Si fueran dos
+ * copias, el selector acabaría ofreciendo a alguien que el servidor rechaza.
+ */
+async function guardasDeLaPorteria(
+  ctx: QueryCtx | MutationCtx,
+  condominioId: Id<"condominios">,
+): Promise<{ userId: Id<"users">; nombre: string }[]> {
+  const memberships = await ctx.db
+    .query("memberships")
+    .withIndex("by_condominio", (q) => q.eq("condominioId", condominioId))
+    .collect();
+  const guardias = memberships.filter(
+    (m) => m.isActive && m.roles.includes("guardia"),
+  );
+
+  /* El turno compartido es de la portería, no de la tabla de la que cuelgue
+   * cada uno: los guardas que cubren por compañía son compañeros de turno
+   * igual que los del conjunto. Sin esto, dos guardas de la misma garita no
+   * se veían y no podían abrir turno juntos. */
+  const asignados = await ctx.db
+    .query("asignaciones")
+    .withIndex("by_condominio_rol", (q) =>
+      q.eq("condominioId", condominioId).eq("rol", "guardia"),
+    )
+    .collect();
+
+  const ids = new Set<Id<"users">>();
+  for (const m of guardias) ids.add(m.userId);
+  for (const a of asignados) {
+    /* Una asignación vigente bajo un contrato vencido no pone a nadie en la
+     * garita: se comprueba la cadena entera, no solo la fila. */
+    if (!ids.has(a.userId) && (await asignacionVigente(ctx, a.userId, condominioId))) {
+      ids.add(a.userId);
+    }
+  }
+
+  const rows = await Promise.all(
+    [...ids].map(async (userId) => {
+      const u = await ctx.db.get(userId);
+      if (!u || !u.active) return null;
+      return { userId: u._id, nombre: u.name };
+    }),
+  );
+  return rows
+    .filter((r): r is NonNullable<typeof r> => r !== null)
+    .sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+}
+
+/** Usuarios con rol guardia en el condominio (turno compartido y relevo). */
 export const equipo = query({
   args: { condominioId: v.id("condominios") },
   handler: async (ctx, args) => {
     const { user } = await requireCondominioRole(ctx, args.condominioId, [...GUARD_ROLES]);
-    const memberships = await ctx.db
-      .query("memberships")
-      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
-      .collect();
-    const guardias = memberships.filter(
-      (m) => m.isActive && m.roles.includes("guardia") && m.userId !== user._id,
+    return (await guardasDeLaPorteria(ctx, args.condominioId)).filter(
+      (g) => g.userId !== user._id,
     );
-
-    /* El turno compartido es de la portería, no de la tabla de la que cuelgue
-     * cada uno: los guardas que cubren por compañía son compañeros de turno
-     * igual que los del conjunto. Sin esto, dos guardas de la misma garita no
-     * se veían y no podían abrir turno juntos. */
-    const asignados = (
-      await ctx.db
-        .query("asignaciones")
-        .withIndex("by_condominio_rol", (q) =>
-          q.eq("condominioId", args.condominioId).eq("rol", "guardia"),
-        )
-        .collect()
-    ).filter((a) => a.userId !== user._id);
-
-    const ids = new Set<Id<"users">>();
-    for (const m of guardias) ids.add(m.userId);
-    for (const a of asignados) {
-      /* Una asignación vigente bajo un contrato vencido no pone a nadie en la
-       * garita: se comprueba la cadena entera, no solo la fila. */
-      if (await asignacionVigente(ctx, a.userId, args.condominioId)) {
-        ids.add(a.userId);
-      }
-    }
-
-    const rows = await Promise.all(
-      [...ids].map(async (userId) => {
-        const u = await ctx.db.get(userId);
-        if (!u || !u.active) return null;
-        return { userId: u._id, nombre: u.name };
-      }),
-    );
-    return rows
-      .filter((r): r is NonNullable<typeof r> => r !== null)
-      .sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
   },
 });
 
@@ -277,15 +292,30 @@ export const iniciarTurno = mutation({
 });
 
 /**
- * Cierre formal del turno: consignas para el relevo + quién recibe.
+ * Cierre formal del turno: novedades de los elementos asignados, quién
+ * recibe, consignas para el relevo y observaciones generales.
  * Solo el guardia del turno (principal o secundario) o un administrador.
+ *
+ * Los elementos NO se reciben aquí: son el `checklist` que se firmó al iniciar
+ * el turno y no se tocan. El cierre solo dice si volvieron con novedad; no
+ * hay argumento por el que colar una lista distinta.
+ *
+ * `novedadesElementos` y `observacionesCierre` son opcionales en el validador
+ * y obligatorios en el handler a propósito: una app móvil sin actualizar que
+ * no los manda recibe "escribe las observaciones generales", no un error de
+ * validación de argumentos que el guarda no puede entender.
  */
 export const cerrarTurno = mutation({
   args: {
     turnoId: v.id("guardiaTurnos"),
     consignas: v.string(),
-    recibe: v.string(),
+    /** Relevo elegido del catálogo (`equipo`). Si viene, manda sobre `recibe`. */
+    recibeUserId: v.optional(v.id("users")),
+    /** Nombre del relevo escrito a mano (cuenta compartida, relevo sin usuario). */
+    recibe: v.optional(v.string()),
     observacionesCierre: v.optional(v.string()),
+    novedadesElementos: v.optional(v.boolean()),
+    novedadesElementosDetalle: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const turno = await ctx.db.get(args.turnoId);
@@ -306,17 +336,41 @@ export const cerrarTurno = mutation({
       throw new Error("Solo el guardia del turno puede cerrarlo.");
     }
 
-    const consignas = args.consignas.trim();
-    const recibe = args.recibe.trim();
-    if (!consignas || !recibe) {
-      throw new Error("Las consignas y quién recibe el turno son obligatorios.");
+    /* El relevo del catálogo se comprueba contra el MISMO criterio con el que
+     * se ofrece, y su nombre sale de la base, no del cliente. */
+    let recibeNombre = args.recibe;
+    if (args.recibeUserId) {
+      const quienEntrega = [user._id, turno.guardiaUserId, turno.guardiaSecundarioUserId];
+      if (quienEntrega.includes(args.recibeUserId)) {
+        throw new Error("El relevo debe ser un guarda distinto de quien entrega el turno.");
+      }
+      const relevo = (await guardasDeLaPorteria(ctx, turno.condominioId)).find(
+        (g) => g.userId === args.recibeUserId,
+      );
+      if (!relevo) {
+        throw new Error("El relevo elegido no es un guarda vigente de esta portería.");
+      }
+      recibeNombre = relevo.nombre;
     }
+
+    const cierre = validarCierreTurno({
+      consignas: args.consignas,
+      recibe: recibeNombre,
+      observacionesCierre: args.observacionesCierre,
+      novedadesElementos: args.novedadesElementos,
+      novedadesElementosDetalle: args.novedadesElementosDetalle,
+      elementosAsignados: turno.checklist.length,
+    });
 
     const now = Date.now();
     await ctx.db.patch(args.turnoId, {
-      consignas,
-      recibe,
-      observacionesCierre: args.observacionesCierre?.trim() || undefined,
+      consignas: cierre.consignas,
+      recibe: cierre.recibe,
+      recibeUserId: args.recibeUserId,
+      observacionesCierre: cierre.observacionesCierre,
+      novedadesElementos: cierre.novedadesElementos,
+      novedadesElementosDetalle: cierre.novedadesElementosDetalle,
+      cerradoPorUserId: user._id,
       estado: "cerrado",
       fechaCierre: now,
       updatedAt: now,
@@ -327,7 +381,11 @@ export const cerrarTurno = mutation({
       modulo: "minuta",
       tipo: "Cierre de Turno",
       unidad: "Portería",
-      resumen: `Turno de ${turno.guardiaNombre} cerrado por ${user.name}. Recibe: ${recibe}.`,
+      resumen:
+        `Turno de ${turno.guardiaNombre} cerrado por ${user.name}. Recibe: ${cierre.recibe}. ` +
+        (cierre.novedadesElementos
+          ? `Novedades en elementos: ${cierre.novedadesElementosDetalle}`
+          : "Elementos sin novedad."),
       estado: "cerrado",
       actorUserId: user._id,
       actorNombre: user.name,
@@ -389,8 +447,13 @@ export const getTurno = query({
       .withIndex("by_turno", (q) => q.eq("turnoId", args.turnoId))
       .collect();
 
+    const cerradoPor = turno.cerradoPorUserId
+      ? await ctx.db.get(turno.cerradoPorUserId)
+      : null;
+
     return {
       ...turno,
+      cerradoPorNombre: cerradoPor ? displayNameFromUser(cerradoPor) : null,
       rondas: rondas.sort((a, b) => b.createdAt - a.createdAt),
       eventos: eventos.sort((a, b) => b.createdAt - a.createdAt),
     };

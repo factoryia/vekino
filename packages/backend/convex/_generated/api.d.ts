@@ -43,6 +43,7 @@ import type * as lib_brevo from "../lib/brevo.js";
 import type * as lib_buscarCasa from "../lib/buscarCasa.js";
 import type * as lib_cartera from "../lib/cartera.js";
 import type * as lib_certificacion from "../lib/certificacion.js";
+import type * as lib_cierreTurno from "../lib/cierreTurno.js";
 import type * as lib_cloudflareRealtime from "../lib/cloudflareRealtime.js";
 import type * as lib_cobroParqueadero from "../lib/cobroParqueadero.js";
 import type * as lib_codigoAsistencia from "../lib/codigoAsistencia.js";
@@ -164,6 +165,7 @@ declare const fullApi: ApiFromModules<{
   "lib/buscarCasa": typeof lib_buscarCasa;
   "lib/cartera": typeof lib_cartera;
   "lib/certificacion": typeof lib_certificacion;
+  "lib/cierreTurno": typeof lib_cierreTurno;
   "lib/cloudflareRealtime": typeof lib_cloudflareRealtime;
   "lib/cobroParqueadero": typeof lib_cobroParqueadero;
   "lib/codigoAsistencia": typeof lib_codigoAsistencia;

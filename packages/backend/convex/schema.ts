@@ -1611,7 +1611,8 @@ export default defineSchema({
   // Réplica de la lógica de VekinoApi: el turno gobierna la operación
   // (sin turno abierto no hay minuta ni rondas); solo puede existir UN
   // turno abierto por condominio; el cierre es la "entrega" del turno
-  // (consignas + quién recibe). La minuta es append-only: cada acción
+  // (novedades de los elementos del checklist + quién recibe + consignas +
+  // observaciones generales). La minuta es append-only: cada acción
   // del guardia genera un evento automáticamente.
   // ─────────────────────────────────────────────────────────────
 
@@ -1676,8 +1677,23 @@ export default defineSchema({
     ),
     // Cierre formal / entrega del turno.
     consignas: v.optional(v.string()),          // pendientes para el relevo
-    recibe: v.optional(v.string()),             // quién recibe el turno
+    recibe: v.optional(v.string()),             // quién recibe el turno (nombre copiado)
+    /* El relevo elegido del catálogo de guardas de la portería (`guardia.equipo`).
+     * Ausente cuando se escribió a mano —cuenta compartida, relevo sin usuario—
+     * y en los cierres anteriores a que existiera el selector. `recibe` sigue
+     * llevando el nombre copiado, igual que `guardiaSecundarioNombre`. */
+    recibeUserId: v.optional(v.id("users")),
+    /* Observaciones generales del cierre. Obligatorias desde que el cierre
+     * registra los elementos; opcional aquí por los cierres de antes. */
     observacionesCierre: v.optional(v.string()),
+    /* Novedades con los elementos del `checklist` al cerrar. Los elementos no
+     * se copian ni se editan al cerrar: son los que se firmaron al iniciar, y
+     * esto solo dice si volvieron con novedad. Ausente en los cierres de antes
+     * = no se preguntó, que no es lo mismo que "sin novedades". */
+    novedadesElementos: v.optional(v.boolean()),
+    novedadesElementosDetalle: v.optional(v.string()),
+    /* Quién firmó el cierre: el guarda del turno o un administrador. */
+    cerradoPorUserId: v.optional(v.id("users")),
     estado: v.union(v.literal("abierto"), v.literal("cerrado")),
     fechaInicio: v.number(),
     fechaCierre: v.optional(v.number()),

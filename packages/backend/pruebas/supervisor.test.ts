@@ -736,6 +736,8 @@ describe("la porteria del guarda no cambia", () => {
       turnoId: turnos[0]!._id,
       consignas: "Nada pendiente",
       recibe: "Hernan",
+      observacionesCierre: "Sin novedad",
+      novedadesElementos: false,
     });
     const rondaDeHernan = await operar(e, "hernan", e.norte, "Zona D");
     expect(
@@ -743,6 +745,70 @@ describe("la porteria del guarda no cambia", () => {
         .como("hernan")
         .query(api.rondas.detalle, { rondaId: rondaDeHernan }))!.zona,
     ).toBe("Zona D");
+  });
+
+  /**
+   * EL RELEVO ES DE LA PORTERÍA, NO DE LA TABLA.
+   *
+   * El selector de relevo sale de `guardia.equipo`, y el servidor comprueba
+   * el relevo con ese mismo criterio: el guarda de compañía y el propio del
+   * conjunto se entregan el turno entre sí, y nadie de otra garita cuela.
+   */
+  test("el turno se entrega entre el guarda de compania y el del conjunto", async () => {
+    const idDe = async (email: string) =>
+      await e.t.run(async (ctx) => {
+        const u = await ctx.db
+          .query("users")
+          .withIndex("by_email", (q) => q.eq("email", email))
+          .unique();
+        return u!._id;
+      });
+    const hernanId = await idDe("hernan@norte.test");
+    const gabrielId = await idDe("gabriel@andina.test");
+    const cierre = {
+      consignas: "Nada pendiente",
+      observacionesCierre: "Sin novedad",
+      novedadesElementos: false,
+    };
+
+    await operar(e, "gabriel", e.norte, "Zona A");
+    const [deGabriel] = await e
+      .como("gabriel")
+      .query(api.guardia.listTurnos, { condominioId: e.norte });
+
+    /* Sandra es de la misma compania pero cubre Sur; Ramiro, de otra. */
+    for (const email of ["sandra@andina.test", "ramiro@rival.test"]) {
+      await expect(
+        e.como("gabriel").mutation(api.guardia.cerrarTurno, {
+          turnoId: deGabriel!._id,
+          recibeUserId: await idDe(email),
+          ...cierre,
+        }),
+      ).rejects.toThrow(/no es un guarda vigente/i);
+    }
+
+    await e.como("gabriel").mutation(api.guardia.cerrarTurno, {
+      turnoId: deGabriel!._id,
+      recibeUserId: hernanId,
+      ...cierre,
+    });
+
+    await operar(e, "hernan", e.norte, "Zona D");
+    const [deHernan] = await e
+      .como("hernan")
+      .query(api.guardia.listTurnos, { condominioId: e.norte });
+    await e.como("hernan").mutation(api.guardia.cerrarTurno, {
+      turnoId: deHernan!._id,
+      recibeUserId: gabrielId,
+      ...cierre,
+    });
+
+    const detalle = await e
+      .como("gabriel")
+      .query(api.guardia.getTurno, { turnoId: deHernan!._id });
+    expect(detalle!.recibeUserId).toBe(gabrielId);
+    expect(detalle!.recibe).toBe("Gabriel Guarda");
+    expect(detalle!.cerradoPorNombre).toBe("Hernan Guarda Propio");
   });
 
   test("el supervisor mira pero no opera", async () => {

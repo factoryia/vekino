@@ -563,6 +563,7 @@ function TurnosTab({ condominioId }: { condominioId: Id<"condominios"> }) {
                   {fmtFechaHora(t.fechaInicio)} → {t.fechaCierre ? fmtFechaHora(t.fechaCierre) : "en curso"}
                   <span className="ml-2">· {t.checklistCount} checklist · {t.rondasCount} rondas</span>
                   {t.recibe && <span className="ml-2">· Recibió: {t.recibe}</span>}
+                  {t.novedadesElementos && <span className="ml-2 text-amber-600">· Novedades en elementos</span>}
                 </p>
               </div>
               <Button variant="outline" size="sm" onClick={() => setDetalleId(t._id)}>
@@ -588,6 +589,9 @@ function TurnoDetalleModal({ turnoId, onClose }: { turnoId: Id<"guardiaTurnos">;
       ["Turno", turno.guardiaNombre, fmtFechaHora(turno.fechaInicio), turno.fechaCierre ? fmtFechaHora(turno.fechaCierre) : "en curso"],
       ...(turno.guardiaSecundarioNombre ? [["Turno compartido", turno.guardiaSecundarioNombre, "", ""]] : []),
       ...(turno.consignas ? [["Consignas", turno.consignas, `Recibe: ${turno.recibe ?? ""}`, turno.observacionesCierre ?? ""]] : []),
+      ...(turno.novedadesElementos !== undefined
+        ? [["Novedades en elementos", turno.novedadesElementos ? "Sí" : "No", turno.novedadesElementosDetalle ?? "", turno.cerradoPorNombre ? `Cerró: ${turno.cerradoPorNombre}` : ""]]
+        : []),
       ...turno.checklist.map((c) => ["Checklist", c.item, `${c.cantidadEncontrada}/${c.cantidadEsperada}`, c.estadoOk ? "OK" : `NOVEDAD ${c.observacion ?? ""}`]),
       ...turno.rondas.map((r) => ["Ronda", r.zona, fmtFechaHora(r.createdAt), r.novedad ?? "Sin novedad"]),
       ...turno.eventos.map((e) => ["Evento", `${MODULO_META[e.modulo].label} / ${e.tipo}`, fmtFechaHora(e.createdAt), e.resumen]),
@@ -634,7 +638,27 @@ function TurnoDetalleModal({ turnoId, onClose }: { turnoId: Id<"guardiaTurnos">;
               <div className="mt-2 rounded-lg bg-card p-2 text-xs">
                 <p><span className="font-medium text-foreground">Consignas:</span> {turno.consignas}</p>
                 <p className="mt-0.5"><span className="font-medium text-foreground">Recibió:</span> {turno.recibe}</p>
-                {turno.observacionesCierre && <p className="mt-0.5 text-muted-foreground">{turno.observacionesCierre}</p>}
+                {/* Los cierres de antes no preguntaban por los elementos: sin
+                    el dato no se dice ni "sí" ni "no". */}
+                {turno.novedadesElementos !== undefined && (
+                  <p className="mt-0.5">
+                    <span className="font-medium text-foreground">Novedades en elementos:</span>{" "}
+                    {turno.novedadesElementos ? (
+                      <span className="text-red-600">{turno.novedadesElementosDetalle}</span>
+                    ) : (
+                      "Sin novedad"
+                    )}
+                  </p>
+                )}
+                {turno.observacionesCierre && (
+                  <p className="mt-0.5">
+                    <span className="font-medium text-foreground">Observaciones generales:</span>{" "}
+                    <span className="text-muted-foreground">{turno.observacionesCierre}</span>
+                  </p>
+                )}
+                {turno.cerradoPorNombre && (
+                  <p className="mt-0.5 text-muted-foreground">Cerró: {turno.cerradoPorNombre}</p>
+                )}
               </div>
             )}
           </div>
