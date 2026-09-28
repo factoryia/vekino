@@ -42,8 +42,13 @@ const NAV: { label: string; segment: string; icon: LucideIcon }[] = [
 ];
 
 /** Ítems visibles en la barra inferior móvil; el resto va en "Más". */
-const NAV_MOBILE = [NAV[0]!, NAV[5]!, NAV[2]!, NAV[3]!]; // Minuta, Novedades, Paquetería, Reservas
-const NAV_EXTRA = [NAV[4]!, NAV[1]!, NAV[6]!, NAV[7]!, NAV[8]!];   // Rondas, Visitantes, Aportes, Parqueadero, Avisos
+const NAV_MOBILE = [
+  NAV[0]!,
+  { ...NAV[6]!, label: "Aporte Voluntario" },
+  NAV[2]!,
+  NAV[5]!,
+];
+const NAV_EXTRA = [NAV[1]!, NAV[3]!, NAV[4]!, NAV[7]!, NAV[8]!]; // Visitantes, Reservas, Rondas, Parqueadero, Avisos
 
 export function GuardiaShell({ children }: { children: React.ReactNode }) {
   return (
