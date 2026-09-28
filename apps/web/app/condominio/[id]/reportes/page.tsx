@@ -113,7 +113,7 @@ export default function ReportesPage() {
               type="button"
               onClick={() => setTab(t.id)}
               className={cn(
-                "flex-1 rounded-lg px-4 py-1.5 text-sm font-medium transition-colors",
+                "flex-1 cursor-pointer rounded-lg px-4 py-1.5 text-sm font-medium transition-colors",
                 tab === t.id ? "bg-card text-foreground shadow-sm" : "text-muted-foreground",
               )}
             >

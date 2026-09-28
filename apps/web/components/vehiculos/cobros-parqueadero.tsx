@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import {
-  Camera, Check, Download, Loader2, RotateCcw, Search, Settings2, X,
+  Camera, Check, Download, FileSpreadsheet, Loader2, RotateCcw, Search, Settings2, X,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
@@ -11,6 +11,8 @@ import { Button } from "@/components/ui/button";
 import { Input, Select } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { cn, cop } from "@/lib/utils";
+import { descargarXlsxReporte } from "@/lib/excel-reporte";
+import { csvReporteParqueaderos, ETIQUETA_ESTADO_PARQUEADERO, opcionesXlsxReporteParqueaderos } from "@/lib/reporte-parqueaderos";
 
 /**
  * Cobros de parqueadero pendientes de pasar a la factura.
@@ -28,9 +30,9 @@ import { cn, cop } from "@/lib/utils";
 type Estado = "pendiente" | "facturado" | "descartado" | "todos";
 
 const ETIQUETA: Record<Exclude<Estado, "todos">, { texto: string; clase: string }> = {
-  pendiente: { texto: "Por cobrar", clase: "bg-amber-500/10 text-amber-700 dark:text-amber-400" },
-  facturado: { texto: "Facturado", clase: "bg-emerald-500/10 text-emerald-600" },
-  descartado: { texto: "No se cobra", clase: "bg-muted text-muted-foreground" },
+  pendiente: { texto: ETIQUETA_ESTADO_PARQUEADERO.pendiente, clase: "bg-amber-500/10 text-amber-700 dark:text-amber-400" },
+  facturado: { texto: ETIQUETA_ESTADO_PARQUEADERO.facturado, clase: "bg-emerald-500/10 text-emerald-600" },
+  descartado: { texto: ETIQUETA_ESTADO_PARQUEADERO.descartado, clase: "bg-muted text-muted-foreground" },
 };
 
 export function CobrosParqueaderoPanel({
@@ -42,6 +44,8 @@ export function CobrosParqueaderoPanel({
   const [periodo, setPeriodo] = useState("");
   const [busqueda, setBusqueda] = useState("");
   const [tarifas, setTarifas] = useState(false);
+  const [generandoExcel, setGenerandoExcel] = useState(false);
+  const [errorExcel, setErrorExcel] = useState<string | null>(null);
 
   const data = useQuery(api.parqueadero.listar, {
     condominioId,
@@ -52,19 +56,30 @@ export function CobrosParqueaderoPanel({
 
   function descargar() {
     if (!data) return;
-    const cab = ["Fecha", "Casa", "Placa", "Motivo", "Valor", "Estado", "Periodo", "Registró"];
-    const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const filas = data.filas.map((f) => [
-      new Date(f.ocurrioEn).toLocaleString("es-CO"),
-      f.casas.join(" / "), f.placa, f.titulo, f.monto,
-      ETIQUETA[f.estado as Exclude<Estado, "todos">]?.texto ?? f.estado,
-      f.periodo ?? "", f.cobradoPor ?? "",
-    ]);
-    const csv = [cab, ...filas].map((r) => r.map(esc).join(",")).join("\n");
+    const csv = csvReporteParqueaderos(data.filas);
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" }));
     a.download = `cobros-parqueadero-${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
+  }
+
+  async function descargarExcel() {
+    if (!data?.filas.length) return;
+    setGenerandoExcel(true);
+    setErrorExcel(null);
+    try {
+      await descargarXlsxReporte(opcionesXlsxReporteParqueaderos({
+        filas: data.filas,
+        estado,
+        periodo,
+        busqueda,
+        fechaArchivo: new Date().toISOString().slice(0, 10),
+      }));
+    } catch {
+      setErrorExcel("No se pudo generar el Excel. Intenta de nuevo.");
+    } finally {
+      setGenerandoExcel(false);
+    }
   }
 
   return (
@@ -116,7 +131,12 @@ export function CobrosParqueaderoPanel({
         <Button variant="outline" size="sm" onClick={descargar} disabled={!data?.filas.length}>
           <Download className="h-4 w-4" /> Descargar CSV
         </Button>
+        <Button variant="outline" size="sm" onClick={descargarExcel} disabled={!data?.filas.length || generandoExcel}>
+          {generandoExcel ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileSpreadsheet className="h-4 w-4" />}
+          Descargar Excel
+        </Button>
       </div>
+      {errorExcel && <p className="text-sm text-red-600 dark:text-red-400">{errorExcel}</p>}
 
       {data && (
         <div className="grid grid-cols-3 gap-3">
