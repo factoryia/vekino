@@ -168,6 +168,7 @@ export function NovedadVehiculoModal({
 
       await reportar({
         condominioId,
+        tipoReporte: "aporte_voluntario",
         titulo: `${motivo} · ${placaFinal}`,
         descripcion: [
           `Placa ${placaFinal} (${donde}).`,

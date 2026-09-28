@@ -1813,6 +1813,8 @@ export default defineSchema({
     cobradoEn: v.optional(v.number()),
     /** Por que se descarto, cuando se descarta. */
     cobroNota: v.optional(v.string()),
+    /** Apartado del guarda. Ausente en reportes anteriores a la separación. */
+    tipoReporte: v.optional(v.union(v.literal("novedad"), v.literal("aporte_voluntario"))),
     titulo: v.string(),
     descripcion: v.string(),
     prioridad: v.union(v.literal("baja"), v.literal("media"), v.literal("alta")),

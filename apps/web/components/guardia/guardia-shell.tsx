@@ -14,6 +14,7 @@ import {
   Package,
   CalendarCheck,
   AlertTriangle,
+  HandCoins,
   Megaphone,
   LogOut,
   LayoutGrid,
@@ -35,13 +36,14 @@ const NAV: { label: string; segment: string; icon: LucideIcon }[] = [
   { label: "Reservas", segment: "reservas", icon: CalendarCheck },
   { label: "Rondas", segment: "rondas", icon: Footprints },
   { label: "Novedades", segment: "novedades", icon: AlertTriangle },
+  { label: "Aportes Voluntarios", segment: "aportes-voluntarios", icon: HandCoins },
   { label: "Parqueadero", segment: "parqueadero", icon: Car },
   { label: "Avisos", segment: "avisos", icon: Megaphone },
 ];
 
 /** Ítems visibles en la barra inferior móvil; el resto va en "Más". */
 const NAV_MOBILE = [NAV[0]!, NAV[5]!, NAV[2]!, NAV[3]!]; // Minuta, Novedades, Paquetería, Reservas
-const NAV_EXTRA = [NAV[4]!, NAV[1]!, NAV[6]!, NAV[7]!];   // Rondas, Visitantes, Parqueadero, Avisos
+const NAV_EXTRA = [NAV[4]!, NAV[1]!, NAV[6]!, NAV[7]!, NAV[8]!];   // Rondas, Visitantes, Aportes, Parqueadero, Avisos
 
 export function GuardiaShell({ children }: { children: React.ReactNode }) {
   return (

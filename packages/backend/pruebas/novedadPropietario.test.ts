@@ -210,3 +210,84 @@ describe("guardia.listNovedadReportes · propietario del aporte", () => {
     expect(n.propietarios).toEqual([]);
   });
 });
+
+describe("apartados de novedades y aportes del guarda", () => {
+  test("separan los reportes nuevos y conservan la consulta mixta", async () => {
+    const t = convexTest(schema, modules);
+    const s = await escenario(t);
+    const aporteId = await como(t, "guarda").mutation(api.guardia.reportarNovedad, {
+      condominioId: s.condominioId,
+      tipoReporte: "aporte_voluntario",
+      titulo: "Aporte Voluntario Parqueadero · HDW741",
+      descripcion: "Detectado durante la ronda.",
+      prioridad: "media",
+      vehiculoId: s.hdw,
+      fotos: [{ url: "https://s3.test/foto.jpg" }],
+    });
+    const novedadId = await como(t, "guarda").mutation(api.guardia.reportarNovedad, {
+      condominioId: s.condominioId,
+      titulo: "Puerta dañada",
+      descripcion: "No cierra.",
+      prioridad: "alta",
+    });
+
+    const args = { condominioId: s.condominioId };
+    const novedades = await como(t, "guarda").query(api.guardia.listNovedadesGuardia, args);
+    const aportes = await como(t, "guarda").query(api.guardia.listAportesVoluntarios, args);
+    const mixtos = await listar(t, s);
+    expect(novedades.map((r) => r._id)).toEqual([novedadId]);
+    expect(aportes.map((r) => r._id)).toEqual([aporteId]);
+    expect(aportes[0]?.propietarios.map((p) => p.nombre)).toEqual(["Carlos Pérez"]);
+    expect(mixtos.map((r) => r._id)).toEqual([novedadId, aporteId]);
+  });
+
+  test("clasifica aportes con placa desconocida, nuevos y anteriores", async () => {
+    const t = convexTest(schema, modules);
+    const s = await escenario(t);
+    const nuevo = await como(t, "guarda").mutation(api.guardia.reportarNovedad, {
+      condominioId: s.condominioId,
+      tipoReporte: "aporte_voluntario",
+      titulo: "Otro · QQQ111",
+      descripcion: "Placa QQQ111 (placa no registrada en el conjunto). Detectado a las 02:00 durante la ronda.",
+      prioridad: "media",
+      fotos: [{ url: "https://s3.test/foto.jpg" }],
+    });
+    const viejo = await t.run((ctx) => ctx.db.insert("guardiaNovedadReportes", {
+      condominioId: s.condominioId,
+      titulo: "Otro · XXX222",
+      descripcion: "Placa XXX222 (placa no registrada en el conjunto). Detectado a las 02:00 durante la ronda.",
+      prioridad: "media",
+      reportadoPorUserId: s.guardaId,
+      reportadoPorNombre: "Guarda Nocturno",
+      createdAt: AHORA - 1000,
+    }));
+    const args = { condominioId: s.condominioId };
+    expect(new Set((await como(t, "guarda").query(api.guardia.listAportesVoluntarios, args)).map((r) => r._id)))
+      .toEqual(new Set([nuevo, viejo]));
+    expect(await como(t, "guarda").query(api.guardia.listNovedadesGuardia, args)).toEqual([]);
+  });
+
+  test("filtra antes de limitar a 100 resultados por apartado", async () => {
+    const t = convexTest(schema, modules);
+    const s = await escenario(t);
+    const aporteId = await aporte(t, s, s.hdw);
+    for (let i = 0; i < 101; i++) {
+      await como(t, "guarda").mutation(api.guardia.reportarNovedad, {
+        condominioId: s.condominioId,
+        titulo: `Novedad ${i}`,
+        descripcion: "Incidente general.",
+        prioridad: "baja",
+      });
+    }
+    const aportes = await como(t, "guarda").query(api.guardia.listAportesVoluntarios, { condominioId: s.condominioId });
+    expect(aportes.map((r) => r._id)).toEqual([aporteId]);
+  });
+
+  test("las dos consultas mantienen los permisos del guarda", async () => {
+    const t = convexTest(schema, modules);
+    const s = await escenario(t);
+    const args = { condominioId: s.condominioId };
+    await expect(como(t, "carlos").query(api.guardia.listNovedadesGuardia, args)).rejects.toThrow();
+    await expect(como(t, "carlos").query(api.guardia.listAportesVoluntarios, args)).rejects.toThrow();
+  });
+});

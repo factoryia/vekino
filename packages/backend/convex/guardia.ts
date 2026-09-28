@@ -1908,15 +1908,32 @@ export const gestionarNovedad = mutation({
   },
 });
 
-export const listNovedadReportes = query({
-  args: { condominioId: v.id("condominios") },
-  handler: async (ctx, args) => {
-    await requireCondominioRole(ctx, args.condominioId, [...GUARD_ROLES]);
-    const reportes = await ctx.db
-      .query("guardiaNovedadReportes")
-      .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
-      .order("desc")
-      .take(100);
+function esAporteVoluntario(n: Doc<"guardiaNovedadReportes">) {
+  if (n.tipoReporte) return n.tipoReporte === "aporte_voluntario";
+  // Los reportes anteriores no tenían tipo. Una placa guardada identifica al
+  // vehículo; para placas desconocidas se reconoce el texto del formulario viejo.
+  return !!n.vehiculoPlaca || (
+    n.descripcion.startsWith("Placa ") && n.descripcion.includes(" durante la ronda.")
+  );
+}
+
+async function listarReportesGuardia(
+  ctx: QueryCtx,
+  condominioId: Id<"condominios">,
+  tipo?: "novedad" | "aporte_voluntario",
+) {
+  await requireCondominioRole(ctx, condominioId, [...GUARD_ROLES]);
+  const consulta = ctx.db
+    .query("guardiaNovedadReportes")
+    .withIndex("by_condominio", (q) => q.eq("condominioId", condominioId))
+    .order("desc");
+  // La vista mixta conserva su límite anterior. Las vistas separadas filtran
+  // antes del límite para no ocultar aportes tras 100 novedades recientes.
+  const reportes = tipo
+    ? (await consulta.collect())
+        .filter((n) => esAporteVoluntario(n) === (tipo === "aporte_voluntario"))
+        .slice(0, 100)
+    : await consulta.take(100);
 
     const unidadesDe = (n: Doc<"guardiaNovedadReportes">) =>
       n.unidades ??
@@ -1929,7 +1946,7 @@ export const listNovedadReportes = query({
      * cobra sin ir al censo. Se resuelve de la relación de hoy —no se copió
      * al reportar—, así que los aportes viejos también lo muestran. Las
      * demás novedades no lo necesitan y no se consultan. */
-    const esAporte = (n: Doc<"guardiaNovedadReportes">) => !!n.vehiculoPlaca;
+    const esAporte = esAporteVoluntario;
     const ocupantes = await ocupantesDeUnidades(
       ctx,
       reportes.filter(esAporte).flatMap((n) => unidadesDe(n).map((u) => u.unidadId)),
@@ -1973,12 +1990,27 @@ export const listNovedadReportes = query({
           : [],
       })),
     );
-  },
+}
+
+export const listNovedadReportes = query({
+  args: { condominioId: v.id("condominios") },
+  handler: (ctx, args) => listarReportesGuardia(ctx, args.condominioId),
+});
+
+export const listNovedadesGuardia = query({
+  args: { condominioId: v.id("condominios") },
+  handler: (ctx, args) => listarReportesGuardia(ctx, args.condominioId, "novedad"),
+});
+
+export const listAportesVoluntarios = query({
+  args: { condominioId: v.id("condominios") },
+  handler: (ctx, args) => listarReportesGuardia(ctx, args.condominioId, "aporte_voluntario"),
 });
 
 export const reportarNovedad = mutation({
   args: {
     condominioId: v.id("condominios"),
+    tipoReporte: v.optional(v.union(v.literal("novedad"), v.literal("aporte_voluntario"))),
     titulo: v.string(),
     descripcion: v.string(),
     prioridad: v.union(v.literal("baja"), v.literal("media"), v.literal("alta")),
@@ -2111,6 +2143,7 @@ export const reportarNovedad = mutation({
     const now = Date.now();
     const id = await ctx.db.insert("guardiaNovedadReportes", {
       condominioId: args.condominioId,
+      tipoReporte: args.tipoReporte ?? (vehiculoPlaca ? "aporte_voluntario" : "novedad"),
       turnoId: turno?._id,
       rondaId: ronda?._id,
       /* Nace pendiente de cobrar cuando senala un vehiculo: es plata por
