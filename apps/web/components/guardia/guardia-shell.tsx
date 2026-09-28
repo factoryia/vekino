@@ -40,8 +40,8 @@ const NAV: { label: string; segment: string; icon: LucideIcon }[] = [
 ];
 
 /** Ítems visibles en la barra inferior móvil; el resto va en "Más". */
-const NAV_MOBILE = NAV.slice(0, 4);
-const NAV_EXTRA = NAV.slice(4);
+const NAV_MOBILE = [NAV[0]!, NAV[5]!, NAV[2]!, NAV[3]!]; // Minuta, Novedades, Paquetería, Reservas
+const NAV_EXTRA = [NAV[4]!, NAV[1]!, NAV[6]!, NAV[7]!];   // Rondas, Visitantes, Parqueadero, Avisos
 
 export function GuardiaShell({ children }: { children: React.ReactNode }) {
   return (
