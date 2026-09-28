@@ -4,7 +4,6 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Bell,
-  Download,
   Upload,
   Plus,
   FileUp,
@@ -73,15 +72,6 @@ function CondoDefaultActions({
           <Link href={`${base}/finanzas`}>
             <Upload className="h-3.75 w-3.75" aria-hidden />
             Cargar facturas
-          </Link>
-        </Button>
-      );
-    case "reportes":
-      return (
-        <Button variant="secondary" asChild>
-          <Link href={`${base}/reportes`}>
-            <Download className="h-3.75 w-3.75" aria-hidden />
-            Exportar
           </Link>
         </Button>
       );
