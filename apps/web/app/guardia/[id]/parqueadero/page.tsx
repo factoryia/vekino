@@ -10,6 +10,7 @@ import { PageContainer } from "@/components/layout/page-container";
 import { PageHeader } from "@/components/layout/page-header";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
 import { cn, cop } from "@/lib/utils";
 
 /**
@@ -61,11 +62,14 @@ export default function ParqueaderoPage() {
   }, [placa]);
 
   const leyenda = useQuery(api.aporte.leyenda, { condominioId });
+  const caracteresBusqueda = busqueda.replace(/[^a-z0-9]/gi, "").length;
+  const resultados = useQuery(
+    api.guardia.buscarVehiculo,
+    caracteresBusqueda >= 2 ? { condominioId, texto: busqueda } : "skip",
+  );
   const r = useQuery(
     api.aporte.consultarPlaca,
-    busqueda.replace(/[^a-z0-9]/gi, "").length >= 3
-      ? { condominioId, placa: busqueda }
-      : "skip",
+    caracteresBusqueda >= 3 ? { condominioId, placa: busqueda } : "skip",
   );
 
   return (
@@ -76,22 +80,53 @@ export default function ParqueaderoPage() {
           description="Consulta si una placa tiene derecho a parquear en zonas comunes"
         />
 
-        <div className="relative">
-          <Search
-            className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-muted-foreground"
-            aria-hidden
-          />
-          <Input
-            value={placa}
-            onChange={(e) => setPlaca(e.target.value.toUpperCase())}
-            placeholder="ABC123"
-            autoFocus
-            autoCapitalize="characters"
-            className="h-14 pl-12 font-mono text-xl tracking-widest"
-          />
+        <div className="space-y-1.5">
+          <div className="relative">
+            <Search
+              className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-muted-foreground"
+              aria-hidden
+            />
+            <Input
+              value={placa}
+              onChange={(e) => setPlaca(e.target.value.toUpperCase())}
+              placeholder="ABC123"
+              autoFocus
+              autoCapitalize="characters"
+              className="h-14 pl-12 font-mono text-xl tracking-widest"
+            />
+          </div>
+
+          {resultados === undefined && caracteresBusqueda >= 2 ? (
+            <div className="flex justify-center py-3">
+              <Spinner className="h-4 w-4" />
+            </div>
+          ) : resultados && resultados.length > 0 ? (
+            <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border">
+              {resultados.map((v) => (
+                <li key={v._id}>
+                  <button
+                    type="button"
+                    onClick={() => setPlaca(v.placa)}
+                    className="flex w-full items-center gap-3 px-3.5 py-3 text-left transition-colors hover:bg-accent"
+                  >
+                    <span className="font-mono text-sm font-bold tracking-wider text-foreground">
+                      {v.placa}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
+                      {v.unidadNumero
+                        ? `Unidad ${[v.unidadTorre, v.unidadNumero].filter(Boolean).join(" ")}`
+                        : "Sin unidad"}
+                      {v.residente ? ` — ${v.residente}` : ""}
+                      {v.descripcion ? ` · ${v.descripcion}` : ""}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </div>
 
-        {r === undefined && busqueda.length >= 3 ? (
+        {r === undefined && caracteresBusqueda >= 3 ? (
           <Card className="flex justify-center p-10">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
           </Card>
