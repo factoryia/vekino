@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useMutation, useAction } from "convex/react";
 import {
   ShieldCheck,
@@ -73,13 +73,25 @@ const TONO_VIGENCIA = {
 } as const;
 
 export default function CompaniaDetallePage() {
+  return (
+    <Suspense fallback={<PageContainer><p className="text-sm text-muted-foreground">Cargando…</p></PageContainer>}>
+      <CompaniaDetalleContent />
+    </Suspense>
+  );
+}
+
+function CompaniaDetalleContent() {
   const params = useParams<{ id: string }>();
+  const router = useRouter();
+  const search = useSearchParams();
   const companiaId = params.id as Id<"companiasSeguridad">;
   const data = useQuery(api.companias.detail, { companiaId });
   const me = useQuery(api.users.me);
-  const [tab, setTab] = useState<"personal" | "contratos" | "inventario">(
-    "personal",
-  );
+  const requestedTab = search.get("tab");
+  const tab = requestedTab === "contratos" || requestedTab === "inventario" ? requestedTab : "personal";
+  function setTab(next: "personal" | "contratos" | "inventario") {
+    router.push(`/dashboard/companias/${companiaId}?tab=${next}`, { scroll: false });
+  }
 
   /* Firmar contratos y suspender la empresa son decisiones comerciales del
    * SaaS, no de la compañía: `crearContrato` y `setEstado` exigen plataforma
@@ -119,16 +131,16 @@ export default function CompaniaDetallePage() {
     <PageContainer>
       <div className="space-y-6">
         <Link
-          href="/dashboard/companias"
+          href={esPlataforma ? "/dashboard/companias" : "/vigilancia"}
           className="inline-flex items-center gap-1.5 text-[13px] text-muted-foreground hover:text-foreground"
         >
           <ArrowLeft className="h-3.5 w-3.5" aria-hidden />
-          Compañías
+          {esPlataforma ? "Compañías" : "Mis conjuntos"}
         </Link>
 
         <Cabecera compania={compania} esPlataforma={esPlataforma} />
 
-        <div className="flex gap-1 border-b border-border">
+        <div className="flex gap-1 overflow-x-auto border-b border-border">
           <Tab
             activo={tab === "personal"}
             onClick={() => setTab("personal")}
@@ -140,7 +152,7 @@ export default function CompaniaDetallePage() {
             activo={tab === "contratos"}
             onClick={() => setTab("contratos")}
             icon={FileText}
-            label="Conjuntos"
+            label="Contratos"
             n={contratos.filter((c) => c.estado === "vigente").length}
           />
           {/* El inventario es de la EMPRESA, no de ninguno de sus conjuntos:
@@ -166,6 +178,7 @@ export default function CompaniaDetallePage() {
             contratos={contratos}
             personal={personal}
             esPlataforma={esPlataforma}
+            companiaActiva={compania.estado === "activa"}
           />
         )}
         {tab === "inventario" && puedeInventario && (
@@ -794,11 +807,13 @@ function PanelContratos({
   contratos,
   personal,
   esPlataforma,
+  companiaActiva,
 }: {
   companiaId: Id<"companiasSeguridad">;
   contratos: Contrato[];
   personal: Persona[];
   esPlataforma: boolean;
+  companiaActiva: boolean;
 }) {
   const [nuevo, setNuevo] = useState(false);
   const [abierto, setAbierto] = useState<Id<"companiaContratos"> | null>(null);
@@ -863,6 +878,7 @@ function PanelContratos({
               contrato={k}
               personal={personal}
               esPlataforma={esPlataforma}
+              companiaActiva={companiaActiva}
               abierto={abierto === k._id}
               onToggle={() => setAbierto(abierto === k._id ? null : k._id)}
             />
@@ -911,12 +927,14 @@ function FilaContrato({
   contrato,
   personal,
   esPlataforma,
+  companiaActiva,
   abierto,
   onToggle,
 }: {
   contrato: Contrato;
   personal: Persona[];
   esPlataforma: boolean;
+  companiaActiva: boolean;
   abierto: boolean;
   onToggle: () => void;
 }) {
@@ -967,7 +985,7 @@ function FilaContrato({
           Y solo al personal de la compañía: el staff de plataforma no entra
           por ese shell —no es de ninguna empresa— y tiene la minuta del
           conjunto en su propio panel de control de guardia. */}
-      {contrato.estado !== "terminada" && !esPlataforma && (
+      {contrato.estado === "vigente" && companiaActiva && !esPlataforma && (
         <div className="border-t border-border px-4 py-2.5">
           <Link
             href={`/vigilancia/${contrato.condominioId}`}

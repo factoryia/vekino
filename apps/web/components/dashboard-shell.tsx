@@ -28,6 +28,7 @@ import { AdminTopbar } from "@/components/layout/admin-topbar";
 import { AdminTopbarProvider } from "@/components/layout/admin-topbar-context";
 import { Spinner } from "@/components/ui/spinner";
 import { CambiarClaveTemporalModal } from "@/components/cambiar-clave-temporal-modal";
+import { CompanyNavigationShell } from "@/components/vigilancia/company-navigation";
 
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   return (
@@ -237,6 +238,17 @@ function UserMultiCondoShell({
   async function signOut() {
     await authClient.signOut();
     router.replace("/login");
+  }
+
+  if (me.compania?.roles.includes("admin_compania")) {
+    return (
+      <>
+        <CompanyNavigationShell company={{ id: me.compania.companiaId, name: me.compania.nombre, logo: me.compania.logo, isAdmin: true, userName: me.name }}>
+          {children}
+        </CompanyNavigationShell>
+        <CambiarClaveTemporalModal />
+      </>
+    );
   }
 
   return (
