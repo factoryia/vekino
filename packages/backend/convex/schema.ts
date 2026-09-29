@@ -11,6 +11,9 @@ import {
   companiaRoleValidator,
   estadoCompaniaValidator,
   rolAsignacionValidator,
+  prioridadIncidenteValidator,
+  estadoIncidenteValidator,
+  tipoEventoIncidenteValidator,
   estadoItemValidator,
   tipoNovedadItemValidator,
   rolActorDepositoValidator,
@@ -2673,6 +2676,63 @@ export default defineSchema({
     .index("by_user_condominio", ["userId", "condominioId"])
     .index("by_condominio_rol", ["condominioId", "rol"])
     .index("by_compania", ["companiaId"]),
+  /** Caso operativo de una compañía en un conjunto; distinto de la minuta. */
+  incidentes: defineTable({
+    companiaId: v.id("companiasSeguridad"),
+    condominioId: v.id("condominios"),
+    tipo: v.string(),
+    ubicacion: v.string(),
+    ocurrioEn: v.number(),
+    reportadoEn: v.number(),
+    reportadoPorUserId: v.id("users"),
+    reportadoPorNombre: v.string(),
+    descripcion: v.string(),
+    prioridad: prioridadIncidenteValidator,
+    estado: estadoIncidenteValidator,
+    responsableUserId: v.optional(v.id("users")),
+    responsableNombre: v.optional(v.string()),
+    resueltoEn: v.optional(v.number()),
+    cerradoEn: v.optional(v.number()),
+    resolucionObservacion: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_compania_reportado", ["companiaId", "reportadoEn"])
+    .index("by_compania_estado_reportado", ["companiaId", "estado", "reportadoEn"])
+    .index("by_compania_condominio_reportado", ["companiaId", "condominioId", "reportadoEn"])
+    .index("by_compania_condominio_reportante", ["companiaId", "condominioId", "reportadoPorUserId", "reportadoEn"]),
+
+  /** Datos de terceros del caso; no se presupone una cuenta en users. */
+  incidentePersonas: defineTable({
+    incidenteId: v.id("incidentes"),
+    companiaId: v.id("companiasSeguridad"),
+    condominioId: v.id("condominios"),
+    nombre: v.string(),
+    tipoPersona: v.string(),
+    documento: v.optional(v.string()),
+    observacion: v.optional(v.string()),
+    /** Reservado para una futura baja lógica; no hay API de retiro en esta fase. */
+    retiradoEn: v.optional(v.number()),
+    retiradoPorUserId: v.optional(v.id("users")),
+    createdAt: v.number(),
+  }).index("by_incidente", ["incidenteId"]),
+
+  /** Historial inmutable del caso; solo se inserta mediante logIncidenteEvento. */
+  incidenteEventos: defineTable({
+    incidenteId: v.id("incidentes"),
+    companiaId: v.id("companiasSeguridad"),
+    condominioId: v.id("condominios"),
+    tipo: tipoEventoIncidenteValidator,
+    descripcion: v.string(),
+    cambios: v.optional(v.array(v.object({
+      campo: v.string(),
+      antes: v.optional(v.string()),
+      despues: v.optional(v.string()),
+    }))),
+    actorUserId: v.id("users"),
+    actorNombre: v.string(),
+    createdAt: v.number(),
+  }).index("by_incidente", ["incidenteId"]),
   // ─────────────────────────────────────────────────────────────
   // INVENTARIO DE LA COMPAÑÍA
   //

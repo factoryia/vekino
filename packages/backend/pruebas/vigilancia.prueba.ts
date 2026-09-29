@@ -245,10 +245,16 @@ test("el supervisor mira y asigna, pero no opera la porteria", () => {
   assert.equal(caps.has("porteria.operar"), false);
 });
 
-test("el guarda de compania recibe lo mismo que el guarda directo", () => {
+test("el guarda de compañía conserva portería y recibe incidentes solo por asignación", () => {
   const directo = capacidadesDeRolesConjunto(["guardia"]);
   const compania = capacidadesDeRolAsignacion("guardia");
-  assert.deepEqual([...directo].sort(), [...compania].sort());
+  assert.deepEqual(
+    [...directo].filter((c) => c.startsWith("porteria.")).sort(),
+    [...compania].filter((c) => c.startsWith("porteria.")).sort(),
+  );
+  assert.equal(directo.has("incidentes.crear"), false);
+  assert.equal(compania.has("incidentes.crear"), true);
+  assert.equal(compania.has("incidentes.gestionar"), false);
 });
 
 test("el admin de compania gestiona personal pero no opera ninguna porteria", () => {

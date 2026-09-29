@@ -204,6 +204,11 @@ export const CAPACIDADES = [
    * de la zona norte no reparte material en la zona sur.
    */
   "inventario.custodiar",
+  /** Casos de la compañía; el alcance concreto se comprueba sobre compañía y conjunto. */
+  "incidentes.ver",
+  "incidentes.crear",
+  "incidentes.gestionar",
+  "incidentes.cerrar",
 ] as const;
 
 export type Capacidad = (typeof CAPACIDADES)[number];
@@ -240,8 +245,8 @@ const POR_ROL_CONJUNTO: Record<string, readonly Capacidad[]> = {
  * ciento noventa llamadas.
  */
 const POR_ROL_ASIGNACION: Record<string, readonly Capacidad[]> = {
-  guardia: ["porteria.operar", "porteria.ver"],
-  supervisor: ["porteria.ver", "seguridad.asignar", "inventario.custodiar"],
+  guardia: ["porteria.operar", "porteria.ver", "incidentes.ver", "incidentes.crear"],
+  supervisor: ["porteria.ver", "seguridad.asignar", "inventario.custodiar", "incidentes.ver", "incidentes.crear", "incidentes.gestionar"],
 };
 
 /** Lo que habilita pertenecer a una compania, sin mirar conjunto alguno. */
@@ -265,6 +270,10 @@ const POR_ROL_COMPANIA: Record<string, readonly Capacidad[]> = {
      * les abriria hoy el CRUD entero de la bodega. */
     "inventario.ver",
     "inventario.gestionar",
+    "incidentes.ver",
+    "incidentes.crear",
+    "incidentes.gestionar",
+    "incidentes.cerrar",
   ],
   supervisor: [],
   guardia: [],

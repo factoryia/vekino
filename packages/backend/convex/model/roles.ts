@@ -267,6 +267,22 @@ export const rolAsignacionValidator = v.union(
 
 export type RolAsignacion = "supervisor" | "guardia";
 
+/** Caso operativo de vigilancia; independiente de la prioridad de una novedad. */
+export const prioridadIncidenteValidator = v.union(
+  v.literal("BAJA"), v.literal("MEDIA"), v.literal("ALTA"), v.literal("CRITICA"),
+);
+export const estadoIncidenteValidator = v.union(
+  v.literal("REPORTADO"), v.literal("EN_INVESTIGACION"),
+  v.literal("EN_SEGUIMIENTO"), v.literal("RESUELTO"), v.literal("CERRADO"),
+);
+export const tipoEventoIncidenteValidator = v.union(
+  v.literal("CREACION"), v.literal("CLASIFICACION"),
+  v.literal("CAMBIO_PRIORIDAD"), v.literal("ASIGNACION"),
+  v.literal("CAMBIO_ESTADO"), v.literal("SEGUIMIENTO"),
+  v.literal("CAMBIO_RELEVANTE"), v.literal("RESOLUCION"),
+  v.literal("CIERRE"), v.literal("PERSONA_AGREGADA"),
+);
+
 // ─────────────────────────────────────────────────────────────
 // INVENTARIO DE LA COMPAÑÍA
 //
