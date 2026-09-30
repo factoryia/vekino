@@ -14,6 +14,7 @@ import {
   Package,
   CalendarCheck,
   AlertTriangle,
+  ShieldAlert,
   HandCoins,
   Megaphone,
   LogOut,
@@ -39,6 +40,7 @@ const NAV: { label: string; segment: string; icon: LucideIcon }[] = [
   { label: "Aportes Voluntarios", segment: "aportes-voluntarios", icon: HandCoins },
   { label: "Parqueadero", segment: "parqueadero", icon: Car },
   { label: "Avisos", segment: "avisos", icon: Megaphone },
+  { label: "Incidentes", segment: "incidentes", icon: ShieldAlert },
 ];
 
 /** Ítems visibles en la barra inferior móvil; el resto va en "Más". */
@@ -48,7 +50,7 @@ const NAV_MOBILE = [
   NAV[2]!,
   NAV[5]!,
 ];
-const NAV_EXTRA = [NAV[1]!, NAV[3]!, NAV[4]!, NAV[7]!, NAV[8]!]; // Visitantes, Reservas, Rondas, Parqueadero, Avisos
+const NAV_EXTRA = [NAV[1]!, NAV[3]!, NAV[4]!, NAV[7]!, NAV[8]!, NAV[9]!];
 
 export function GuardiaShell({ children }: { children: React.ReactNode }) {
   return (
@@ -92,6 +94,8 @@ function Guard({ children }: { children: React.ReactNode }) {
   const params = useParams<{ id: string }>();
   const condominioId = params.id as Id<"condominios">;
   const home = useQuery(api.guardia.home, { condominioId });
+  const asignaciones = useQuery(api.asignaciones.misAsignaciones);
+  const compania = useQuery(api.companias.miCompania);
 
   if (home === undefined) {
     return (
@@ -103,6 +107,8 @@ function Guard({ children }: { children: React.ReactNode }) {
   if (!home.allowed) return <Redirect to="/dashboard" />;
 
   const base = `/guardia/${condominioId}`;
+  const incidentesCorporativos = !!asignaciones?.some((a) =>
+    a.condominioId === condominioId && a.companiaId === compania?.companiaId && a.rol === "guardia");
   const primary = home.condominio.primaryColor;
   const brandChannels = primary ? hexToHslChannels(primary) : null;
   const themeStyle = brandChannels
@@ -129,6 +135,7 @@ function Guard({ children }: { children: React.ReactNode }) {
               logo={home.condominio.logo}
               userName={home.userName}
               userImage={home.userImage}
+              incidentesCorporativos={incidentesCorporativos}
             />
           </aside>
 
@@ -145,6 +152,7 @@ function Guard({ children }: { children: React.ReactNode }) {
               base={base}
               userName={home.userName}
               userImage={home.userImage}
+              incidentesCorporativos={incidentesCorporativos}
             />
           </div>
         </div>
@@ -188,6 +196,7 @@ function Sidebar({
   logo,
   userName,
   userImage,
+  incidentesCorporativos,
 }: {
   base: string;
   condominioId: Id<"condominios">;
@@ -195,6 +204,7 @@ function Sidebar({
   logo: string | null;
   userName: string;
   userImage?: string | null;
+  incidentesCorporativos: boolean;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -239,7 +249,7 @@ function Sidebar({
             Operación
           </p>
           <div className="flex flex-col gap-px">
-            {NAV.map((item) => {
+            {NAV.filter((item) => incidentesCorporativos || item.segment !== "incidentes").map((item) => {
               const href = item.segment ? `${base}/${item.segment}` : base;
               const active = item.segment
                 ? pathname === href || pathname.startsWith(`${href}/`)
@@ -350,10 +360,12 @@ function MobileBottomNav({
   base,
   userName,
   userImage,
+  incidentesCorporativos,
 }: {
   base: string;
   userName: string;
   userImage?: string | null;
+  incidentesCorporativos: boolean;
 }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -449,7 +461,7 @@ function MobileBottomNav({
               </button>
             </div>
             <div className="grid grid-cols-2 gap-2">
-              {NAV_EXTRA.map((item) => {
+              {NAV_EXTRA.filter((item) => incidentesCorporativos || item.segment !== "incidentes").map((item) => {
                 const href = `${base}/${item.segment}`;
                 const Icon = item.icon;
                 return (

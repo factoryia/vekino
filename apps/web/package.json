@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "test:incidentes": "bun test pruebas/incidentes.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

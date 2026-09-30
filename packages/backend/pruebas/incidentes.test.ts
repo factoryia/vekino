@@ -97,6 +97,35 @@ describe("incidentes de vigilancia", () => {
     expect(eventos.page[0]!.companiaId).toBe(e.companiaA);
   });
 
+  test("personas iniciales y eventos se guardan en la misma creación", async () => {
+    const id = await e.como("guardaA").mutation(api.incidentes.crear, {
+      ...e.datos(), personas: [
+        { nombre: "  Juan Visitante  ", tipoPersona: "VISITANTE", documento: "123" },
+        { nombre: "Marta", tipoPersona: "RESIDENTE", observacion: "Testigo" },
+      ],
+    });
+    const personas = await e.como("guardaA").query(api.incidentes.listarPersonas, { incidenteId: id });
+    expect(personas.map((p) => p.nombre)).toEqual(["Juan Visitante", "Marta"]);
+    expect(personas.every((p) => p.companiaId === e.companiaA && p.condominioId === e.conjunto)).toBe(true);
+    const eventos = await e.como("guardaA").query(api.incidentes.listarEventos, { incidenteId: id, paginationOpts: e.paginar });
+    expect(eventos.page.map((x) => x.tipo)).toEqual(["PERSONA_AGREGADA", "PERSONA_AGREGADA", "CREACION"]);
+    await expect(e.como("adminB").query(api.incidentes.listarPersonas, { incidenteId: id })).rejects.toThrow("compañía");
+  });
+
+  test("persona inicial inválida revierte incidente e historial completos", async () => {
+    await expect(e.como("adminA").mutation(api.incidentes.crear, {
+      ...e.datos(), personas: [{ nombre: "", tipoPersona: "VISITANTE" }],
+    })).rejects.toThrow("Nombre");
+    const [incidentes, personas, eventos] = await e.t.run(async (ctx) => Promise.all([
+      ctx.db.query("incidentes").collect(),
+      ctx.db.query("incidentePersonas").collect(),
+      ctx.db.query("incidenteEventos").collect(),
+    ]));
+    expect(incidentes).toHaveLength(0);
+    expect(personas).toHaveLength(0);
+    expect(eventos).toHaveLength(0);
+  });
+
   test("rechaza fecha futura y no deja filas parciales", async () => {
     await expect(e.como("guardaA").mutation(api.incidentes.crear, {
       ...e.datos(), ocurrioEn: Date.now() + DIA,

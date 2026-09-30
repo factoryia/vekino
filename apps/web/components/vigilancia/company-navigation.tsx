@@ -5,7 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "convex/react";
-import { Boxes, Building2, FileText, LogOut, Menu, ShieldCheck, Users, X } from "lucide-react";
+import { Boxes, Building2, FileText, LogOut, Menu, ShieldCheck, ShieldAlert, Users, X } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import { authClient } from "@/lib/auth-client";
 import { cn } from "@/lib/utils";
@@ -71,7 +71,7 @@ export function CompanyNavigationShell({
             <button ref={menuButton} type="button" onClick={() => setOpen(true)} aria-label="Abrir menú" aria-expanded={open} aria-controls="company-mobile-menu" className="rounded-lg p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground">
               <Menu className="h-5 w-5" />
             </button>
-            <CompanyIdentity company={company} subtitle={pathname.startsWith("/dashboard/companias/") ? "Compañía" : pathname === "/vigilancia" ? "Mis conjuntos" : "Supervisión del conjunto"} />
+            <CompanyIdentity company={company} subtitle={pathname.startsWith("/dashboard/companias/") ? "Compañía" : pathname.startsWith("/vigilancia/incidentes") ? "Incidentes" : pathname === "/vigilancia" ? "Mis conjuntos" : "Supervisión del conjunto"} />
           </header>
           <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain">{children}</main>
         </div>
@@ -143,6 +143,7 @@ function CompanySidebar({ company, onNavigate }: { company: Company; onNavigate?
         <div className="space-y-0.5">
           <p className="px-2.5 pb-1 text-[10px] uppercase tracking-wide text-muted-foreground">Operación</p>
           <NavLink href="/vigilancia" label="Mis conjuntos" icon={Building2} active={pathname === "/vigilancia"} onNavigate={onNavigate} />
+          <NavLink href="/vigilancia/incidentes" label="Incidentes" icon={ShieldAlert} active={pathname === "/vigilancia/incidentes" || pathname.startsWith("/vigilancia/incidentes/")} onNavigate={onNavigate} />
           {team && team.length > 0 && (
             <div className="ml-4 space-y-0.5 border-l border-border pl-2">
               {team.map((c) => (

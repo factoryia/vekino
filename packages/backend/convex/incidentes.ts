@@ -11,6 +11,24 @@ import { displayNameFromUser } from "./model/displayName";
 import { estadoIncidenteValidator, prioridadIncidenteValidator } from "./model/roles";
 import { textoOpcional, textoRequerido, validarTransicion } from "./lib/incidentes";
 
+const personaInicialValidator = v.object({
+  nombre: v.string(),
+  tipoPersona: v.string(),
+  documento: v.optional(v.string()),
+  observacion: v.optional(v.string()),
+});
+
+function validarPersona(persona: {
+  nombre: string; tipoPersona: string; documento?: string; observacion?: string;
+}) {
+  return {
+    nombre: textoRequerido(persona.nombre, "Nombre", 160),
+    tipoPersona: textoRequerido(persona.tipoPersona, "Tipo de persona", 80),
+    documento: textoOpcional(persona.documento, "Documento", 80),
+    observacion: textoOpcional(persona.observacion, "Observación", 2000),
+  };
+}
+
 /** La compañía se deduce de la sesión; un guarda propio del conjunto no tiene compañía implícita. */
 export const crear = mutation({
   args: {
@@ -20,6 +38,7 @@ export const crear = mutation({
     ocurrioEn: v.number(),
     descripcion: v.string(),
     prioridad: prioridadIncidenteValidator,
+    personas: v.optional(v.array(personaInicialValidator)),
   },
   handler: async (ctx, args) => {
     const actor = await requireAppUser(ctx);
@@ -33,6 +52,7 @@ export const crear = mutation({
     const tipo = textoRequerido(args.tipo, "Tipo", 80);
     const ubicacion = textoRequerido(args.ubicacion, "Ubicación", 200);
     const descripcion = textoRequerido(args.descripcion, "Descripción", 5000);
+    const personas = (args.personas ?? []).map(validarPersona);
     const incidenteId = await ctx.db.insert("incidentes", {
       companiaId: miembro.companiaId,
       condominioId: args.condominioId,
@@ -55,13 +75,30 @@ export const crear = mutation({
       actor,
       ahora,
     });
+    // La creación y las personas iniciales forman una única transacción Convex.
+    for (const persona of personas) {
+      await ctx.db.insert("incidentePersonas", {
+        incidenteId, companiaId: miembro.companiaId, condominioId: args.condominioId,
+        ...persona, createdAt: ahora,
+      });
+      await logIncidenteEvento(ctx, {
+        incidente: { _id: incidenteId, companiaId: miembro.companiaId, condominioId: args.condominioId },
+        tipo: "PERSONA_AGREGADA",
+        descripcion: `Persona involucrada agregada: ${persona.nombre}.`,
+        actor, ahora,
+      });
+    }
     return incidenteId;
   },
 });
 
 export const obtener = query({
   args: { incidenteId: v.id("incidentes") },
-  handler: async (ctx, args) => (await exigirIncidente(ctx, args.incidenteId, "incidentes.ver")).incidente,
+  handler: async (ctx, args) => {
+    const { incidente } = await exigirIncidente(ctx, args.incidenteId, "incidentes.ver");
+    const conjunto = await ctx.db.get(incidente.condominioId);
+    return { ...incidente, condominioNombre: conjunto?.name ?? "(conjunto no disponible)" };
+  },
 });
 
 /** Una sola compañía y, para personal asignado, un solo conjunto por página. */
@@ -280,10 +317,7 @@ export const agregarPersona = mutation({
     if (rol !== "guardia") {
       await exigirAccesoIncidente(ctx, incidente.companiaId, incidente.condominioId, "incidentes.gestionar");
     }
-    const nombre = textoRequerido(args.nombre, "Nombre", 160);
-    const tipoPersona = textoRequerido(args.tipoPersona, "Tipo de persona", 80);
-    const documento = textoOpcional(args.documento, "Documento", 80);
-    const observacion = textoOpcional(args.observacion, "Observación", 2000);
+    const { nombre, tipoPersona, documento, observacion } = validarPersona(args);
     const ahora = Date.now();
     const personaId = await ctx.db.insert("incidentePersonas", {
       incidenteId: incidente._id, companiaId: incidente.companiaId,
