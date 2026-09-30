@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { esAporteVoluntario } from "./lib/reporteGuardia";
 import { internal } from "./_generated/api";
 import { query, mutation } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -1907,15 +1908,6 @@ export const gestionarNovedad = mutation({
     });
   },
 });
-
-function esAporteVoluntario(n: Doc<"guardiaNovedadReportes">) {
-  if (n.tipoReporte) return n.tipoReporte === "aporte_voluntario";
-  // Los reportes anteriores no tenían tipo. Una placa guardada identifica al
-  // vehículo; para placas desconocidas se reconoce el texto del formulario viejo.
-  return !!n.vehiculoPlaca || (
-    n.descripcion.startsWith("Placa ") && n.descripcion.includes(" durante la ronda.")
-  );
-}
 
 async function listarReportesGuardia(
   ctx: QueryCtx,

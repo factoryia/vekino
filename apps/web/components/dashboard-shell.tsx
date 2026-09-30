@@ -100,8 +100,15 @@ function Shell({ children }: { children: React.ReactNode }) {
   const isPlatform =
     me.platformRole === "superadmin" || me.platformRole === "admin";
 
+  const administraCompania = !isPlatform && me.compania?.roles.includes("admin_compania") === true;
+  // El administrador aterriza en operación aunque también tenga membresías.
+  // Su gestión de personal/contratos conserva la ruta existente.
+  if (administraCompania && me.compania && pathname !== `/dashboard/companias/${me.compania.companiaId}`) {
+    return <Redirect to={homeHrefForCompania("admin_compania", me.compania.companiaId)!} />;
+  }
+
   if (
-    !isPlatform &&
+    !isPlatform && !administraCompania &&
     me.memberships.length === 1 &&
     me.memberships[0] &&
     me.asignaciones.length === 0
@@ -114,7 +121,7 @@ function Shell({ children }: { children: React.ReactNode }) {
    * no al conjunto. Sin esta rama caía en el panel de "Mis condominios" con
    * la lista vacía —entraba bien y no veía nada— porque todo el ruteo se
    * apoyaba solo en `memberships`. */
-  if (!isPlatform && me.memberships.length === 0 && me.asignaciones.length > 0) {
+  if (!isPlatform && !administraCompania && me.memberships.length === 0 && me.asignaciones.length > 0) {
     /* El supervisor primero: su panel es transversal a todos sus conjuntos,
      * así que cubre también al que supervisa varios. */
     const supervisa = me.asignaciones.find((a) => a.rol === "supervisor");
@@ -151,7 +158,8 @@ function Shell({ children }: { children: React.ReactNode }) {
       me.compania.roles[0],
       me.compania.companiaId,
     );
-    if (destino && !pathname.startsWith(destino)) {
+    const gestionCompania = me.compania.roles.includes("admin_compania") && pathname === `/dashboard/companias/${me.compania.companiaId}`;
+    if (destino && !pathname.startsWith(destino) && !gestionCompania) {
       return <Redirect to={destino} />;
     }
   }

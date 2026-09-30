@@ -1704,6 +1704,7 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_condominio", ["condominioId"])
+    .index("by_condominio_fecha", ["condominioId", "fechaInicio"])
     .index("by_condominio_estado", ["condominioId", "estado"]),
 
   /**
@@ -1751,6 +1752,7 @@ export default defineSchema({
   })
     .index("by_turno", ["turnoId"])
     .index("by_condominio", ["condominioId"])
+    .index("by_condominio_fecha", ["condominioId", "createdAt"])
     .index("by_condominio_estado", ["condominioId", "estado"]),
 
   /**
@@ -1781,6 +1783,7 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_condominio", ["condominioId"])
+    .index("by_condominio_fecha", ["condominioId", "createdAt"])
     .index("by_turno", ["turnoId"]),
 
   /** Reporte de novedad / incidente de seguridad (con adjunto opcional). */
@@ -1898,6 +1901,7 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_condominio", ["condominioId"])
+    .index("by_condominio_fecha", ["condominioId", "createdAt"])
     // Historial de un vehiculo: "esta placa ya lleva tres veces este mes".
     .index("by_vehiculo", ["vehiculoId"]),
 

@@ -57,9 +57,9 @@ export function homeHrefForAsignacion(
  */
 export function homeHrefForCompania(
   rol: string | undefined,
-  companiaId: string,
+  _companiaId: string,
 ): string | null {
-  if (rol === "admin_compania") return `/dashboard/companias/${companiaId}`;
+  if (rol === "admin_compania") return "/vigilancia/inicio";
   if (rol === "supervisor") return "/vigilancia";
   return null;
 }

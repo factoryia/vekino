@@ -1,4 +1,6 @@
 import { v } from "convex/values";
+import { obtenerOperacionCompania } from "./model/operacionCompania";
+
 import {
   query,
   mutation,
@@ -50,6 +52,18 @@ import { fijarPasswordDeCuenta } from "./model/credencial";
 // ─────────────────────────────────────────────────────────────
 // Lectura
 // ─────────────────────────────────────────────────────────────
+
+/** Panel inicial del administrador: agregados de las fuentes de portería. */
+export const operacion = query({
+  args: {
+    desde: v.string(),
+    hasta: v.string(),
+    condominioId: v.optional(v.id("condominios")),
+    guardiaUserId: v.optional(v.id("users")),
+    granularidad: v.union(v.literal("dia"), v.literal("semana"), v.literal("mes")),
+  },
+  handler: obtenerOperacionCompania,
+});
 
 /**
  * Compañías con sus conteos. Solo plataforma.
