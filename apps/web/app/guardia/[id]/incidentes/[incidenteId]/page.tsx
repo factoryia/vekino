@@ -6,5 +6,5 @@ export default async function GuardiaIncidentePage({ params, searchParams }: {
   searchParams: Promise<{ registrado?: string }>;
 }) {
   const [{ id, incidenteId }, { registrado }] = await Promise.all([params, searchParams]);
-  return <IncidenteVistaInicial incidenteId={incidenteId as Id<"incidentes">} baseHref={`/guardia/${id}/incidentes`} registrado={registrado === "1"} />;
+  return <IncidenteVistaInicial incidenteId={incidenteId as Id<"incidentes">} condominioId={id as Id<"condominios">} baseHref={`/guardia/${id}/incidentes`} registrado={registrado === "1"} />;
 }

@@ -66,3 +66,34 @@ export async function exigirIncidente(
   }
   return { incidente, ...acceso };
 }
+
+/** La UI consulta permisos con la misma cadena que vuelve a exigir cada mutación. */
+export async function permisosIncidente(ctx: Ctx, incidente: Doc<"incidentes">, rol: RolAccesoIncidente) {
+  const permite = async (capacidad: "incidentes.gestionar" | "incidentes.cerrar") => {
+    if (incidente.estado === "CERRADO") return false;
+    try {
+      await exigirAccesoIncidente(ctx, incidente.companiaId, incidente.condominioId, capacidad);
+      return true;
+    } catch { return false; }
+  };
+  const gestionar = await permite("incidentes.gestionar");
+  return { gestionar, cerrar: await permite("incidentes.cerrar"), agregarPersona: incidente.estado !== "CERRADO" && (rol === "guardia" || gestionar) };
+}
+
+/** Reglas preexistentes de selección; también se usan para ofrecer candidatos. */
+export async function exigirResponsableIncidente(ctx: Ctx, incidente: Doc<"incidentes">, userId: Id<"users">) {
+  const responsable = await ctx.db.get(userId);
+  const miembro = await getCompaniaMiembro(ctx, userId);
+  if (!responsable?.active || !miembro || miembro.companiaId !== incidente.companiaId) {
+    throw new Error("El responsable debe ser miembro activo de la misma compañía.");
+  }
+  if (miembro.roles.includes("supervisor")) {
+    const via = await asignacionVigente(ctx, responsable._id, incidente.condominioId);
+    if (!via || via.asignacion.companiaId !== incidente.companiaId || via.asignacion.rol !== "supervisor") {
+      throw new Error("El supervisor no está asignado a este conjunto.");
+    }
+  } else if (!miembro.roles.includes("admin_compania")) {
+    throw new Error("El responsable debe ser administrador o supervisor.");
+  }
+  return responsable;
+}

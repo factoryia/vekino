@@ -2700,7 +2700,13 @@ export default defineSchema({
     .index("by_compania_reportado", ["companiaId", "reportadoEn"])
     .index("by_compania_estado_reportado", ["companiaId", "estado", "reportadoEn"])
     .index("by_compania_condominio_reportado", ["companiaId", "condominioId", "reportadoEn"])
-    .index("by_compania_condominio_reportante", ["companiaId", "condominioId", "reportadoPorUserId", "reportadoEn"]),
+    .index("by_compania_condominio_reportante", ["companiaId", "condominioId", "reportadoPorUserId", "reportadoEn"])
+    .index("by_compania_condominio_estado_reportado", ["companiaId", "condominioId", "estado", "reportadoEn"])
+    .index("by_compania_ocurrio", ["companiaId", "ocurrioEn"])
+    .index("by_compania_condominio_ocurrio", ["companiaId", "condominioId", "ocurrioEn"])
+    .index("by_compania_condominio_reportante_ocurrio", ["companiaId", "condominioId", "reportadoPorUserId", "ocurrioEn"])
+    .searchIndex("buscar_ubicacion", { searchField: "ubicacion", filterFields: ["companiaId", "condominioId", "reportadoPorUserId", "estado", "prioridad", "tipo"] })
+    .searchIndex("buscar_descripcion", { searchField: "descripcion", filterFields: ["companiaId", "condominioId", "reportadoPorUserId", "estado", "prioridad", "tipo"] }),
 
   /** Datos de terceros del caso; no se presupone una cuenta en users. */
   incidentePersonas: defineTable({

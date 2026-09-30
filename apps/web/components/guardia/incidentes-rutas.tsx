@@ -18,8 +18,7 @@ function useConjuntoCorporativo(condominioId: Id<"condominios">) {
 }
 
 export function GuardiaIncidentesInicio({ condominioId }: { condominioId: Id<"condominios"> }) {
-  const conjuntos = useConjuntoCorporativo(condominioId);
-  return <IncidentesInicio conjuntos={conjuntos} baseHref={`/guardia/${condominioId}/incidentes`} />;
+  return <IncidentesInicio condominioId={condominioId} baseHref={`/guardia/${condominioId}/incidentes`} />;
 }
 
 export function GuardiaIncidenteNuevo({ condominioId }: { condominioId: Id<"condominios"> }) {

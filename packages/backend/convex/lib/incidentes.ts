@@ -11,6 +11,11 @@ const SIGUIENTES: Record<EstadoIncidente, readonly EstadoIncidente[]> = {
   CERRADO: [],
 };
 
+/** Compartido con la ficha mediante obtener; no mantiene otro ciclo de vida. */
+export function transicionesIncidente(estado: EstadoIncidente, gestionar: boolean, cerrar: boolean) {
+  return SIGUIENTES[estado].filter((siguiente) => siguiente === "CERRADO" ? cerrar : gestionar);
+}
+
 export function validarTransicion(
   anterior: EstadoIncidente,
   siguiente: EstadoIncidente,

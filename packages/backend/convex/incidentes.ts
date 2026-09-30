@@ -1,15 +1,14 @@
-import { paginationOptsValidator } from "convex/server";
+import { paginationOptsValidator, type OrderedQuery, type IndexRangeBuilder, type IndexRange } from "convex/server";
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import type { Doc, Id } from "./_generated/dataModel";
+import type { Doc, DataModel } from "./_generated/dataModel";
 import { exigirAccesoCompania, getCompaniaMiembro } from "./model/acceso";
-import { asignacionVigente } from "./model/asignacion";
 import { hasPlatformRole, requireAppUser } from "./model/authz";
-import { exigirAccesoIncidente, exigirIncidente } from "./model/incidenteAcceso";
+import { exigirAccesoIncidente, exigirIncidente, permisosIncidente, exigirResponsableIncidente } from "./model/incidenteAcceso";
 import { logIncidenteEvento, type CambioIncidente } from "./model/incidenteEvento";
 import { displayNameFromUser } from "./model/displayName";
 import { estadoIncidenteValidator, prioridadIncidenteValidator } from "./model/roles";
-import { textoOpcional, textoRequerido, validarTransicion } from "./lib/incidentes";
+import { textoOpcional, textoRequerido, validarTransicion, transicionesIncidente } from "./lib/incidentes";
 
 const personaInicialValidator = v.object({
   nombre: v.string(),
@@ -95,9 +94,60 @@ export const crear = mutation({
 export const obtener = query({
   args: { incidenteId: v.id("incidentes") },
   handler: async (ctx, args) => {
-    const { incidente } = await exigirIncidente(ctx, args.incidenteId, "incidentes.ver");
+    const { incidente, rol } = await exigirIncidente(ctx, args.incidenteId, "incidentes.ver");
     const conjunto = await ctx.db.get(incidente.condominioId);
-    return { ...incidente, condominioNombre: conjunto?.name ?? "(conjunto no disponible)" };
+    const permisos = await permisosIncidente(ctx, incidente, rol);
+    return { ...incidente, condominioNombre: conjunto?.name ?? "(conjunto no disponible)", permisos,
+      transiciones: transicionesIncidente(incidente.estado, permisos.gestionar, permisos.cerrar) };
+  },
+});
+
+/** Opciones de ámbito, sin descargar casos ni datos de equipos completos. */
+export const contextoBandeja = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await requireAppUser(ctx);
+    const miembro = await getCompaniaMiembro(ctx, user._id);
+    if (!miembro) return null;
+    const admin = miembro.roles.includes("admin_compania");
+    const relaciones = admin
+      ? await ctx.db.query("companiaContratos").withIndex("by_compania", (q) => q.eq("companiaId", miembro.companiaId)).collect()
+      : await ctx.db.query("asignaciones").withIndex("by_user", (q) => q.eq("userId", user._id)).collect();
+    const conjuntos = [];
+    for (const condominioId of new Set(relaciones.filter((r) => r.companiaId === miembro.companiaId).map((r) => r.condominioId))) {
+      try {
+        await exigirAccesoIncidente(ctx, miembro.companiaId, condominioId, "incidentes.ver");
+      } catch { continue; }
+      const conjunto = await ctx.db.get(condominioId);
+      let crear = false;
+      try {
+        await exigirAccesoIncidente(ctx, miembro.companiaId, condominioId, "incidentes.crear");
+        crear = true;
+      } catch { /* Histórico en solo lectura. */ }
+      conjuntos.push({ condominioId, condominioNombre: conjunto!.name, crear });
+    }
+    // Verifica también la compañía cuando no existen relaciones que recorrer.
+    if (admin) await exigirAccesoCompania(ctx, miembro.companiaId, "incidentes.ver");
+    return { companiaId: miembro.companiaId, todosLosConjuntos: admin, conjuntos };
+  },
+});
+
+export const responsablesDisponibles = query({
+  args: { incidenteId: v.id("incidentes") },
+  handler: async (ctx, args) => {
+    const { incidente } = await exigirIncidente(ctx, args.incidenteId, "incidentes.gestionar");
+    if (incidente.estado === "CERRADO") return [];
+    const miembros = await ctx.db.query("companiaMiembros")
+      .withIndex("by_compania", (q) => q.eq("companiaId", incidente.companiaId)).collect();
+    const candidatos = [];
+    for (const miembro of miembros) {
+      if (!miembro.isActive || !miembro.roles.some((r) => r === "admin_compania" || r === "supervisor")) continue;
+      try {
+        const user = await exigirResponsableIncidente(ctx, incidente, miembro.userId);
+        candidatos.push({ userId: user._id, nombre: displayNameFromUser(user) });
+      } catch { /* No cumple la regla existente de vigencia/asignación. */ }
+    }
+    return candidatos;
   },
 });
 
@@ -107,6 +157,15 @@ export const listar = query({
     companiaId: v.id("companiasSeguridad"),
     condominioId: v.optional(v.id("condominios")),
     estado: v.optional(estadoIncidenteValidator),
+    prioridad: v.optional(prioridadIncidenteValidator),
+    tipo: v.optional(v.string()),
+    activos: v.optional(v.boolean()),
+    busqueda: v.optional(v.string()),
+    campoBusqueda: v.optional(v.union(v.literal("ubicacion"), v.literal("descripcion"), v.literal("referencia"))),
+    fecha: v.optional(v.union(v.literal("reportadoEn"), v.literal("ocurrioEn"))),
+    desde: v.optional(v.number()),
+    hasta: v.optional(v.number()),
+    orden: v.optional(v.union(v.literal("asc"), v.literal("desc"))),
     paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
@@ -122,35 +181,83 @@ export const listar = query({
     if (!args.condominioId && !admin && !plataforma) {
       throw new Error("Seleccione un conjunto de su asignación.");
     }
-    if (args.condominioId) {
-      const acceso = await exigirAccesoIncidente(ctx, args.companiaId, args.condominioId, "incidentes.ver");
-      if (args.estado) {
-        // No se añade índice compuesto hasta que exista un filtro visual que lo use.
-        throw new Error("El filtro simultáneo por conjunto y estado aún no está disponible.");
-      }
-      if (acceso.rol === "guardia") {
-        return await ctx.db.query("incidentes")
-          .withIndex("by_compania_condominio_reportante", (q) => q
-            .eq("companiaId", args.companiaId)
-            .eq("condominioId", args.condominioId!)
-            .eq("reportadoPorUserId", user._id))
-          .order("desc").paginate(args.paginationOpts);
-      }
-      return await ctx.db.query("incidentes")
-        .withIndex("by_compania_condominio_reportado", (q) => q
-          .eq("companiaId", args.companiaId).eq("condominioId", args.condominioId!))
-        .order("desc").paginate(args.paginationOpts);
+    const acceso = args.condominioId
+      ? await exigirAccesoIncidente(ctx, args.companiaId, args.condominioId, "incidentes.ver") : null;
+    const reportante = acceso?.rol === "guardia" ? user._id : undefined;
+    const fecha = args.fecha ?? "reportadoEn";
+    if ((args.desde !== undefined && !Number.isFinite(args.desde)) ||
+      (args.hasta !== undefined && !Number.isFinite(args.hasta)) ||
+      (args.desde !== undefined && args.hasta !== undefined && args.desde > args.hasta)) {
+      throw new Error("El rango de fechas no es válido.");
     }
-    // El staff de plataforma puede consultar una compañía explícita; nunca mezcla tenants.
-    if (args.estado) {
-      return await ctx.db.query("incidentes")
-        .withIndex("by_compania_estado_reportado", (q) => q
-          .eq("companiaId", args.companiaId).eq("estado", args.estado!))
-        .order("desc").paginate(args.paginationOpts);
+    const busqueda = args.busqueda?.trim();
+    if (busqueda && busqueda.length > 200) throw new Error("Búsqueda demasiado larga.");
+    // La proyección mantiene la bandeja liviana, sin descripción ni resolución.
+    const proyectar = async (casos: Doc<"incidentes">[]) => {
+      const nombres = new Map(await Promise.all([...new Set(casos.map((c) => c.condominioId))]
+        .map(async (id) => [id, (await ctx.db.get(id))?.name ?? "(conjunto no disponible)"] as const)));
+      return casos.map((c) => ({ _id: c._id, tipo: c.tipo, condominioId: c.condominioId,
+        condominioNombre: nombres.get(c.condominioId)!, ubicacion: c.ubicacion, prioridad: c.prioridad,
+        estado: c.estado, ocurrioEn: c.ocurrioEn, reportadoEn: c.reportadoEn, responsableNombre: c.responsableNombre }));
+    };
+    if (busqueda && args.campoBusqueda === "referencia") {
+      const id = ctx.db.normalizeId("incidentes", busqueda);
+      const c = id ? await ctx.db.get(id) : null;
+      const coincide = c && c.companiaId === args.companiaId && (!args.condominioId || c.condominioId === args.condominioId)
+        && (!reportante || c.reportadoPorUserId === reportante) && (!args.estado || c.estado === args.estado)
+        && (!args.prioridad || c.prioridad === args.prioridad) && (!args.tipo || c.tipo === args.tipo)
+        && (!args.activos || args.estado || (c.estado !== "RESUELTO" && c.estado !== "CERRADO"))
+        && (args.desde === undefined || c[fecha] >= args.desde) && (args.hasta === undefined || c[fecha] <= args.hasta);
+      return { page: await proyectar(coincide ? [c] : []), isDone: true, continueCursor: "" };
     }
-    return await ctx.db.query("incidentes")
-      .withIndex("by_compania_reportado", (q) => q.eq("companiaId", args.companiaId))
-      .order("desc").paginate(args.paginationOpts);
+    let consulta: OrderedQuery<DataModel["incidentes"]>;
+    if (busqueda) {
+      const campo = args.campoBusqueda === "descripcion" ? "descripcion" : "ubicacion";
+      consulta = ctx.db.query("incidentes").withSearchIndex(campo === "descripcion" ? "buscar_descripcion" : "buscar_ubicacion", (q) => {
+        let filtro = q.search(campo, busqueda).eq("companiaId", args.companiaId);
+        if (args.condominioId) filtro = filtro.eq("condominioId", args.condominioId);
+        if (reportante) filtro = filtro.eq("reportadoPorUserId", reportante);
+        if (args.estado) filtro = filtro.eq("estado", args.estado);
+        if (args.prioridad) filtro = filtro.eq("prioridad", args.prioridad);
+        if (args.tipo) filtro = filtro.eq("tipo", args.tipo);
+        return filtro;
+      });
+    } else {
+      // El rango se aplica al índice de la fecha elegida; nunca se ordena una descarga en cliente.
+      const rangoReporte = (q: IndexRange & Omit<IndexRangeBuilder<Doc<"incidentes">, ["reportadoEn"]>, "eq">) => {
+        if (args.desde !== undefined && args.hasta !== undefined) return q.gte("reportadoEn", args.desde).lte("reportadoEn", args.hasta);
+        if (args.desde !== undefined) return q.gte("reportadoEn", args.desde);
+        if (args.hasta !== undefined) return q.lte("reportadoEn", args.hasta);
+        return q;
+      };
+      const rangoHecho = (q: IndexRange & Omit<IndexRangeBuilder<Doc<"incidentes">, ["ocurrioEn"]>, "eq">) => {
+        if (args.desde !== undefined && args.hasta !== undefined) return q.gte("ocurrioEn", args.desde).lte("ocurrioEn", args.hasta);
+        if (args.desde !== undefined) return q.gte("ocurrioEn", args.desde);
+        if (args.hasta !== undefined) return q.lte("ocurrioEn", args.hasta);
+        return q;
+      };
+      // Las ramas explícitas conservan el tipado de los prefijos del índice.
+      if (fecha === "ocurrioEn") {
+        if (reportante) consulta = ctx.db.query("incidentes").withIndex("by_compania_condominio_reportante_ocurrio", (q) => rangoHecho(q.eq("companiaId", args.companiaId).eq("condominioId", args.condominioId!).eq("reportadoPorUserId", reportante))).order(args.orden ?? "desc");
+        else if (args.condominioId) consulta = ctx.db.query("incidentes").withIndex("by_compania_condominio_ocurrio", (q) => rangoHecho(q.eq("companiaId", args.companiaId).eq("condominioId", args.condominioId!))).order(args.orden ?? "desc");
+        else consulta = ctx.db.query("incidentes").withIndex("by_compania_ocurrio", (q) => rangoHecho(q.eq("companiaId", args.companiaId))).order(args.orden ?? "desc");
+      } else {
+        if (reportante) consulta = ctx.db.query("incidentes").withIndex("by_compania_condominio_reportante", (q) => rangoReporte(q.eq("companiaId", args.companiaId).eq("condominioId", args.condominioId!).eq("reportadoPorUserId", reportante))).order(args.orden ?? "desc");
+        else if (args.condominioId && args.estado) consulta = ctx.db.query("incidentes").withIndex("by_compania_condominio_estado_reportado", (q) => rangoReporte(q.eq("companiaId", args.companiaId).eq("condominioId", args.condominioId!).eq("estado", args.estado!))).order(args.orden ?? "desc");
+        else if (args.condominioId) consulta = ctx.db.query("incidentes").withIndex("by_compania_condominio_reportado", (q) => rangoReporte(q.eq("companiaId", args.companiaId).eq("condominioId", args.condominioId!))).order(args.orden ?? "desc");
+        else if (args.estado) consulta = ctx.db.query("incidentes").withIndex("by_compania_estado_reportado", (q) => rangoReporte(q.eq("companiaId", args.companiaId).eq("estado", args.estado!))).order(args.orden ?? "desc");
+        else consulta = ctx.db.query("incidentes").withIndex("by_compania_reportado", (q) => rangoReporte(q.eq("companiaId", args.companiaId))).order(args.orden ?? "desc");
+      }
+    }
+    // Todos los criterios se evalúan ANTES de paginar; lectura acotada por solicitud.
+    if (args.estado) consulta = consulta.filter((q) => q.eq(q.field("estado"), args.estado!));
+    else if (args.activos) consulta = consulta.filter((q) => q.and(q.neq(q.field("estado"), "RESUELTO"), q.neq(q.field("estado"), "CERRADO")));
+    if (args.prioridad) consulta = consulta.filter((q) => q.eq(q.field("prioridad"), args.prioridad!));
+    if (args.tipo) consulta = consulta.filter((q) => q.eq(q.field("tipo"), args.tipo!));
+    if (busqueda && args.desde !== undefined) consulta = consulta.filter((q) => q.gte(q.field(fecha), args.desde!));
+    if (busqueda && args.hasta !== undefined) consulta = consulta.filter((q) => q.lte(q.field(fecha), args.hasta!));
+    const resultado = await consulta.paginate({ ...args.paginationOpts, numItems: Math.min(args.paginationOpts.numItems, 50), maximumRowsRead: 300, maximumBytesRead: 2_000_000 });
+    return { ...resultado, page: await proyectar(resultado.page) };
   },
 });
 
@@ -237,19 +344,7 @@ export const asignarResponsable = mutation({
   handler: async (ctx, args) => {
     const { incidente, user } = await exigirIncidente(ctx, args.incidenteId, "incidentes.gestionar");
     if (incidente.estado === "CERRADO") throw new Error("El incidente está cerrado.");
-    const responsable = await ctx.db.get(args.responsableUserId);
-    const miembro = await getCompaniaMiembro(ctx, args.responsableUserId);
-    if (!responsable?.active || !miembro || miembro.companiaId !== incidente.companiaId) {
-      throw new Error("El responsable debe ser miembro activo de la misma compañía.");
-    }
-    if (miembro.roles.includes("supervisor")) {
-      const via = await asignacionVigente(ctx, responsable._id, incidente.condominioId);
-      if (!via || via.asignacion.companiaId !== incidente.companiaId || via.asignacion.rol !== "supervisor") {
-        throw new Error("El supervisor no está asignado a este conjunto.");
-      }
-    } else if (!miembro.roles.includes("admin_compania")) {
-      throw new Error("El responsable debe ser administrador o supervisor.");
-    }
+    const responsable = await exigirResponsableIncidente(ctx, incidente, args.responsableUserId);
     if (incidente.responsableUserId === responsable._id) throw new Error("El responsable no cambió.");
     const nombre = displayNameFromUser(responsable);
     const ahora = Date.now();
