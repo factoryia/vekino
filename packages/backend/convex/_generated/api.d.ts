@@ -62,6 +62,7 @@ import type * as lib_horarios from "../lib/horarios.js";
 import type * as lib_importarVehiculos from "../lib/importarVehiculos.js";
 import type * as lib_incidenteEvidencias from "../lib/incidenteEvidencias.js";
 import type * as lib_incidenteMetricas from "../lib/incidenteMetricas.js";
+import type * as lib_incidenteReporte from "../lib/incidenteReporte.js";
 import type * as lib_incidentes from "../lib/incidentes.js";
 import type * as lib_inventario from "../lib/inventario.js";
 import type * as lib_livekitJwt from "../lib/livekitJwt.js";
@@ -194,6 +195,7 @@ declare const fullApi: ApiFromModules<{
   "lib/importarVehiculos": typeof lib_importarVehiculos;
   "lib/incidenteEvidencias": typeof lib_incidenteEvidencias;
   "lib/incidenteMetricas": typeof lib_incidenteMetricas;
+  "lib/incidenteReporte": typeof lib_incidenteReporte;
   "lib/incidentes": typeof lib_incidentes;
   "lib/inventario": typeof lib_inventario;
   "lib/livekitJwt": typeof lib_livekitJwt;

@@ -27,3 +27,10 @@ export function enlaceBandejaDashboard(params: URLSearchParams, periodo: { desde
   for (const [clave, valor] of Object.entries(cambios)) bandeja.set(clave, valor);
   return `/vigilancia/incidentes?${bandeja}`;
 }
+
+/** Fija los días resueltos en servidor: una consulta reproducible al cambiar de día. */
+export function parametrosReporteIncidentes(params: URLSearchParams, periodo: { desdeDia: string; hastaDia: string }) {
+  const reporte = parametrosDashboard(params);
+  reporte.set("periodo", "personalizado"); reporte.set("desde", periodo.desdeDia); reporte.set("hasta", periodo.hastaDia);
+  return reporte;
+}

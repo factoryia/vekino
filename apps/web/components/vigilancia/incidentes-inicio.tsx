@@ -49,7 +49,7 @@ function Bandeja({ contexto, baseHref, condominioId }: { contexto: Contexto; bas
     router.push(`${pathname}?${siguiente}`, { scroll: false });
   }
   return <PageContainer className="mx-auto w-full max-w-7xl pb-12">
-    <PageHeader title="Incidentes" description="Consulta y gestiona los casos de tu operación." action={<div className="flex flex-wrap gap-2">{baseHref === "/vigilancia/incidentes" && <Button variant="outline" asChild><Link href={`${baseHref}/dashboard?${params.get("dashboard") ?? ""}`}>{params.has("dashboard") ? "Volver al dashboard" : "Dashboard"}</Link></Button>}{crear ? <Button asChild><Link href={`${baseHref}/nuevo`}><Plus className="h-4 w-4" aria-hidden /> Nuevo incidente</Link></Button> : null}</div>} />
+    <PageHeader title="Incidentes" description="Consulta y gestiona los casos de tu operación." action={<div className="flex flex-wrap gap-2">{baseHref === "/vigilancia/incidentes" && <Button variant="outline" asChild><Link href={`${baseHref}/dashboard?${params.get("dashboard") ?? ""}`}>{params.has("dashboard") ? "Volver al dashboard" : "Dashboard"}</Link></Button>}{baseHref === "/vigilancia/incidentes" && <Button variant="outline" asChild><Link href={`${baseHref}/reportes`}>Reportes</Link></Button>}{crear ? <Button asChild><Link href={`${baseHref}/nuevo`}><Plus className="h-4 w-4" aria-hidden /> Nuevo incidente</Link></Button> : null}</div>} />
     <Card className="p-4 sm:p-5">
       <form key={params.toString()} onSubmit={aplicar} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {params.has("dashboard") && <input type="hidden" name="dashboard" value={params.get("dashboard")!} />}

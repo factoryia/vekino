@@ -20,7 +20,18 @@ export const dashboard = query({
     condominioId: v.optional(v.id("condominios")), estado: v.optional(estadoIncidenteValidator),
     activos: v.optional(v.boolean()), prioridad: v.optional(prioridadIncidenteValidator), tipo: v.optional(v.string()),
   },
-  handler: obtenerAnaliticaIncidentes,
+  handler: (ctx, args) => obtenerAnaliticaIncidentes(ctx, args),
+});
+
+/** Mismos filtros, cohorte y métricas; solo proyección operacional autorizada. */
+export const reporte = query({
+  args: {
+    periodo: v.string(), desde: v.optional(v.string()), hasta: v.optional(v.string()),
+    condominioId: v.optional(v.id("condominios")), estado: v.optional(estadoIncidenteValidator),
+    activos: v.optional(v.boolean()), prioridad: v.optional(prioridadIncidenteValidator), tipo: v.optional(v.string()),
+    exportar: v.optional(v.boolean()),
+  },
+  handler: (ctx, args) => obtenerAnaliticaIncidentes(ctx, args, args.exportar ? "exportacion" : "vista"),
 });
 
 const personaInicialValidator = v.object({

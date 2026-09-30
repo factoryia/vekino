@@ -67,6 +67,10 @@
     "./incidenteMetricas": {
       "types": "./convex/lib/incidenteMetricas.ts",
       "default": "./convex/lib/incidenteMetricas.ts"
+    },
+    "./incidenteReporte": {
+      "types": "./convex/lib/incidenteReporte.ts",
+      "default": "./convex/lib/incidenteReporte.ts"
     }
   },
   "dependencies": {

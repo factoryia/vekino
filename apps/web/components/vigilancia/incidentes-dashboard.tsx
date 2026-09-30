@@ -1,12 +1,11 @@
 "use client";
 import Link from "next/link";
 import { useQuery } from "convex/react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import type { FunctionReturnType } from "convex/server";
 import { api } from "@vekino/backend/api";
-import { PERIODOS_INCIDENTES, diaColombia, periodoIncidentes } from "@vekino/backend/incidenteMetricas";
 import { PageContainer } from "@/components/layout/page-container";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
@@ -14,15 +13,15 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorBoundary, ErrorMessage } from "@/components/ui/error-boundary";
-import { Input, Select } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DonutChart } from "@/components/charts/donut-chart";
 import { AreaChart } from "@/components/charts/area-chart";
+import { diaColombia } from "@vekino/backend/incidenteMetricas";
 import { CHART } from "@/components/charts/chart-colors";
 import { ESTADOS_INCIDENTE, etiquetaEstado, fechaIncidente } from "@/lib/incidentes-bandeja";
 import { etiquetaTipoIncidente, PRIORIDADES_INCIDENTE } from "@/lib/incidentes-ui";
-import { enlaceBandejaDashboard, filtrosDashboard, parametrosDashboard } from "@/lib/incidentes-dashboard";
-import { Campo } from "./incidente-campo";
+import { enlaceBandejaDashboard, filtrosDashboard, parametrosDashboard, parametrosReporteIncidentes } from "@/lib/incidentes-dashboard";
+import { FiltrosReporteIncidentes } from "./incidentes-filtros-reporte";
 
 type Contexto = NonNullable<FunctionReturnType<typeof api.incidentes.contextoBandeja>>;
 const RUTA = "/vigilancia/incidentes/dashboard";
@@ -48,47 +47,16 @@ function ContextoDashboard() {
   const contexto = useQuery(api.incidentes.contextoBandeja);
   if (contexto === undefined) return <Carga />;
   if (!contexto || (!contexto.todosLosConjuntos && !contexto.conjuntos.length)) return <SinAcceso />;
-  return <Panel key={params.toString()} contexto={contexto} />;
-}
-function Panel({ contexto }: { contexto: Contexto }) {
-  const params = useSearchParams();
-  const router = useRouter();
-  const efectivos = new URLSearchParams(params.toString());
-  if (!contexto.todosLosConjuntos && contexto.conjuntos.length === 1 && !efectivos.has("conjunto")) efectivos.set("conjunto", contexto.conjuntos[0]!.condominioId);
-  const filtros = filtrosDashboard(efectivos);
-  const [periodo, setPeriodo] = useState(filtros.periodo);
-  const [intento, setIntento] = useState(0);
-  let rango;
-  try { rango = periodoIncidentes(filtros.periodo, filtros.desde, filtros.hasta); } catch { /* La query y el boundary presentan el error. */ }
-  const unConjunto = !contexto.todosLosConjuntos && contexto.conjuntos.length === 1 ? contexto.conjuntos[0]! : undefined;
-  const restringido = !contexto.todosLosConjuntos && contexto.conjuntos.every((c) => c.soloPropios);
-  function aplicar(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const siguiente = new URLSearchParams();
-    for (const [clave, valor] of new FormData(event.currentTarget)) if (String(valor)) siguiente.set(clave, String(valor));
-    if (siguiente.get("periodo") !== "personalizado") { siguiente.delete("desde"); siguiente.delete("hasta"); }
-    router.push(`${RUTA}?${siguiente}`, { scroll: false });
-  }
-  return <>
-    <Card className="p-4 sm:p-5"><form key={params.toString()} onSubmit={aplicar} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-      <Campo label="Periodo"><Select name="periodo" defaultValue={filtros.periodo} onChange={(e) => setPeriodo(e.target.value)}>{PERIODOS_INCIDENTES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}</Select></Campo>
-      {unConjunto ? <div className="text-sm"><p className="text-xs text-muted-foreground">Conjunto disponible</p><p className="break-words font-medium">{unConjunto.condominioNombre}</p>{filtros.condominioId && <input type="hidden" name="conjunto" value={filtros.condominioId} />}</div> : <Campo label="Conjunto"><Select name="conjunto" defaultValue={filtros.condominioId ?? ""}><option value="">{contexto.todosLosConjuntos ? "Todos los conjuntos autorizados" : "Todos mis conjuntos"}</option>{contexto.conjuntos.map((c) => <option key={c.condominioId} value={c.condominioId}>{c.condominioNombre}</option>)}</Select></Campo>}
-      <Campo label="Estado"><Select name="estado" defaultValue={params.get("estado") ?? "TODOS"}><option value="TODOS">Todos</option><option value="ACTIVOS">Activos</option>{ESTADOS_INCIDENTE.map((e) => <option key={e} value={e}>{etiquetaEstado(e)}</option>)}</Select></Campo>
-      <Campo label="Prioridad"><Select name="prioridad" defaultValue={filtros.prioridad ?? ""}><option value="">Todas</option>{PRIORIDADES_INCIDENTE.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}</Select></Campo>
-      <Campo label="Tipo registrado"><Input name="tipo" maxLength={80} placeholder="Todos · valor exacto" defaultValue={filtros.tipo ?? ""} /></Campo>
-      {periodo === "personalizado" && <><Campo label="Desde"><Input name="desde" type="date" required defaultValue={filtros.desde ?? rango?.desdeDia ?? diaColombia(Date.now())} /></Campo><Campo label="Hasta"><Input name="hasta" type="date" required defaultValue={filtros.hasta ?? rango?.hastaDia ?? diaColombia(Date.now())} /></Campo></>}
-      <div className="flex flex-wrap items-end gap-2"><Button type="submit">Aplicar filtros</Button><Button asChild variant="outline"><Link href={RUTA}>Limpiar filtros</Link></Button></div>
-    </form>{restringido && <p className="mt-3 text-xs text-muted-foreground">Métricas limitadas a tus propios incidentes autorizados.</p>}</Card>
-    <ErrorBoundary resetKey={`${params}:${intento}`} fallback={(error) => <Fallo error={error} reintentar={() => setIntento((n) => n + 1)} />}><Metricas filtros={filtros} contexto={contexto} params={efectivos} /></ErrorBoundary>
-  </>;
+  return <FiltrosReporteIncidentes key={params.toString()} contexto={contexto} ruta={RUTA} fallback={(error, reintentar) => <Fallo error={error} reintentar={reintentar} />}>{(filtros, efectivos) => <Metricas filtros={filtros} contexto={contexto} params={efectivos} />}</FiltrosReporteIncidentes>;
 }
 function Metricas({ filtros, contexto, params }: { filtros: ReturnType<typeof filtrosDashboard>; contexto: Contexto; params: URLSearchParams }) {
   const datos = useQuery(api.incidentes.dashboard, filtros);
   if (datos === undefined) return <Carga />;
   if (datos === null) return <SinAcceso />;
-  if (datos.total === 0) return <EmptyState icon={AlertTriangle} title="No hay incidentes en este periodo." description="Prueba otro periodo o cambia los filtros." />;
+  if (datos.total === 0) return <><Button asChild variant="outline"><Link href={`/vigilancia/incidentes/reportes?${parametrosReporteIncidentes(params, datos.periodo)}`}>Generar reporte</Link></Button><EmptyState icon={AlertTriangle} title="No hay incidentes en este periodo." description="Prueba otro periodo o cambia los filtros." /></>;
   const enlace = (cambios: Record<string, string> = {}) => enlaceBandejaDashboard(params, datos.periodo, { ...(!contexto.todosLosConjuntos && !filtros.condominioId ? { alcance: "mis-conjuntos" } : {}), ...cambios });
   return <div className="space-y-5">
+    <Button asChild variant="outline"><Link href={`/vigilancia/incidentes/reportes?${parametrosReporteIncidentes(params, datos.periodo)}`}>Generar reporte</Link></Button>
     <p className="text-xs text-muted-foreground" role="status">Reportes del {datos.periodo.desdeDia} al {datos.periodo.hastaDia} · Estado actual</p>
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-label="Resumen operativo">
       <Indicador titulo="Total de incidentes" valor={datos.total} href={enlace()} />

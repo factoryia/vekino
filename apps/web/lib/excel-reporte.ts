@@ -662,3 +662,31 @@ export async function descargarXlsxReporte(opts: OpcionesXlsxReporte) {
   a.click();
   URL.revokeObjectURL(a.href);
 }
+
+/** Dos hojas con el mismo generador y estilos: resumen y tabla operacional. */
+export async function construirXlsxReporteConResumen(opts: OpcionesXlsxReporte, contexto: readonly (readonly ValorReporte[])[]): Promise<Uint8Array> {
+  const resumen = await JSZip.loadAsync(await construirXlsxReporte({ ...opts, hoja: "Resumen",
+    tabla: { titulo: "Contexto de la consulta", nombreTabla: "ContextoReporte", columnas: [{ encabezado: "Filtro", ancho: 26 }, { encabezado: "Valor", ancho: 65 }], filas: contexto } }));
+  const datos = await JSZip.loadAsync(await construirXlsxReporte({ ...opts, hoja: "Incidentes" }));
+  const leer = (zip: JSZip, path: string) => zip.file(path)!.async("string");
+  const s1 = await leer(resumen, "xl/sharedStrings.xml");
+  const s2 = await leer(datos, "xl/sharedStrings.xml");
+  const cadenas1 = s1.match(/<si>[\s\S]*?<\/si>/g) ?? [];
+  const cadenas2 = s2.match(/<si>[\s\S]*?<\/si>/g) ?? [];
+  const count = Number(s1.match(/ count="(\d+)"/)![1]) + Number(s2.match(/ count="(\d+)"/)![1]);
+  resumen.file("xl/sharedStrings.xml", `<?xml version="1.0" encoding="UTF-8"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="${count}" uniqueCount="${cadenas1.length + cadenas2.length}">${[...cadenas1, ...cadenas2].join("")}</sst>`);
+  const hoja = (await leer(datos, "xl/worksheets/sheet1.xml")).replace(/(<c\b[^>]*\bt="s"[^>]*><v>)(\d+)(<\/v>)/g, (_, antes, indice, despues) => antes + (Number(indice) + cadenas1.length) + despues);
+  resumen.file("xl/worksheets/sheet2.xml", hoja);
+  const tabla = datos.file("xl/tables/table1.xml");
+  if (tabla) {
+    resumen.file("xl/tables/table2.xml", (await tabla.async("string")).replace('id="1"', 'id="2"'));
+    resumen.file("xl/worksheets/_rels/sheet2.xml.rels", (await leer(datos, "xl/worksheets/_rels/sheet1.xml.rels")).replace("table1.xml", "table2.xml"));
+  }
+  // El rId4 queda libre: 1 hoja, 2 estilos y 3 sharedStrings en el generador.
+  const workbook = await leer(resumen, "xl/workbook.xml");
+  const nombres = (await leer(datos, "xl/workbook.xml")).match(/<definedNames>([\s\S]*?)<\/definedNames>/)?.[1] ?? "";
+  resumen.file("xl/workbook.xml", workbook.replace("</sheets>", '<sheet name="Incidentes" sheetId="2" r:id="rId4"/></sheets>').replace("</definedNames>", nombres.replace(/localSheetId="0"/g, 'localSheetId="1"') + "</definedNames>"));
+  resumen.file("xl/_rels/workbook.xml.rels", (await leer(resumen, "xl/_rels/workbook.xml.rels")).replace("</Relationships>", '<Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/></Relationships>'));
+  resumen.file("[Content_Types].xml", (await leer(resumen, "[Content_Types].xml")).replace("</Types>", '<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' + (tabla ? '<Override PartName="/xl/tables/table2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"/>' : "") + "</Types>"));
+  return resumen.generateAsync({ type: "uint8array" });
+}
