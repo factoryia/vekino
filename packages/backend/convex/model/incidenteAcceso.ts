@@ -2,7 +2,7 @@ import type { QueryCtx, MutationCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import { hasPlatformRole, requireAppUser } from "./authz";
 import { asignacionVigente } from "./asignacion";
-import { contratoVigente, getCompaniaMiembro } from "./acceso";
+import { contratoVigente, getCompaniaMiembro, exigirAccesoCompania } from "./acceso";
 import { capacidadesDeRolAsignacion, capacidadesDeRolesCompania, type Capacidad } from "../lib/vigilancia";
 
 type Ctx = QueryCtx | MutationCtx;
@@ -120,4 +120,61 @@ export async function exigirResponsableIncidente(ctx: Ctx, incidente: Doc<"incid
     throw new Error("El responsable debe ser administrador o supervisor.");
   }
   return responsable;
+}
+
+/** Alcance compartido por bandeja y analítica; mantiene el filtro por reportante. */
+export async function exigirAlcanceBandeja(ctx: QueryCtx, args: { companiaId: Id<"companiasSeguridad">; condominioId?: Id<"condominios">; todosMisConjuntos?: boolean }) {
+    const user = await requireAppUser(ctx);
+    const miembro = await getCompaniaMiembro(ctx, user._id);
+    const plataforma = hasPlatformRole(user, "superadmin", "admin");
+    if (!plataforma && (!miembro || miembro.companiaId !== args.companiaId)) {
+      throw new Error("No pertenece a esta compañía.");
+    }
+    const admin = !plataforma && !!miembro?.roles.includes("admin_compania");
+    if (admin) await exigirAccesoCompania(ctx, args.companiaId, "incidentes.ver");
+    if (plataforma && !(await ctx.db.get(args.companiaId))) throw new Error("Compañía no encontrada.");
+    if (!args.condominioId && !admin && !plataforma) {
+      if (args.todosMisConjuntos) {
+        const contexto = await obtenerContextoBandeja(ctx, false);
+        if (!contexto?.conjuntos.length) throw new Error("No tiene acceso a conjuntos vigentes.");
+        return { reportante: undefined, admin, plataforma, ambitos: contexto.conjuntos.map((c) => ({
+          condominioId: c.condominioId, reportante: c.soloPropios ? user._id : undefined,
+        })) };
+      }
+      throw new Error("Seleccione un conjunto de su asignación.");
+    }
+    const acceso = args.condominioId
+      ? await exigirAccesoIncidente(ctx, args.companiaId, args.condominioId, "incidentes.ver") : null;
+    const reportante = acceso?.rol === "guardia" ? user._id : undefined;
+    return { reportante, admin, plataforma };
+}
+
+/** Opciones autorizadas: nunca devuelve conjuntos ajenos para ocultarlos en cliente. */
+export async function obtenerContextoBandeja(ctx: QueryCtx, incluirCreacion = true) {
+    const user = await requireAppUser(ctx);
+    const miembro = await getCompaniaMiembro(ctx, user._id);
+    if (!miembro) return null;
+    const admin = miembro.roles.includes("admin_compania");
+    const relaciones = admin
+      ? await ctx.db.query("companiaContratos").withIndex("by_compania", (q) => q.eq("companiaId", miembro.companiaId)).collect()
+      : await ctx.db.query("asignaciones").withIndex("by_user", (q) => q.eq("userId", user._id)).collect();
+    const conjuntos = [];
+    for (const condominioId of new Set(relaciones.filter((r) => r.companiaId === miembro.companiaId).map((r) => r.condominioId))) {
+      let rol: RolAccesoIncidente;
+      try {
+        ({ rol } = await exigirAccesoIncidente(ctx, miembro.companiaId, condominioId, "incidentes.ver"));
+      } catch { continue; }
+      const conjunto = await ctx.db.get(condominioId);
+      let crear = false;
+      try {
+        if (incluirCreacion) {
+          await exigirAccesoIncidente(ctx, miembro.companiaId, condominioId, "incidentes.crear");
+          crear = true;
+        }
+      } catch { /* Histórico en solo lectura. */ }
+      conjuntos.push({ condominioId, condominioNombre: conjunto!.name, crear, soloPropios: rol === "guardia" });
+    }
+    // Verifica también la compañía cuando no existen relaciones que recorrer.
+    if (admin) await exigirAccesoCompania(ctx, miembro.companiaId, "incidentes.ver");
+    return { companiaId: miembro.companiaId, todosLosConjuntos: admin, conjuntos };
 }

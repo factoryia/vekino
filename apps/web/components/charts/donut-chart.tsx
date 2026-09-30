@@ -25,6 +25,7 @@ export function DonutChart({
   thickness = 20,
   centerValue,
   centerLabel,
+  showLegend = true,
   className,
 }: {
   data: DonutSlice[];
@@ -32,6 +33,7 @@ export function DonutChart({
   thickness?: number;
   centerValue?: string | number;
   centerLabel?: string;
+  showLegend?: boolean;
   className?: string;
 }) {
   const total = data.reduce((s, d) => s + d.value, 0);
@@ -161,7 +163,7 @@ export function DonutChart({
         )}
       </div>
 
-      <ul className="w-full space-y-2">
+      {showLegend && <ul className="w-full space-y-2">
         {data.map((d) => {
           const pct = total > 0 ? Math.round((d.value / total) * 100) : 0;
           const segIdx = segments.findIndex((s) => s.label === d.label);
@@ -188,7 +190,7 @@ export function DonutChart({
             </li>
           );
         })}
-      </ul>
+      </ul>}
     </div>
   );
 }

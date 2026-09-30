@@ -2,6 +2,12 @@ import type { Doc } from "../_generated/dataModel";
 
 export type EstadoIncidente = Doc<"incidentes">["estado"];
 
+export const ESTADOS_INCIDENTE = ["REPORTADO", "EN_INVESTIGACION", "EN_SEGUIMIENTO", "RESUELTO", "CERRADO"] as const;
+export const ESTADOS_ACTIVOS = ["REPORTADO", "EN_INVESTIGACION", "EN_SEGUIMIENTO"] as const;
+export function incidenteActivo(estado: EstadoIncidente) {
+  return ESTADOS_ACTIVOS.some((activo) => activo === estado);
+}
+
 /** Solo las transiciones acordadas. CERRADO no tiene salida. */
 const SIGUIENTES: Record<EstadoIncidente, readonly EstadoIncidente[]> = {
   REPORTADO: ["EN_INVESTIGACION"],

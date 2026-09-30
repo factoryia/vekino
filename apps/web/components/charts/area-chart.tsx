@@ -18,12 +18,14 @@ export function AreaChart({
   height = 200,
   format = (n) => String(n),
   className,
+  labelEvery = 1,
 }: {
   data: AreaPoint[];
   color?: string;
   height?: number;
   format?: (n: number) => string;
   className?: string;
+  labelEvery?: number;
 }) {
   const gradId = useId();
   const [hover, setHover] = useState<number | null>(null);
@@ -166,7 +168,7 @@ export function AreaChart({
                 : "text-muted-foreground",
             )}
           >
-            {d.label}
+            {i % labelEvery === 0 || i === data.length - 1 ? d.label : ""}
           </span>
         ))}
       </div>

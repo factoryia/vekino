@@ -1,14 +1,27 @@
-import { paginationOptsValidator, type OrderedQuery, type IndexRangeBuilder, type IndexRange } from "convex/server";
+import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import type { Doc, DataModel } from "./_generated/dataModel";
-import { exigirAccesoCompania, getCompaniaMiembro } from "./model/acceso";
-import { hasPlatformRole, requireAppUser } from "./model/authz";
-import { exigirAccesoIncidente, exigirIncidente, permisosIncidente, exigirResponsableIncidente, exigirAgregarIncidente, comprobarContextoHijo } from "./model/incidenteAcceso";
+import type { Doc } from "./_generated/dataModel";
+import { getCompaniaMiembro } from "./model/acceso";
+import { requireAppUser } from "./model/authz";
+import { exigirAccesoIncidente, exigirIncidente, permisosIncidente, exigirResponsableIncidente, exigirAgregarIncidente, comprobarContextoHijo, exigirAlcanceBandeja, obtenerContextoBandeja } from "./model/incidenteAcceso";
 import { logIncidenteEvento, type CambioIncidente } from "./model/incidenteEvento";
 import { displayNameFromUser } from "./model/displayName";
 import { estadoIncidenteValidator, prioridadIncidenteValidator } from "./model/roles";
 import { textoOpcional, textoRequerido, validarTransicion, transicionesIncidente } from "./lib/incidentes";
+
+import { consultarIncidentes, coincideFiltrosIncidente } from "./model/incidenteConsulta";
+import { obtenerAnaliticaIncidentes } from "./model/incidenteAnalitica";
+
+/** Agregación de la misma lectura autorizada de la bandeja. */
+export const dashboard = query({
+  args: {
+    periodo: v.string(), desde: v.optional(v.string()), hasta: v.optional(v.string()),
+    condominioId: v.optional(v.id("condominios")), estado: v.optional(estadoIncidenteValidator),
+    activos: v.optional(v.boolean()), prioridad: v.optional(prioridadIncidenteValidator), tipo: v.optional(v.string()),
+  },
+  handler: obtenerAnaliticaIncidentes,
+});
 
 const personaInicialValidator = v.object({
   nombre: v.string(),
@@ -107,29 +120,7 @@ export const obtener = query({
 export const contextoBandeja = query({
   args: {},
   handler: async (ctx) => {
-    const user = await requireAppUser(ctx);
-    const miembro = await getCompaniaMiembro(ctx, user._id);
-    if (!miembro) return null;
-    const admin = miembro.roles.includes("admin_compania");
-    const relaciones = admin
-      ? await ctx.db.query("companiaContratos").withIndex("by_compania", (q) => q.eq("companiaId", miembro.companiaId)).collect()
-      : await ctx.db.query("asignaciones").withIndex("by_user", (q) => q.eq("userId", user._id)).collect();
-    const conjuntos = [];
-    for (const condominioId of new Set(relaciones.filter((r) => r.companiaId === miembro.companiaId).map((r) => r.condominioId))) {
-      try {
-        await exigirAccesoIncidente(ctx, miembro.companiaId, condominioId, "incidentes.ver");
-      } catch { continue; }
-      const conjunto = await ctx.db.get(condominioId);
-      let crear = false;
-      try {
-        await exigirAccesoIncidente(ctx, miembro.companiaId, condominioId, "incidentes.crear");
-        crear = true;
-      } catch { /* Histórico en solo lectura. */ }
-      conjuntos.push({ condominioId, condominioNombre: conjunto!.name, crear });
-    }
-    // Verifica también la compañía cuando no existen relaciones que recorrer.
-    if (admin) await exigirAccesoCompania(ctx, miembro.companiaId, "incidentes.ver");
-    return { companiaId: miembro.companiaId, todosLosConjuntos: admin, conjuntos };
+    return obtenerContextoBandeja(ctx);
   },
 });
 
@@ -152,11 +143,12 @@ export const responsablesDisponibles = query({
   },
 });
 
-/** Una sola compañía y, para personal asignado, un solo conjunto por página. */
+/** Una sola compañía y únicamente conjuntos/reportantes autorizados. */
 export const listar = query({
   args: {
     companiaId: v.id("companiasSeguridad"),
     condominioId: v.optional(v.id("condominios")),
+    todosMisConjuntos: v.optional(v.boolean()),
     estado: v.optional(estadoIncidenteValidator),
     prioridad: v.optional(prioridadIncidenteValidator),
     tipo: v.optional(v.string()),
@@ -170,21 +162,7 @@ export const listar = query({
     paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
-    const user = await requireAppUser(ctx);
-    const miembro = await getCompaniaMiembro(ctx, user._id);
-    const plataforma = hasPlatformRole(user, "superadmin", "admin");
-    if (!plataforma && (!miembro || miembro.companiaId !== args.companiaId)) {
-      throw new Error("No pertenece a esta compañía.");
-    }
-    const admin = !plataforma && !!miembro?.roles.includes("admin_compania");
-    if (admin) await exigirAccesoCompania(ctx, args.companiaId, "incidentes.ver");
-    if (plataforma && !(await ctx.db.get(args.companiaId))) throw new Error("Compañía no encontrada.");
-    if (!args.condominioId && !admin && !plataforma) {
-      throw new Error("Seleccione un conjunto de su asignación.");
-    }
-    const acceso = args.condominioId
-      ? await exigirAccesoIncidente(ctx, args.companiaId, args.condominioId, "incidentes.ver") : null;
-    const reportante = acceso?.rol === "guardia" ? user._id : undefined;
+    const { reportante, ambitos } = await exigirAlcanceBandeja(ctx, args);
     const fecha = args.fecha ?? "reportadoEn";
     if ((args.desde !== undefined && !Number.isFinite(args.desde)) ||
       (args.hasta !== undefined && !Number.isFinite(args.hasta)) ||
@@ -204,59 +182,12 @@ export const listar = query({
     if (busqueda && args.campoBusqueda === "referencia") {
       const id = ctx.db.normalizeId("incidentes", busqueda);
       const c = id ? await ctx.db.get(id) : null;
-      const coincide = c && c.companiaId === args.companiaId && (!args.condominioId || c.condominioId === args.condominioId)
-        && (!reportante || c.reportadoPorUserId === reportante) && (!args.estado || c.estado === args.estado)
-        && (!args.prioridad || c.prioridad === args.prioridad) && (!args.tipo || c.tipo === args.tipo)
-        && (!args.activos || args.estado || (c.estado !== "RESUELTO" && c.estado !== "CERRADO"))
-        && (args.desde === undefined || c[fecha] >= args.desde) && (args.hasta === undefined || c[fecha] <= args.hasta);
+      const coincide = c && coincideFiltrosIncidente(c, args)
+        && (!reportante || c.reportadoPorUserId === reportante)
+        && (!ambitos || ambitos.some((a) => c.condominioId === a.condominioId && (!a.reportante || c.reportadoPorUserId === a.reportante)));
       return { page: await proyectar(coincide ? [c] : []), isDone: true, continueCursor: "" };
     }
-    let consulta: OrderedQuery<DataModel["incidentes"]>;
-    if (busqueda) {
-      const campo = args.campoBusqueda === "descripcion" ? "descripcion" : "ubicacion";
-      consulta = ctx.db.query("incidentes").withSearchIndex(campo === "descripcion" ? "buscar_descripcion" : "buscar_ubicacion", (q) => {
-        let filtro = q.search(campo, busqueda).eq("companiaId", args.companiaId);
-        if (args.condominioId) filtro = filtro.eq("condominioId", args.condominioId);
-        if (reportante) filtro = filtro.eq("reportadoPorUserId", reportante);
-        if (args.estado) filtro = filtro.eq("estado", args.estado);
-        if (args.prioridad) filtro = filtro.eq("prioridad", args.prioridad);
-        if (args.tipo) filtro = filtro.eq("tipo", args.tipo);
-        return filtro;
-      });
-    } else {
-      // El rango se aplica al índice de la fecha elegida; nunca se ordena una descarga en cliente.
-      const rangoReporte = (q: IndexRange & Omit<IndexRangeBuilder<Doc<"incidentes">, ["reportadoEn"]>, "eq">) => {
-        if (args.desde !== undefined && args.hasta !== undefined) return q.gte("reportadoEn", args.desde).lte("reportadoEn", args.hasta);
-        if (args.desde !== undefined) return q.gte("reportadoEn", args.desde);
-        if (args.hasta !== undefined) return q.lte("reportadoEn", args.hasta);
-        return q;
-      };
-      const rangoHecho = (q: IndexRange & Omit<IndexRangeBuilder<Doc<"incidentes">, ["ocurrioEn"]>, "eq">) => {
-        if (args.desde !== undefined && args.hasta !== undefined) return q.gte("ocurrioEn", args.desde).lte("ocurrioEn", args.hasta);
-        if (args.desde !== undefined) return q.gte("ocurrioEn", args.desde);
-        if (args.hasta !== undefined) return q.lte("ocurrioEn", args.hasta);
-        return q;
-      };
-      // Las ramas explícitas conservan el tipado de los prefijos del índice.
-      if (fecha === "ocurrioEn") {
-        if (reportante) consulta = ctx.db.query("incidentes").withIndex("by_compania_condominio_reportante_ocurrio", (q) => rangoHecho(q.eq("companiaId", args.companiaId).eq("condominioId", args.condominioId!).eq("reportadoPorUserId", reportante))).order(args.orden ?? "desc");
-        else if (args.condominioId) consulta = ctx.db.query("incidentes").withIndex("by_compania_condominio_ocurrio", (q) => rangoHecho(q.eq("companiaId", args.companiaId).eq("condominioId", args.condominioId!))).order(args.orden ?? "desc");
-        else consulta = ctx.db.query("incidentes").withIndex("by_compania_ocurrio", (q) => rangoHecho(q.eq("companiaId", args.companiaId))).order(args.orden ?? "desc");
-      } else {
-        if (reportante) consulta = ctx.db.query("incidentes").withIndex("by_compania_condominio_reportante", (q) => rangoReporte(q.eq("companiaId", args.companiaId).eq("condominioId", args.condominioId!).eq("reportadoPorUserId", reportante))).order(args.orden ?? "desc");
-        else if (args.condominioId && args.estado) consulta = ctx.db.query("incidentes").withIndex("by_compania_condominio_estado_reportado", (q) => rangoReporte(q.eq("companiaId", args.companiaId).eq("condominioId", args.condominioId!).eq("estado", args.estado!))).order(args.orden ?? "desc");
-        else if (args.condominioId) consulta = ctx.db.query("incidentes").withIndex("by_compania_condominio_reportado", (q) => rangoReporte(q.eq("companiaId", args.companiaId).eq("condominioId", args.condominioId!))).order(args.orden ?? "desc");
-        else if (args.estado) consulta = ctx.db.query("incidentes").withIndex("by_compania_estado_reportado", (q) => rangoReporte(q.eq("companiaId", args.companiaId).eq("estado", args.estado!))).order(args.orden ?? "desc");
-        else consulta = ctx.db.query("incidentes").withIndex("by_compania_reportado", (q) => rangoReporte(q.eq("companiaId", args.companiaId))).order(args.orden ?? "desc");
-      }
-    }
-    // Todos los criterios se evalúan ANTES de paginar; lectura acotada por solicitud.
-    if (args.estado) consulta = consulta.filter((q) => q.eq(q.field("estado"), args.estado!));
-    else if (args.activos) consulta = consulta.filter((q) => q.and(q.neq(q.field("estado"), "RESUELTO"), q.neq(q.field("estado"), "CERRADO")));
-    if (args.prioridad) consulta = consulta.filter((q) => q.eq(q.field("prioridad"), args.prioridad!));
-    if (args.tipo) consulta = consulta.filter((q) => q.eq(q.field("tipo"), args.tipo!));
-    if (busqueda && args.desde !== undefined) consulta = consulta.filter((q) => q.gte(q.field(fecha), args.desde!));
-    if (busqueda && args.hasta !== undefined) consulta = consulta.filter((q) => q.lte(q.field(fecha), args.hasta!));
+    const consulta = consultarIncidentes(ctx, args, reportante, ambitos);
     const resultado = await consulta.paginate({ ...args.paginationOpts, numItems: Math.min(args.paginationOpts.numItems, 50), maximumRowsRead: 300, maximumBytesRead: 2_000_000 });
     return { ...resultado, page: await proyectar(resultado.page) };
   },

@@ -1,3 +1,4 @@
+import { ESTADOS_INCIDENTE } from "../lib/incidentes.ts";
 import { v } from "convex/values";
 
 /**
@@ -271,10 +272,7 @@ export type RolAsignacion = "supervisor" | "guardia";
 export const prioridadIncidenteValidator = v.union(
   v.literal("BAJA"), v.literal("MEDIA"), v.literal("ALTA"), v.literal("CRITICA"),
 );
-export const estadoIncidenteValidator = v.union(
-  v.literal("REPORTADO"), v.literal("EN_INVESTIGACION"),
-  v.literal("EN_SEGUIMIENTO"), v.literal("RESUELTO"), v.literal("CERRADO"),
-);
+export const estadoIncidenteValidator = v.union(...ESTADOS_INCIDENTE.map((estado) => v.literal(estado)));
 export const tipoEventoIncidenteValidator = v.union(
   v.literal("CREACION"), v.literal("CLASIFICACION"),
   v.literal("CAMBIO_PRIORIDAD"), v.literal("ASIGNACION"),

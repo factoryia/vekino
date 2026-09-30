@@ -59,6 +59,14 @@
     "./cierreTurno": {
       "types": "./convex/lib/cierreTurno.ts",
       "default": "./convex/lib/cierreTurno.ts"
+    },
+    "./incidentes": {
+      "types": "./convex/lib/incidentes.ts",
+      "default": "./convex/lib/incidentes.ts"
+    },
+    "./incidenteMetricas": {
+      "types": "./convex/lib/incidenteMetricas.ts",
+      "default": "./convex/lib/incidenteMetricas.ts"
     }
   },
   "dependencies": {
