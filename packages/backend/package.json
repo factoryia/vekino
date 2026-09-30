@@ -12,6 +12,10 @@
     "test:seguridad": "vitest run"
   },
   "exports": {
+    "./incidenteEvidencias": {
+      "types": "./convex/lib/incidenteEvidencias.ts",
+      "default": "./convex/lib/incidenteEvidencias.ts"
+    },
     "./api": {
       "types": "./convex/_generated/api.d.ts",
       "default": "./convex/_generated/api.js"

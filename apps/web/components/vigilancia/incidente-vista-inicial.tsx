@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { useSearchParams } from "next/navigation";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { ArrowLeft, CheckCircle2 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
@@ -16,8 +16,12 @@ import { Button } from "@/components/ui/button";
 import { Input, Select, Textarea } from "@/components/ui/input";
 import { ErrorBoundary, ErrorMessage } from "@/components/ui/error-boundary";
 import { Skeleton } from "@/components/ui/skeleton";
-import { etiquetaTipoIncidente, PRIORIDADES_INCIDENTE, TIPOS_PERSONA } from "@/lib/incidentes-ui";
-import { etiquetaEstado, fechaIncidente as fecha, mensajeErrorGestion, requisitosTransicion, type EstadoIncidente } from "@/lib/incidentes-bandeja";
+import { etiquetaTipoIncidente, PRIORIDADES_INCIDENTE } from "@/lib/incidentes-ui";
+import { etiquetaEstado, fechaIncidente as fecha, requisitosTransicion, type EstadoIncidente } from "@/lib/incidentes-bandeja";
+
+import { Personas } from "./incidente-personas";
+import { Evidencias } from "./incidente-evidencias";
+import { Campo, useOperacion } from "./incidente-controles";
 
 type Caso = FunctionReturnType<typeof api.incidentes.obtener>;
 
@@ -47,26 +51,11 @@ export function IncidenteVistaInicial({ incidenteId, baseHref, registrado, condo
         {incidente.resolucionObservacion && <div className="border-t border-border pt-4"><h3 className="text-sm font-semibold">Resolución declarada</h3><p className="mt-2 whitespace-pre-wrap break-words text-sm">{incidente.resolucionObservacion}</p></div>}
       </Card>
       {incidente.estado === "CERRADO" ? <p role="status" className="text-sm text-muted-foreground">Caso cerrado. La información y el historial están disponibles para consulta.</p> : incidente.permisos.gestionar ? <Gestion key={incidente.estado} incidente={incidente} /> : <p className="text-sm text-muted-foreground">Consulta del caso. Tu alcance actual no permite gestionar el estado ni registrar seguimientos.</p>}
-      <ErrorBoundary resetKey={incidenteId} fallback={() => <ErrorMessage title="No se pudieron cargar las personas" />}><Personas incidenteId={incidenteId} agregar={incidente.permisos.agregarPersona} /></ErrorBoundary>
+      <ErrorBoundary resetKey={incidenteId} fallback={() => <ErrorMessage title="No se pudieron cargar las personas" />}><Personas incidenteId={incidenteId} agregar={incidente.permisos.agregarPersona} editar={incidente.permisos.editarPersona} retirar={incidente.permisos.retirarPersona} /></ErrorBoundary>
+      <ErrorBoundary resetKey={incidenteId} fallback={() => <ErrorMessage title="No se pudieron cargar las evidencias" />}><Evidencias incidenteId={incidenteId} agregar={incidente.permisos.agregarEvidencia} retirar={incidente.permisos.retirarEvidencia} /></ErrorBoundary>
       <ErrorBoundary resetKey={incidenteId} fallback={() => <ErrorMessage title="No se pudo cargar el historial" />}><Historial incidenteId={incidenteId} /></ErrorBoundary>
     </>}
   </PageContainer>;
-}
-
-/** Serializa envíos de gestión, conserva formularios rechazados y anuncia el resultado. */
-function useOperacion() {
-  const bloqueo = useRef(false);
-  const [ocupado, setOcupado] = useState(false);
-  const [error, setError] = useState("");
-  const [exito, setExito] = useState("");
-  async function ejecutar(accion: () => Promise<unknown>, mensaje: string, limpiar?: () => void) {
-    if (bloqueo.current) return;
-    bloqueo.current = true; setOcupado(true); setError(""); setExito("");
-    try { await accion(); limpiar?.(); setExito(mensaje); }
-    catch (e) { setError(mensajeErrorGestion(e)); }
-    finally { bloqueo.current = false; setOcupado(false); }
-  }
-  return { ocupado, ejecutar, aviso: <>{error && <p role="alert" className="text-sm text-destructive">{error}</p>}{exito && <p role="status" className="text-sm text-emerald-700 dark:text-emerald-400">{exito}</p>}</> };
 }
 
 function Gestion({ incidente }: { incidente: Caso }) {
@@ -122,29 +111,14 @@ function Responsable({ incidente }: { incidente: Caso }) {
   </form>;
 }
 
-function Personas({ incidenteId, agregar }: { incidenteId: Id<"incidentes">; agregar: boolean }) {
-  const personas = useQuery(api.incidentes.listarPersonas, { incidenteId });
-  const alta = useMutation(api.incidentes.agregarPersona);
-  const operacion = useOperacion();
-  return <Card className="space-y-4 p-5 sm:p-6"><h2 className="text-base font-semibold">Personas involucradas</h2>
-    {personas === undefined ? <Skeleton className="h-12" /> : !personas.length ? <p className="text-sm text-muted-foreground">No hay personas asociadas al incidente.</p> : <ul className="divide-y divide-border">{personas.map((p) => <li key={p._id} className="break-words py-3 text-sm"><p className="font-medium">{p.nombre} <span className="font-normal text-muted-foreground">· {TIPOS_PERSONA.find((t) => t.value === p.tipoPersona)?.label ?? p.tipoPersona}</span></p>{p.documento && <p className="text-xs text-muted-foreground">Documento: {p.documento}</p>}{p.observacion && <p className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">{p.observacion}</p>}</li>)}</ul>}
-    {agregar && <details className="border-t border-border pt-4"><summary className="cursor-pointer text-sm font-medium">Agregar persona involucrada</summary><form className="mt-4 space-y-3" onSubmit={(e) => { e.preventDefault(); const form = e.currentTarget; const datos = new FormData(form); const documento = String(datos.get("documento")).trim(); const observacion = String(datos.get("observacion")).trim(); void operacion.ejecutar(() => alta({ incidenteId, nombre: String(datos.get("nombre")).trim(), tipoPersona: String(datos.get("tipoPersona")), ...(documento ? { documento } : {}), ...(observacion ? { observacion } : {}) }), "Persona agregada y registrada en el historial.", () => form.reset()); }}>
-      {operacion.aviso}<fieldset disabled={operacion.ocupado} className="grid gap-3 sm:grid-cols-2"><Campo label="Nombre"><Input name="nombre" required maxLength={160} /></Campo><Campo label="Tipo de persona"><Select name="tipoPersona" required defaultValue=""><option value="">Selecciona el tipo</option>{TIPOS_PERSONA.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}</Select></Campo><Campo label="Documento (opcional)"><Input name="documento" maxLength={80} /></Campo><Campo label="Observación (opcional)"><Textarea name="observacion" maxLength={2000} /></Campo><div><Button type="submit">Agregar persona</Button></div></fieldset>
-    </form></details>}
-  </Card>;
-}
-
-const ACCIONES: Record<string, string> = { CREACION: "Reporte del incidente", SEGUIMIENTO: "Seguimiento", CAMBIO_ESTADO: "Cambio de estado", CAMBIO_PRIORIDAD: "Cambio de prioridad", CLASIFICACION: "Clasificación", ASIGNACION: "Asignación de responsable", PERSONA_AGREGADA: "Persona agregada", RESOLUCION: "Resolución declarada", CIERRE: "Cierre del caso", CAMBIO_RELEVANTE: "Corrección de datos" };
+const ACCIONES: Record<string, string> = { CREACION: "Reporte del incidente", SEGUIMIENTO: "Seguimiento", CAMBIO_ESTADO: "Cambio de estado", CAMBIO_PRIORIDAD: "Cambio de prioridad", CLASIFICACION: "Clasificación", ASIGNACION: "Asignación de responsable", PERSONA_AGREGADA: "Persona agregada", PERSONA_EDITADA: "Persona editada", PERSONA_RETIRADA: "Persona retirada", EVIDENCIA_AGREGADA: "Evidencia agregada", EVIDENCIA_RETIRADA: "Evidencia retirada", RESOLUCION: "Resolución declarada", CIERRE: "Cierre del caso", CAMBIO_RELEVANTE: "Corrección de datos" };
 function Historial({ incidenteId }: { incidenteId: Id<"incidentes"> }) {
   const { results, status, loadMore } = usePaginatedQuery(api.incidentes.listarEventos, { incidenteId }, { initialNumItems: 30 });
   return <Card className="space-y-4 p-5 sm:p-6"><h2 className="text-base font-semibold">Historial del incidente</h2><p className="text-xs text-muted-foreground">Actuaciones registradas, de la más reciente a la más antigua.</p>
-    {status === "LoadingFirstPage" ? <Skeleton className="h-32" /> : !results.length ? <p className="text-sm text-muted-foreground">No hay eventos disponibles.</p> : <ol className="ml-2 space-y-5 border-l border-border pl-5">{results.map((evento) => <li key={evento._id} className="relative text-sm"><span aria-hidden className="absolute -left-[25px] top-1.5 h-2 w-2 rounded-full bg-brand" /><time className="text-xs text-muted-foreground" dateTime={new Date(evento.createdAt).toISOString()}>{fecha(evento.createdAt)}</time><p className="mt-1 font-semibold">{ACCIONES[evento.tipo] ?? evento.tipo}</p><p className="text-xs text-muted-foreground">{evento.actorNombre}</p><p className="mt-2 whitespace-pre-wrap break-words">{evento.descripcion}</p>{evento.cambios?.map((c, i) => <p key={i} className="mt-1 break-words text-xs text-muted-foreground">{c.campo}: {c.antes ?? "Sin valor"} → {c.despues ?? "Sin valor"}</p>)}</li>)}</ol>}
+    {status === "LoadingFirstPage" ? <Skeleton className="h-32" /> : !results.length ? <p className="text-sm text-muted-foreground">No hay eventos disponibles.</p> : <ol className="ml-2 space-y-5 border-l border-border pl-5">{results.map((evento) => <li key={evento._id} className="relative text-sm"><span aria-hidden className="absolute -left-[25px] top-1.5 h-2 w-2 rounded-full bg-brand" /><time className="text-xs text-muted-foreground" dateTime={new Date(evento.createdAt).toISOString()}>{fecha(evento.createdAt)}</time><p className="mt-1 font-semibold">{ACCIONES[evento.tipo] ?? evento.tipo}</p><p className="text-xs text-muted-foreground">{evento.actorNombre}</p><p className="mt-2 whitespace-pre-wrap break-words">{evento.descripcion}</p>{evento.motivo && <p className="mt-1 text-xs">Motivo: {evento.motivo}</p>}{evento.cambios?.map((c, i) => <p key={i} className="mt-1 break-words text-xs text-muted-foreground">{c.campo}: {c.antes ?? "Sin valor"} → {c.despues ?? "Sin valor"}</p>)}</li>)}</ol>}
     {(status === "CanLoadMore" || status === "LoadingMore") && <Button type="button" variant="outline" disabled={status === "LoadingMore"} onClick={() => loadMore(30)}>{status === "LoadingMore" ? "Cargando…" : "Ver eventos anteriores"}</Button>}
   </Card>;
 }
 function Dato({ label, valor }: { label: string; valor: React.ReactNode }) {
   return <div className="min-w-0"><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 break-words text-sm font-medium">{valor}</dd></div>;
-}
-function Campo({ label, children }: { label: string; children: React.ReactNode }) {
-  return <label className="block min-w-0 space-y-1 text-xs font-medium"><span>{label}</span>{children}</label>;
 }

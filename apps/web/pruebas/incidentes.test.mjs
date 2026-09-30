@@ -97,6 +97,7 @@ let respuestasConsulta = [];
 let consultas = [];
 let eventos = [];
 mock.module("convex/react", () => ({
+  useAction: () => () => Promise.resolve({ url: "https://autorizado.invalid/temporal", expiraEn: Date.now() + 60000 }),
   useMutation: () => () => Promise.resolve("incidente-creado"),
   useQuery: (_query, args) => { consultas.push(args); return args === "skip" ? undefined : respuestasConsulta.shift(); },
   usePaginatedQuery: () => ({ results: eventos, status: "Exhausted", loadMore: () => {} }),

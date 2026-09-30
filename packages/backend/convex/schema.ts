@@ -2717,10 +2717,45 @@ export default defineSchema({
     tipoPersona: v.string(),
     documento: v.optional(v.string()),
     observacion: v.optional(v.string()),
-    /** Reservado para una futura baja lógica; no hay API de retiro en esta fase. */
     retiradoEn: v.optional(v.number()),
     retiradoPorUserId: v.optional(v.id("users")),
+    retiradoPorNombre: v.optional(v.string()),
+    motivoRetiro: v.optional(v.string()),
+    updatedAt: v.optional(v.number()),
     createdAt: v.number(),
+  }).index("by_incidente", ["incidenteId"]),
+
+  /** Objetos del bucket privado; nunca URLs aportadas por el cliente. */
+  incidenteEvidencias: defineTable({
+    incidenteId: v.id("incidentes"),
+    companiaId: v.id("companiasSeguridad"),
+    condominioId: v.id("condominios"),
+    storageKey: v.string(),
+    nombre: v.string(),
+    mimeType: v.string(),
+    size: v.number(),
+    subidoPorUserId: v.id("users"),
+    subidoPorNombre: v.string(),
+    createdAt: v.number(),
+    retiradoEn: v.optional(v.number()),
+    retiradoPorUserId: v.optional(v.id("users")),
+    retiradoPorNombre: v.optional(v.string()),
+    motivoRetiro: v.optional(v.string()),
+  }).index("by_incidente", ["incidenteId"]),
+
+  /** Preparación interna antes de S3. Un fallo conserva el objeto/carga para conciliación. */
+  incidenteEvidenciaCargas: defineTable({
+    incidenteId: v.id("incidentes"),
+    companiaId: v.id("companiasSeguridad"),
+    condominioId: v.id("condominios"),
+    storageKey: v.string(),
+    nombre: v.string(),
+    mimeType: v.string(),
+    size: v.number(),
+    subidoPorUserId: v.id("users"),
+    subidoPorNombre: v.string(),
+    createdAt: v.number(),
+    evidenciaId: v.optional(v.id("incidenteEvidencias")),
   }).index("by_incidente", ["incidenteId"]),
 
   /** Historial inmutable del caso; solo se inserta mediante logIncidenteEvento. */
@@ -2730,6 +2765,9 @@ export default defineSchema({
     condominioId: v.id("condominios"),
     tipo: tipoEventoIncidenteValidator,
     descripcion: v.string(),
+    personaId: v.optional(v.id("incidentePersonas")),
+    evidenciaId: v.optional(v.id("incidenteEvidencias")),
+    motivo: v.optional(v.string()),
     cambios: v.optional(v.array(v.object({
       campo: v.string(),
       antes: v.optional(v.string()),

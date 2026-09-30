@@ -281,6 +281,8 @@ export const tipoEventoIncidenteValidator = v.union(
   v.literal("CAMBIO_ESTADO"), v.literal("SEGUIMIENTO"),
   v.literal("CAMBIO_RELEVANTE"), v.literal("RESOLUCION"),
   v.literal("CIERRE"), v.literal("PERSONA_AGREGADA"),
+  v.literal("PERSONA_EDITADA"), v.literal("PERSONA_RETIRADA"),
+  v.literal("EVIDENCIA_AGREGADA"), v.literal("EVIDENCIA_RETIRADA"),
 );
 
 // ─────────────────────────────────────────────────────────────

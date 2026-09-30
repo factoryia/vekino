@@ -21,6 +21,9 @@ export async function logIncidenteEvento(
     descripcion: string;
     actor: Doc<"users">;
     cambios?: CambioIncidente[];
+    personaId?: Id<"incidentePersonas">;
+    evidenciaId?: Id<"incidenteEvidencias">;
+    motivo?: string;
     ahora: number;
   },
 ): Promise<Id<"incidenteEventos">> {
@@ -30,6 +33,9 @@ export async function logIncidenteEvento(
     condominioId: args.incidente.condominioId,
     tipo: args.tipo,
     descripcion: args.descripcion,
+    personaId: args.personaId,
+    evidenciaId: args.evidenciaId,
+    motivo: args.motivo,
     ...(args.cambios?.length ? { cambios: args.cambios } : {}),
     actorUserId: args.actor._id,
     actorNombre: displayNameFromUser(args.actor),

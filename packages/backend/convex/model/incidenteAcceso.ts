@@ -77,7 +77,31 @@ export async function permisosIncidente(ctx: Ctx, incidente: Doc<"incidentes">, 
     } catch { return false; }
   };
   const gestionar = await permite("incidentes.gestionar");
-  return { gestionar, cerrar: await permite("incidentes.cerrar"), agregarPersona: incidente.estado !== "CERRADO" && (rol === "guardia" || gestionar) };
+  let agregar = gestionar;
+  if (rol === "guardia" && incidente.estado !== "CERRADO") {
+    try { await exigirAgregarIncidente(ctx, incidente._id); agregar = true; } catch { agregar = false; }
+  }
+  return { gestionar, cerrar: await permite("incidentes.cerrar"), agregarPersona: agregar,
+    editarPersona: gestionar, retirarPersona: gestionar, agregarEvidencia: agregar, retirarEvidencia: gestionar };
+}
+
+/** Alta operativa: el reportante guarda conserva el alta, pero requiere vigencia de escritura. */
+export async function exigirAgregarIncidente(ctx: Ctx, incidenteId: Id<"incidentes">) {
+  const acceso = await exigirIncidente(ctx, incidenteId, "incidentes.ver");
+  if (acceso.incidente.estado === "CERRADO") throw new Error("El incidente está cerrado.");
+  await exigirAccesoIncidente(ctx, acceso.incidente.companiaId, acceso.incidente.condominioId,
+    acceso.rol === "guardia" ? "incidentes.crear" : "incidentes.gestionar");
+  return acceso;
+}
+
+/** Los tenants duplicados de un hijo son consistencia, nunca autoridad independiente. */
+export function comprobarContextoHijo(
+  hijo: { companiaId: Id<"companiasSeguridad">; condominioId: Id<"condominios"> },
+  incidente: Doc<"incidentes">,
+) {
+  if (hijo.companiaId !== incidente.companiaId || hijo.condominioId !== incidente.condominioId) {
+    throw new Error("El registro no corresponde al contexto del incidente.");
+  }
 }
 
 /** Reglas preexistentes de selección; también se usan para ofrecer candidatos. */

@@ -1,0 +1,51 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Evidencias privadas de incidentes: bucket separado sin acceso publico ni eliminacion automatica.",
+  "Parameters": {
+    "BucketName": { "Type": "String", "Description": "Nombre globalmente unico, distinto de AWS_S3_BUCKET_NAME." }
+  },
+  "Resources": {
+    "EvidenciasBucket": {
+      "Type": "AWS::S3::Bucket",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "BucketName": { "Ref": "BucketName" },
+        "PublicAccessBlockConfiguration": { "BlockPublicAcls": true, "IgnorePublicAcls": true, "BlockPublicPolicy": true, "RestrictPublicBuckets": true },
+        "OwnershipControls": { "Rules": [{ "ObjectOwnership": "BucketOwnerEnforced" }] },
+        "VersioningConfiguration": { "Status": "Enabled" },
+        "BucketEncryption": { "ServerSideEncryptionConfiguration": [{ "ServerSideEncryptionByDefault": { "SSEAlgorithm": "AES256" } }] }
+      }
+    },
+    "EvidenciasBucketPolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": { "Ref": "EvidenciasBucket" },
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [{ "Sid": "RequireTLS", "Effect": "Deny", "Principal": "*", "Action": "s3:*",
+            "Resource": [{ "Fn::GetAtt": ["EvidenciasBucket", "Arn"] }, { "Fn::Sub": "${EvidenciasBucket.Arn}/*" }],
+            "Condition": { "Bool": { "aws:SecureTransport": "false" } }
+          }]
+        }
+      }
+    },
+    "EvidenciasRuntimePolicy": {
+      "Type": "AWS::IAM::ManagedPolicy",
+      "Properties": {
+        "Description": "Lectura/subida exclusiva para las actions de incidentes; sin borrado, ACL o cambios de bucket.",
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            { "Effect": "Allow", "Action": ["s3:GetBucketPublicAccessBlock"], "Resource": { "Fn::GetAtt": ["EvidenciasBucket", "Arn"] } },
+            { "Effect": "Allow", "Action": ["s3:PutObject", "s3:GetObject"], "Resource": { "Fn::Sub": "${EvidenciasBucket.Arn}/incidentes/*" } }
+          ]
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "BucketName": { "Value": { "Ref": "EvidenciasBucket" } },
+    "RuntimePolicyArn": { "Value": { "Ref": "EvidenciasRuntimePolicy" } }
+  }
+}

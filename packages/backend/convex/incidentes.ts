@@ -4,7 +4,7 @@ import { mutation, query } from "./_generated/server";
 import type { Doc, DataModel } from "./_generated/dataModel";
 import { exigirAccesoCompania, getCompaniaMiembro } from "./model/acceso";
 import { hasPlatformRole, requireAppUser } from "./model/authz";
-import { exigirAccesoIncidente, exigirIncidente, permisosIncidente, exigirResponsableIncidente } from "./model/incidenteAcceso";
+import { exigirAccesoIncidente, exigirIncidente, permisosIncidente, exigirResponsableIncidente, exigirAgregarIncidente, comprobarContextoHijo } from "./model/incidenteAcceso";
 import { logIncidenteEvento, type CambioIncidente } from "./model/incidenteEvento";
 import { displayNameFromUser } from "./model/displayName";
 import { estadoIncidenteValidator, prioridadIncidenteValidator } from "./model/roles";
@@ -76,13 +76,14 @@ export const crear = mutation({
     });
     // La creación y las personas iniciales forman una única transacción Convex.
     for (const persona of personas) {
-      await ctx.db.insert("incidentePersonas", {
+      const personaId = await ctx.db.insert("incidentePersonas", {
         incidenteId, companiaId: miembro.companiaId, condominioId: args.condominioId,
         ...persona, createdAt: ahora,
       });
       await logIncidenteEvento(ctx, {
         incidente: { _id: incidenteId, companiaId: miembro.companiaId, condominioId: args.condominioId },
         tipo: "PERSONA_AGREGADA",
+        personaId,
         descripcion: `Persona involucrada agregada: ${persona.nombre}.`,
         actor, ahora,
       });
@@ -264,10 +265,12 @@ export const listar = query({
 export const listarPersonas = query({
   args: { incidenteId: v.id("incidentes") },
   handler: async (ctx, args) => {
-    await exigirIncidente(ctx, args.incidenteId, "incidentes.ver");
-    return await ctx.db.query("incidentePersonas")
+    const { incidente } = await exigirIncidente(ctx, args.incidenteId, "incidentes.ver");
+    const personas = await ctx.db.query("incidentePersonas")
       .withIndex("by_incidente", (q) => q.eq("incidenteId", args.incidenteId))
       .order("asc").collect();
+    for (const persona of personas) comprobarContextoHijo(persona, incidente);
+    return personas;
   },
 });
 
@@ -400,18 +403,14 @@ export const registrarSeguimiento = mutation({
   },
 });
 
-/** Primera operación sobre personas: alta sin edición ni borrado hasta definir ese flujo. */
+/** Alta del caso: datos históricos independientes de una cuenta en users. */
 export const agregarPersona = mutation({
   args: {
     incidenteId: v.id("incidentes"), nombre: v.string(), tipoPersona: v.string(),
     documento: v.optional(v.string()), observacion: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const { incidente, user, rol } = await exigirIncidente(ctx, args.incidenteId, "incidentes.ver");
-    if (incidente.estado === "CERRADO") throw new Error("El incidente está cerrado.");
-    if (rol !== "guardia") {
-      await exigirAccesoIncidente(ctx, incidente.companiaId, incidente.condominioId, "incidentes.gestionar");
-    }
+    const { incidente, user } = await exigirAgregarIncidente(ctx, args.incidenteId);
     const { nombre, tipoPersona, documento, observacion } = validarPersona(args);
     const ahora = Date.now();
     const personaId = await ctx.db.insert("incidentePersonas", {
@@ -420,7 +419,51 @@ export const agregarPersona = mutation({
       documento, observacion, createdAt: ahora,
     });
     await ctx.db.patch(incidente._id, { updatedAt: ahora });
-    await logIncidenteEvento(ctx, { incidente, tipo: "PERSONA_AGREGADA", descripcion: `Persona involucrada agregada: ${nombre}.`, actor: user, ahora });
+    await logIncidenteEvento(ctx, { incidente, tipo: "PERSONA_AGREGADA", personaId, descripcion: `Persona involucrada agregada: ${nombre}.`, actor: user, ahora });
     return personaId;
+  },
+});
+
+export const editarPersona = mutation({
+  args: { personaId: v.id("incidentePersonas"), nombre: v.string(), tipoPersona: v.string(),
+    documento: v.optional(v.string()), observacion: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const persona = await ctx.db.get(args.personaId);
+    if (!persona) throw new Error("Persona no encontrada.");
+    const { incidente, user } = await exigirIncidente(ctx, persona.incidenteId, "incidentes.gestionar");
+    comprobarContextoHijo(persona, incidente);
+    if (incidente.estado === "CERRADO") throw new Error("El incidente está cerrado.");
+    if (persona.retiradoEn !== undefined) throw new Error("La persona está retirada del caso.");
+    // Edición completa: omitir los campos opcionales los vacía, conservando el valor anterior en el evento.
+    const datos = validarPersona(args);
+    const cambios: CambioIncidente[] = [];
+    for (const campo of ["nombre", "tipoPersona", "documento", "observacion"] as const) {
+      if (persona[campo] !== datos[campo]) cambios.push({ campo, antes: persona[campo], despues: datos[campo] });
+    }
+    if (!cambios.length) throw new Error("No hay cambios que registrar.");
+    const ahora = Date.now();
+    await ctx.db.patch(persona._id, { ...datos, updatedAt: ahora });
+    await ctx.db.patch(incidente._id, { updatedAt: ahora });
+    await logIncidenteEvento(ctx, { incidente, personaId: persona._id, tipo: "PERSONA_EDITADA",
+      descripcion: `Persona involucrada editada: ${datos.nombre}.`, cambios, actor: user, ahora });
+  },
+});
+
+export const retirarPersona = mutation({
+  args: { personaId: v.id("incidentePersonas"), motivo: v.string() },
+  handler: async (ctx, args) => {
+    const persona = await ctx.db.get(args.personaId);
+    if (!persona) throw new Error("Persona no encontrada.");
+    const { incidente, user } = await exigirIncidente(ctx, persona.incidenteId, "incidentes.gestionar");
+    comprobarContextoHijo(persona, incidente);
+    if (incidente.estado === "CERRADO") throw new Error("El incidente está cerrado.");
+    if (persona.retiradoEn !== undefined) throw new Error("La persona ya está retirada.");
+    const motivo = textoRequerido(args.motivo, "Motivo", 2000);
+    const ahora = Date.now();
+    await ctx.db.patch(persona._id, { retiradoEn: ahora, retiradoPorUserId: user._id,
+      retiradoPorNombre: displayNameFromUser(user), motivoRetiro: motivo, updatedAt: ahora });
+    await ctx.db.patch(incidente._id, { updatedAt: ahora });
+    await logIncidenteEvento(ctx, { incidente, personaId: persona._id, tipo: "PERSONA_RETIRADA",
+      descripcion: `Persona retirada del caso: ${persona.nombre}.`, motivo, actor: user, ahora });
   },
 });
