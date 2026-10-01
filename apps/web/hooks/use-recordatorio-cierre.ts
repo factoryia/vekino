@@ -29,12 +29,15 @@ function guardar(userId: string, registro: RegistroRecordatorio) {
 
 /**
  * Cuándo mostrarle al guarda el recordatorio de cierre de turno (05:50 y
- * 17:50, hora de Colombia) y cómo dejar constancia de que lo leyó.
+ * 17:50, hora de Colombia, durante `VENTANA_RECORDATORIO_MINUTOS`) y cómo
+ * dejar constancia de que lo leyó. Las reglas viven en el módulo compartido.
  *
  * Va montado en el shell de la portería y no en una pantalla, así que navegar
  * entre módulos no lo reinicia. Vuelve a mirar el reloj:
- *  - con un temporizador que despierta justo después de cada horario y, como
- *    mucho, cada minuto (sobrevive a cambios de fecha con la pestaña abierta);
+ *  - con un temporizador que despierta justo después de que abra o cierre
+ *    cada ventana y, como mucho, cada minuto (sobrevive a cambios de fecha con
+ *    la pestaña abierta). Al cerrarse la ventana, el aviso sin confirmar se
+ *    retira;
  *  - al volver a la pestaña o al navegador (`visibilitychange`, `focus`,
  *    `pageshow`): el equipo bloqueado o la pestaña congelada no disparan
  *    temporizadores, así que es al volver cuando se entera;

@@ -166,7 +166,10 @@ export function RecordatorioCierreModal({
             </p>
             <p className="text-[15px] leading-relaxed text-foreground">
               Recuerda que al finalizar tu turno debes{" "}
-              <strong className="font-semibold">cerrar el turno</strong> y{" "}
+              <strong className="font-semibold">
+                cerrar correctamente el turno
+              </strong>{" "}
+              y{" "}
               <strong className="font-semibold">cerrar sesión</strong>.
             </p>
             {turnoAbiertoDesde != null && (
@@ -176,8 +179,8 @@ export function RecordatorioCierreModal({
               </p>
             )}
             <p className="text-sm leading-relaxed text-muted-foreground">
-              Esto ayuda a que tus registros queden asociados correctamente a tu
-              cuenta y evita que otro guarda use tu sesión por accidente.
+              Esto ayuda a garantizar que tus registros queden asociados a tu
+              cuenta y evita que otro guarda utilice tu sesión por accidente.
             </p>
           </div>
 

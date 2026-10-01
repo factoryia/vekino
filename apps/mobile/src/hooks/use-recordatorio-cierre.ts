@@ -13,14 +13,16 @@ import {
 
 /**
  * Cuándo mostrarle al guarda el recordatorio de cierre de turno (05:50 y
- * 17:50, hora de Colombia) y cómo dejar constancia de que lo leyó.
+ * 17:50, hora de Colombia, durante `VENTANA_RECORDATORIO_MINUTOS`) y cómo
+ * dejar constancia de que lo leyó.
  *
  * Las reglas son las mismas que en la web (`lib/recordatorioCierre.ts` del
  * backend); aquí solo cambia el ciclo de vida. Con la app en segundo plano o
  * el teléfono bloqueado el JS no corre y los temporizadores no disparan, así
  * que se vuelve a mirar el reloj al volver a primer plano (`AppState`
  * "active"). Con la app abierta, un temporizador despierta justo después de
- * cada horario y, como mucho, cada minuto.
+ * que abra o cierre cada ventana y, como mucho, cada minuto; al cerrarse, el
+ * aviso sin confirmar se retira.
  *
  * Lo confirmado vive en AsyncStorage por usuario: es del dispositivo, que es
  * donde queda la sesión abierta. No es un secreto, por eso no va a

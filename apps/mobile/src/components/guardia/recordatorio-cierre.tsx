@@ -128,7 +128,7 @@ function RecordatorioCierreModal({
             </Text>
             <Text style={styles.mensaje}>
               Recuerda que al finalizar tu turno debes{" "}
-              <Text style={styles.fuerte}>cerrar el turno</Text> y{" "}
+              <Text style={styles.fuerte}>cerrar correctamente el turno</Text> y{" "}
               <Text style={styles.fuerte}>cerrar sesión</Text>.
             </Text>
 
@@ -142,8 +142,8 @@ function RecordatorioCierreModal({
             ) : null}
 
             <Text style={styles.porque}>
-              Esto ayuda a que tus registros queden asociados correctamente a tu
-              cuenta y evita que otro guarda use tu sesión por accidente.
+              Esto ayuda a garantizar que tus registros queden asociados a tu
+              cuenta y evita que otro guarda utilice tu sesión por accidente.
             </Text>
 
             <Pressable

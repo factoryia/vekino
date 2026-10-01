@@ -41,13 +41,26 @@ export const HORARIOS_RECORDATORIO: readonly {
   { franja: "evening", minutoDelDia: 17 * 60 + 50 },
 ];
 
+/**
+ * Cuánto dura cada recordatorio desde su horario, en minutos.
+ *
+ * ÚNICO sitio donde se fija: la web y el móvil lo toman de aquí. El aviso es
+ * para el momento del relevo, no para todo el turno: fuera de la ventana no
+ * sale aunque nadie lo haya confirmado, y si estaba en pantalla se retira.
+ * Tiene que ser menor que el tiempo entre dos horarios (12 h); si no, una
+ * ventana pisaría a la siguiente.
+ */
+export const VENTANA_RECORDATORIO_MINUTOS = 120;
+
 /** Una aparición concreta del recordatorio: un horario de un día. */
 export type Franja = {
   /** Día civil en Colombia en que empieza la franja, YYYY-MM-DD. */
   fecha: string;
   franja: FranjaRecordatorio;
-  /** Instante (epoch ms) en que empieza. */
+  /** Instante (epoch ms) en que se abre su ventana. */
   inicio: number;
+  /** Instante (epoch ms) en que se cierra su ventana (excluido). */
+  fin: number;
   /** `fecha:franja`. Junto con el usuario identifica el recordatorio. */
   clave: string;
   /** Hora de inicio para mostrar, p. ej. "5:50 p. m.". */
@@ -63,6 +76,7 @@ function inicioDiaLocal(ts: number): number {
 function construir(
   diaLocal: number,
   h: (typeof HORARIOS_RECORDATORIO)[number],
+  ventanaMinutos: number,
 ): Franja {
   const fecha = new Date(diaLocal).toISOString().slice(0, 10);
   const inicio = diaLocal + h.minutoDelDia * MINUTO_MS - OFFSET_COLOMBIA_MS;
@@ -70,48 +84,63 @@ function construir(
     fecha,
     franja: h.franja,
     inicio,
+    fin: inicio + ventanaMinutos * MINUTO_MS,
     clave: `${fecha}:${h.franja}`,
     etiqueta: horaColombia(inicio),
   };
 }
 
 /**
- * La franja que rige en este instante: el último horario ya alcanzado.
- *
- * Cada franja dura hasta que empieza la siguiente. Por eso a las 05:49 rige
- * todavía la de la tarde ANTERIOR (no se adelanta la de la mañana), y a la
- * medianoche no pasa nada: la fecha del calendario cambia, la franja no.
+ * Las franjas de ayer, hoy y mañana, en orden. Ayer cuenta porque una
+ * ventana de la tarde lo bastante larga cruzaría la medianoche; mañana,
+ * porque después de la última de hoy el próximo cambio ya es mañana.
  */
-export function franjaVigente(ahora: number): Franja {
-  const dia = inicioDiaLocal(ahora);
-  const transcurrido = ahora + OFFSET_COLOMBIA_MS - dia;
-  for (let i = HORARIOS_RECORDATORIO.length - 1; i >= 0; i--) {
-    const h = HORARIOS_RECORDATORIO[i]!;
-    if (transcurrido >= h.minutoDelDia * MINUTO_MS) return construir(dia, h);
-  }
-  return construir(
-    dia - DIA_MS,
-    HORARIOS_RECORDATORIO[HORARIOS_RECORDATORIO.length - 1]!,
+function franjasAlrededor(ahora: number, ventanaMinutos: number): Franja[] {
+  const hoy = inicioDiaLocal(ahora);
+  return [hoy - DIA_MS, hoy, hoy + DIA_MS].flatMap((dia) =>
+    HORARIOS_RECORDATORIO.map((h) => construir(dia, h, ventanaMinutos)),
   );
 }
 
-/** Instante (epoch ms) en que empieza la próxima franja, siempre > `ahora`. */
-export function inicioSiguienteFranja(ahora: number): number {
-  const hoy = inicioDiaLocal(ahora);
-  for (const dia of [hoy, hoy + DIA_MS]) {
-    for (const h of HORARIOS_RECORDATORIO) {
-      const inicio = dia + h.minutoDelDia * MINUTO_MS - OFFSET_COLOMBIA_MS;
-      if (inicio > ahora) return inicio;
+/**
+ * La franja cuya ventana está abierta en este instante, o null.
+ *
+ * Abierta desde su horario (incluido) hasta `fin` (excluido): con 120 min, de
+ * 05:50 a 07:50 y de 17:50 a 19:50. A las 05:49 no hay ninguna —no se
+ * adelanta— y a las 10:00 o a las 23:00 tampoco. La franja se identifica por
+ * el día en que EMPIEZA, así que una ventana que cruzara la medianoche seguiría
+ * siendo la de la víspera y no se repetiría por cambiar la fecha.
+ */
+export function franjaActiva(
+  ahora: number,
+  ventanaMinutos: number = VENTANA_RECORDATORIO_MINUTOS,
+): Franja | null {
+  let activa: Franja | null = null;
+  for (const f of franjasAlrededor(ahora, ventanaMinutos)) {
+    // En orden: si dos se pisaran, gana la más reciente.
+    if (f.inicio <= ahora && ahora < f.fin) activa = f;
+  }
+  return activa;
+}
+
+/** Próximo instante (epoch ms, > `ahora`) en que abre o cierra una ventana. */
+export function siguienteCambio(
+  ahora: number,
+  ventanaMinutos: number = VENTANA_RECORDATORIO_MINUTOS,
+): number {
+  let proximo = Infinity;
+  for (const f of franjasAlrededor(ahora, ventanaMinutos)) {
+    for (const t of [f.inicio, f.fin]) {
+      if (t > ahora && t < proximo) proximo = t;
     }
   }
-  // Inalcanzable: mañana siempre tiene un horario posterior a hoy.
-  return hoy + 2 * DIA_MS - OFFSET_COLOMBIA_MS;
+  return proximo;
 }
 
 /**
  * Tope de espera entre dos revisiones con la app abierta.
  *
- * Con un único temporizador hasta el próximo horario (hasta 12 h) bastaría en
+ * Con un único temporizador hasta el próximo cambio (horas) bastaría en
  * teoría, pero un reloj que se corrige, un equipo que se suspende o un
  * navegador que congela la pestaña lo dejan disparando tarde o nunca. Mirar
  * como mucho cada minuto cuesta nada y lo vuelve inmune a todo eso. También
@@ -120,12 +149,16 @@ export function inicioSiguienteFranja(ahora: number): number {
 export const REVISION_MAX_MS = MINUTO_MS;
 
 /**
- * Cuánto esperar hasta volver a evaluar: justo después del próximo horario
- * si llega antes del tope, o el tope. El margen evita despertar unos
- * milisegundos antes de la hora por redondeo del temporizador.
+ * Cuánto esperar hasta volver a evaluar: justo después de que abra o cierre
+ * la próxima ventana si llega antes del tope, o el tope. Al cerrarse, el aviso
+ * sin confirmar se retira solo. El margen evita despertar unos milisegundos
+ * antes de la hora por redondeo del temporizador.
  */
-export function msHastaRevision(ahora: number): number {
-  const hasta = inicioSiguienteFranja(ahora) - ahora;
+export function msHastaRevision(
+  ahora: number,
+  ventanaMinutos: number = VENTANA_RECORDATORIO_MINUTOS,
+): number {
+  const hasta = siguienteCambio(ahora, ventanaMinutos) - ahora;
   return Math.min(REVISION_MAX_MS, hasta + 250);
 }
 
@@ -181,7 +214,7 @@ export function leerRegistro(
 }
 
 export type EvaluacionRecordatorio =
-  | { mostrar: false; franja: Franja }
+  | { mostrar: false }
   | {
       mostrar: true;
       franja: Franja;
@@ -195,17 +228,21 @@ export type EvaluacionRecordatorio =
  * Si toca mostrar el recordatorio ahora, dado lo que este usuario tiene
  * guardado en este dispositivo.
  *
- * Toca mientras la franja vigente no esté confirmada. Mostrarlo no cuenta
- * como confirmarlo: si recarga la página o reabre la app sin pulsar
- * "Entendido", vuelve a salir — y conserva la hora en que salió primero.
+ * Toca solo dentro de la ventana de una franja y mientras esa franja no esté
+ * confirmada. Mostrarlo no cuenta como confirmarlo: si recarga la página o
+ * reabre la app sin pulsar "Entendido", vuelve a salir —dentro de la
+ * ventana— y conserva la hora en que salió primero. Fuera de la ventana no se
+ * escribe nada.
  */
 export function evaluarRecordatorio(
   registro: RegistroRecordatorio | null,
   ahora: number,
+  ventanaMinutos: number = VENTANA_RECORDATORIO_MINUTOS,
 ): EvaluacionRecordatorio {
-  const franja = franjaVigente(ahora);
+  const franja = franjaActiva(ahora, ventanaMinutos);
+  if (!franja) return { mostrar: false };
   if (registro?.franja === franja.clave) {
-    if (registro.confirmadoEn != null) return { mostrar: false, franja };
+    if (registro.confirmadoEn != null) return { mostrar: false };
     return { mostrar: true, franja, registro, nuevo: false };
   }
   return {
@@ -218,7 +255,7 @@ export function evaluarRecordatorio(
 
 /**
  * Registro tras pulsar "Entendido" sobre `franja` (la que se le mostró, que es
- * la que leyó aunque justo acabe de empezar otra).
+ * la que leyó aunque su ventana se haya cerrado un instante antes del clic).
  */
 export function confirmarRecordatorio(
   registro: RegistroRecordatorio | null,

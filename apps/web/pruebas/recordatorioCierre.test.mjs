@@ -63,13 +63,15 @@ describe("Quién recibe el recordatorio", () => {
   });
 });
 
-describe("Horarios", () => {
+describe("Ventanas", () => {
   test("17:50 → recordatorio de la tarde, personalizado", async () => {
     await render();
     expect(dialogo()).toBeTruthy();
     expect(dialogo().textContent).toContain("Recordatorio de cierre de turno");
     expect(dialogo().textContent).toContain("Cambio de turno · 5:50 p. m.");
     expect(dialogo().textContent).toContain("Hola, José 👋");
+    expect(dialogo().textContent).toContain("Recuerda que al finalizar tu turno debes cerrar correctamente el turno y cerrar sesión.");
+    expect(dialogo().textContent).toContain("Esto ayuda a garantizar que tus registros queden asociados a tu cuenta y evita que otro guarda utilice tu sesión por accidente.");
     expect(registro("u1")).toEqual({ franja: "2026-10-01:evening", mostradoEn: co("2026-10-01T17:50:10").getTime() });
   });
   test("05:50 → recordatorio de la mañana", async () => {
@@ -77,13 +79,24 @@ describe("Horarios", () => {
     expect(dialogo().textContent).toContain("5:50 a. m.");
     expect(registro("u1").franja).toBe("2026-10-01:morning");
   });
-  test("antes del horario no se adelanta; después, sí", async () => {
-    almacen().setItem("vekino:recordatorio-cierre:u1", JSON.stringify({ franja: "2026-09-30:evening", mostradoEn: 1, confirmadoEn: 2 }));
-    setSystemTime(co("2026-10-01T05:49:00")); await render();
-    expect(dialogo()).toBeNull();
-    setSystemTime(co("2026-10-01T05:51:00")); await enfocar();
-    expect(dialogo().textContent).toContain("5:50 a. m.");
-  });
+  for (const [hora, esperado, caso] of [
+    ["2026-10-01T05:49:00", null, "antes de 05:50"],
+    ["2026-10-01T05:55:00", "5:50 a. m.", "caso 1"],
+    ["2026-10-01T07:49:00", "5:50 a. m.", "fin de la ventana de la mañana"],
+    ["2026-10-01T07:50:00", null, "desde 07:50"],
+    ["2026-10-01T10:00:00", null, "caso 2"],
+    ["2026-10-01T17:49:00", null, "antes de 17:50"],
+    ["2026-10-01T17:55:00", "5:50 p. m.", "caso 3"],
+    ["2026-10-01T19:49:00", "5:50 p. m.", "fin de la ventana de la tarde"],
+    ["2026-10-01T19:50:00", null, "desde 19:50"],
+    ["2026-10-01T23:00:00", null, "caso 4"],
+  ]) {
+    test(`al abrir a las ${hora.slice(11, 16)} (${caso}): ${esperado ? "muestra" : "no muestra"}`, async () => {
+      setSystemTime(co(hora)); await render();
+      if (esperado) expect(dialogo().textContent).toContain(esperado);
+      else { expect(dialogo()).toBeNull(); expect(registro("u1")).toBeNull(); }
+    });
+  }
 });
 
 describe("Confirmación consciente", () => {
@@ -113,7 +126,7 @@ describe("Confirmación consciente", () => {
     const r = registro("u1");
     expect(r.franja).toBe("2026-10-01:evening");
     expect(r.confirmadoEn).toBe(co("2026-10-01T17:50:10").getTime());
-    setSystemTime(co("2026-10-01T21:00:00")); await enfocar();
+    setSystemTime(co("2026-10-01T19:30:00")); await enfocar();
     expect(dialogo()).toBeNull();
     await remontar();
     expect(dialogo()).toBeNull();
@@ -132,31 +145,57 @@ describe("Confirmación consciente", () => {
 });
 
 describe("Ciclo de vida", () => {
-  test("app abierta: aparece sola al llegar la hora", async () => {
-    almacen().setItem("vekino:recordatorio-cierre:u1", JSON.stringify({ franja: "2026-10-01:morning", mostradoEn: 1, confirmadoEn: 2 }));
-    setSystemTime(co("2026-10-01T17:49:59.900")); await render();
-    expect(dialogo()).toBeNull();
-    setSystemTime(co("2026-10-01T17:50:00.300")); await espera(700);
+  for (const [antes, despues, etiqueta] of [
+    ["2026-10-01T05:49:59.900", "2026-10-01T05:50:00.300", "5:50 a. m."],
+    ["2026-10-01T17:49:59.900", "2026-10-01T17:50:00.300", "5:50 p. m."],
+  ]) {
+    test(`caso 5 — app abierta: aparece sola al llegar las ${etiqueta}`, async () => {
+      setSystemTime(co(antes)); await render();
+      expect(dialogo()).toBeNull();
+      setSystemTime(co(despues)); await espera(700);
+      expect(dialogo().textContent).toContain(etiqueta);
+    });
+  }
+  test("al cerrarse la ventana sin confirmar, el aviso se retira solo", async () => {
+    setSystemTime(co("2026-10-01T19:49:59.900")); await render();
     expect(dialogo()).toBeTruthy();
+    setSystemTime(co("2026-10-01T19:50:00.300")); await espera(700);
+    expect(dialogo()).toBeNull();
+    expect(registro("u1").confirmadoEn).toBeUndefined();
   });
-  test("en segundo plano: al volver después de la hora", async () => {
-    almacen().setItem("vekino:recordatorio-cierre:u1", JSON.stringify({ franja: "2026-10-01:morning", mostradoEn: 1, confirmadoEn: 2 }));
+  test("en segundo plano: al volver dentro de la ventana, sí; fuera, no", async () => {
     setSystemTime(co("2026-10-01T12:00:00")); await render();
     expect(dialogo()).toBeNull();
     visible = "hidden"; await emitir(document, new ventana.Event("visibilitychange"));
     setSystemTime(co("2026-10-01T18:30:00"));
     visible = "visible"; await emitir(document, new ventana.Event("visibilitychange"));
     expect(dialogo().textContent).toContain("5:50 p. m.");
-  });
-  test("reabierta después de la hora (reinicio): sale si no se confirmó", async () => {
-    setSystemTime(co("2026-10-01T12:00:00")); await render(); await confirmar();
-    setSystemTime(co("2026-10-01T19:00:00")); await remontar();
-    expect(dialogo().textContent).toContain("5:50 p. m.");
-  });
-  test("cambio de día con la app abierta: medianoche no repite, 05:50 sí", async () => {
-    await render(); await confirmar();
-    setSystemTime(co("2026-10-02T00:30:00")); await enfocar();
+    visible = "hidden"; await emitir(document, new ventana.Event("visibilitychange"));
+    setSystemTime(co("2026-10-01T22:00:00"));
+    visible = "visible"; await emitir(document, new ventana.Event("visibilitychange"));
     expect(dialogo()).toBeNull();
+  });
+  test("caso 6 — app cerrada, se abre a las 06:30: sale", async () => {
+    setSystemTime(co("2026-10-01T03:00:00")); await render();
+    expect(dialogo()).toBeNull();
+    await act(() => root.unmount());
+    setSystemTime(co("2026-10-01T06:30:00")); root = createRoot(contenedor); await render();
+    expect(dialogo().textContent).toContain("5:50 a. m.");
+  });
+  test("reinicio: lo confirmado sobrevive; lo no confirmado vuelve a salir en la ventana", async () => {
+    await render();
+    setSystemTime(co("2026-10-01T18:10:00")); await remontar();
+    expect(dialogo()).toBeTruthy();
+    await confirmar();
+    setSystemTime(co("2026-10-01T18:20:00")); await remontar();
+    expect(dialogo()).toBeNull();
+  });
+  test("cambio de día: noche y madrugada sin aviso, el nuevo día abre el suyo", async () => {
+    await render(); await confirmar();
+    for (const hora of ["2026-10-01T23:00:00", "2026-10-02T00:30:00", "2026-10-02T04:00:00"]) {
+      setSystemTime(co(hora)); await enfocar();
+      expect(dialogo()).toBeNull();
+    }
     setSystemTime(co("2026-10-02T05:50:30")); await enfocar();
     expect(dialogo().textContent).toContain("5:50 a. m.");
     expect(registro("u1").franja).toBe("2026-10-02:morning");
@@ -199,6 +238,6 @@ describe("Turno", () => {
     turno = null;
     await render({ nombre: "José  Pérez" });
     expect(dialogo().textContent).not.toContain("turno abierto");
-    expect(dialogo().textContent).toContain("debes cerrar el turno y cerrar sesión");
+    expect(dialogo().textContent).toContain("debes cerrar correctamente el turno y cerrar sesión");
   });
 });
