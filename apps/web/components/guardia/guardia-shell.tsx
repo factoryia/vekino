@@ -24,9 +24,11 @@ import {
 import { authClient } from "@/lib/auth-client";
 import { Spinner } from "@/components/ui/spinner";
 import { CambiarClaveTemporalModal } from "@/components/cambiar-clave-temporal-modal";
+import { RecordatorioCierreTurno } from "@/components/guardia/recordatorio-cierre";
 import { WhatsappFab } from "@/components/whatsapp-fab";
 import { hexToHslChannels, hexToBrandForeground, cn, initials } from "@/lib/utils";
 import { BrandThemeProvider } from "@/lib/brand-theme";
+import { recibeRecordatorioCierre } from "@/lib/role-routing";
 import { Footprints } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -96,6 +98,8 @@ function Guard({ children }: { children: React.ReactNode }) {
   const home = useQuery(api.guardia.home, { condominioId });
   const asignaciones = useQuery(api.asignaciones.misAsignaciones);
   const compania = useQuery(api.companias.miCompania);
+  // Ya suscrita por `CambiarClaveTemporalModal`: Convex comparte la consulta.
+  const me = useQuery(api.users.me);
 
   if (home === undefined) {
     return (
@@ -109,6 +113,19 @@ function Guard({ children }: { children: React.ReactNode }) {
   const base = `/guardia/${condominioId}`;
   const incidentesCorporativos = !!asignaciones?.some((a) =>
     a.condominioId === condominioId && a.companiaId === compania?.companiaId && a.rol === "guardia");
+  /* Solo al guarda: a esta portería también entran administración y junta.
+   * Hasta tener roles y asignaciones cargados no se decide nada. */
+  const recordatorioCierre =
+    !!me &&
+    asignaciones !== undefined &&
+    recibeRecordatorioCierre({
+      esPlataforma: home.isPlatform,
+      rolesConjunto:
+        me.memberships.find((m) => m.condominioId === condominioId)?.roles ?? [],
+      rolesAsignacion: asignaciones
+        .filter((a) => a.condominioId === condominioId)
+        .map((a) => a.rol),
+    });
   const primary = home.condominio.primaryColor;
   const brandChannels = primary ? hexToHslChannels(primary) : null;
   const themeStyle = brandChannels
@@ -158,6 +175,12 @@ function Guard({ children }: { children: React.ReactNode }) {
         </div>
 
         <CambiarClaveTemporalModal />
+        <RecordatorioCierreTurno
+          condominioId={condominioId}
+          userId={home.userId}
+          nombre={home.userName}
+          activo={recordatorioCierre}
+        />
         {/* `MobileBottomNav` es `lg:hidden`: por debajo de lg el botón se sube. */}
         <WhatsappFab condominioId={condominioId} bottomNav="lg" />
       </div>

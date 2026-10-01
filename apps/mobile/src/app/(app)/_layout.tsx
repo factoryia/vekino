@@ -5,6 +5,7 @@ import { Authenticated, Unauthenticated, AuthLoading, useQuery } from "convex/re
 import { api } from "@vekino/backend/api";
 import { CondominioProvider, useCondominio } from "@/context/condominio-context";
 import { PushBootstrap } from "@/components/push-bootstrap";
+import { RecordatorioCierreTurno } from "@/components/guardia/recordatorio-cierre";
 import { SplashPantalla, SALIDA_MS } from "@/components/ui/splash-marca";
 import { useSplashCumplido, precargarImagenes } from "@/lib/arranque";
 
@@ -94,6 +95,8 @@ export default function AppLayout() {
       <Authenticated>
         <CondominioProvider>
           <PushBootstrap />
+          {/* Aquí y no en una pantalla: sigue vivo al navegar entre módulos. */}
+          <RecordatorioCierreTurno />
           <Stack
             screenOptions={{ headerShown: false, animation: "slide_from_right" }}
           >
