@@ -89,14 +89,11 @@ test("no se reportan novedades de un turno sin elementos asignados", () => {
   );
 });
 
-test("observaciones generales vacías o de solo espacios: se rechazan", () => {
+test("observaciones generales vacías o de solo espacios: se aceptan y no se guardan", () => {
   for (const obs of [undefined, null, "", "    ", "\n\t"]) {
     const entrada = { ...base, observacionesCierre: obs };
-    assert.ok(erroresCierreTurno(entrada).observacionesCierre);
-    assert.throws(
-      () => validarCierreTurno(entrada),
-      /observaciones generales/i,
-    );
+    assert.equal(erroresCierreTurno(entrada).observacionesCierre, undefined);
+    assert.equal(validarCierreTurno(entrada).observacionesCierre, undefined);
   }
 });
 
@@ -140,7 +137,6 @@ test("reporta todos los campos que faltan, y lanza el primero del formulario", (
   assert.deepEqual(Object.keys(erroresCierreTurno(vacio)).sort(), [
     "consignas",
     "novedadesElementosDetalle",
-    "observacionesCierre",
     "recibe",
   ]);
   assert.throws(() => validarCierreTurno(vacio), /describe la novedad/i);

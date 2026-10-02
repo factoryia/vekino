@@ -8,7 +8,6 @@ import {
   getCurrentAppUser,
   requireCondominioRole,
   getMembership,
-  hasPlatformRole,
   vigentes,
 } from "./model/authz";
 import { exigirAcceso, resolverAcceso } from "./model/acceso";
@@ -295,16 +294,19 @@ export const iniciarTurno = mutation({
 /**
  * Cierre formal del turno: novedades de los elementos asignados, quién
  * recibe, consignas para el relevo y observaciones generales.
- * Solo el guardia del turno (principal o secundario) o un administrador.
+ * Cualquier guarda / admin / junta del conjunto puede cerrarlo (queda
+ * registrado en `cerradoPorUserId`). Si solo pudiera el que lo abrió, un
+ * cambio de cuenta o de persona deja el turno abierto días y bloquea la
+ * portería —un solo turno abierto por condominio.
  *
  * Los elementos NO se reciben aquí: son el `checklist` que se firmó al iniciar
  * el turno y no se tocan. El cierre solo dice si volvieron con novedad; no
  * hay argumento por el que colar una lista distinta.
  *
- * `novedadesElementos` y `observacionesCierre` son opcionales en el validador
- * y obligatorios en el handler a propósito: una app móvil sin actualizar que
- * no los manda recibe "escribe las observaciones generales", no un error de
- * validación de argumentos que el guarda no puede entender.
+ * `novedadesElementos` es opcional en el validador y obligatorio en el
+ * handler a propósito: una app móvil sin actualizar que no lo manda recibe
+ * "indica si hay novedades", no un error de validación de argumentos.
+ * `observacionesCierre` sí es opcional de verdad.
  */
 export const cerrarTurno = mutation({
   args: {
@@ -321,21 +323,12 @@ export const cerrarTurno = mutation({
   handler: async (ctx, args) => {
     const turno = await ctx.db.get(args.turnoId);
     if (!turno) throw new Error("Turno no encontrado.");
-    const { user, membership } = await requireCondominioRole(
+    const { user } = await requireCondominioRole(
       ctx,
       turno.condominioId,
       [...GUARD_ROLES],
     );
     if (turno.estado !== "abierto") throw new Error("El turno ya está cerrado.");
-
-    const esAdmin =
-      hasPlatformRole(user, "superadmin", "admin") ||
-      (membership?.roles ?? []).some((r) => (ADMIN_ROLES as readonly string[]).includes(r));
-    const esDelTurno =
-      turno.guardiaUserId === user._id || turno.guardiaSecundarioUserId === user._id;
-    if (!esAdmin && !esDelTurno) {
-      throw new Error("Solo el guardia del turno puede cerrarlo.");
-    }
 
     /* El relevo del catálogo se comprueba contra el MISMO criterio con el que
      * se ofrece, y su nombre sale de la base, no del cliente. */

@@ -528,7 +528,7 @@ function CerrarTurnoModal({
           ? { recibe: relevoManual.trim() }
           : { recibeUserId: relevo as Id<"users"> }),
         consignas: consignas.trim(),
-        observacionesCierre: obs.trim(),
+        observacionesCierre: obs.trim() || undefined,
         novedadesElementos: hayNovedades,
         novedadesElementosDetalle: hayNovedades ? detalleNovedades.trim() : undefined,
       });
@@ -698,16 +698,15 @@ function CerrarTurnoModal({
             />
             <FieldError mensaje={mostrar("consignas")} />
           </Field>
-          <Field label="Observaciones generales del cierre *">
+          <Field label="Observaciones generales del cierre (opcional)">
             <TextInput
               style={[styles.input, styles.inputMultiline]}
               value={obs}
               onChangeText={setObs}
               multiline
-              placeholder="Ej. Turno finalizado sin novedades adicionales. Se entrega puesto, documentación y elementos al relevo."
+              placeholder="Si no hay nada que agregar, déjalo vacío."
               placeholderTextColor={AuthUI.textMuted}
             />
-            <FieldError mensaje={mostrar("observacionesCierre")} />
           </Field>
           <Tap
             onPress={confirmar}

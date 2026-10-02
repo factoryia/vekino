@@ -27,7 +27,8 @@ export type EntradaCierreTurno = {
 export type CierreTurnoValido = {
   consignas: string;
   recibe: string;
-  observacionesCierre: string;
+  /** Opcional: vacío o solo espacios no se guarda. */
+  observacionesCierre: string | undefined;
   novedadesElementos: boolean;
   /** Solo cuando hay novedades: sin ellas no se guarda un texto que nadie pidió. */
   novedadesElementosDetalle: string | undefined;
@@ -85,10 +86,6 @@ export function erroresCierreTurno(
   if (!limpio(e.consignas)) {
     errores.consignas = "Escribe las consignas o pendientes para el relevo.";
   }
-  if (!limpio(e.observacionesCierre)) {
-    errores.observacionesCierre =
-      "Escribe las observaciones generales del cierre.";
-  }
   return errores;
 }
 
@@ -102,10 +99,11 @@ export function validarCierreTurno(e: EntradaCierreTurno): CierreTurnoValido {
   if (primero) throw new Error(errores[primero]);
 
   const novedadesElementos = e.novedadesElementos === true;
+  const observacionesCierre = limpio(e.observacionesCierre);
   return {
     consignas: limpio(e.consignas),
     recibe: limpio(e.recibe),
-    observacionesCierre: limpio(e.observacionesCierre),
+    observacionesCierre: observacionesCierre || undefined,
     novedadesElementos,
     novedadesElementosDetalle: novedadesElementos
       ? limpio(e.novedadesElementosDetalle)

@@ -497,7 +497,7 @@ function CerrarTurnoModal({
         turnoId: turno._id,
         ...(manual ? { recibe: relevoManual } : { recibeUserId: relevo as Id<"users"> }),
         consignas,
-        observacionesCierre: obs,
+        observacionesCierre: obs.trim() || undefined,
         novedadesElementos: hayNovedades,
         novedadesElementosDetalle: hayNovedades ? detalleNovedades : undefined,
       });
@@ -512,7 +512,7 @@ function CerrarTurnoModal({
     <Modal
       open onClose={onClose}
       title="Cierre formal de turno"
-      description="Entrega la portería, sus elementos y las consignas al relevo"
+      description={`Turno de ${turno.guardiaNombre}. Cualquier guarda o administrador del conjunto puede cerrarlo; queda registrado quién lo cerró.`}
       className="max-w-2xl"
       footer={
         <>
@@ -639,15 +639,16 @@ function CerrarTurnoModal({
         </div>
 
         <div className="space-y-1.5">
-          <label className="block text-xs font-medium text-foreground">Observaciones generales del cierre *</label>
+          <label className="block text-xs font-medium text-foreground">
+            Observaciones generales del cierre{" "}
+            <span className="font-normal text-muted-foreground">(opcional)</span>
+          </label>
           <Textarea
             value={obs}
             onChange={(e) => setObs(e.target.value)}
             rows={3}
-            placeholder="Ej. Turno finalizado sin novedades adicionales. Se entrega puesto, documentación y elementos al guarda de relevo."
-            aria-invalid={!!mostrar("observacionesCierre")}
+            placeholder="Si no hay nada que agregar, déjalo vacío."
           />
-          <CampoError mensaje={mostrar("observacionesCierre")} />
         </div>
         {error && <p className="text-sm text-destructive">{error}</p>}
       </div>

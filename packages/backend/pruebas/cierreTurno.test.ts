@@ -227,6 +227,16 @@ describe("el guarda cierra su turno", () => {
     expect(detalle!.novedadesElementosDetalle).toBe("Falta una llave del juego");
     expect(detalle!.checklist).toEqual(CHECKLIST);
   });
+
+  test("observaciones generales vacías o de solo espacios se aceptan y no se guardan", async () => {
+    await como(t, "ana").mutation(api.guardia.cerrarTurno, {
+      ...cierreValido(e, turnoId),
+      observacionesCierre: "   \n  ",
+    });
+    const turno = await leerTurno(t, turnoId);
+    expect(turno.estado).toBe("cerrado");
+    expect(turno.observacionesCierre).toBeUndefined();
+  });
 });
 
 describe("lo inválido no cierra el turno ni escribe nada", () => {
@@ -262,18 +272,6 @@ describe("lo inválido no cierra el turno ni escribe nada", () => {
           novedadesElementosDetalle: detalle,
         }),
       ).rejects.toThrow(/describe la novedad/i);
-    }
-    await sigueAbierto();
-  });
-
-  test("observaciones generales vacías o de solo espacios", async () => {
-    for (const observacionesCierre of [undefined, "", "   \n  "]) {
-      await expect(
-        como(t, "ana").mutation(api.guardia.cerrarTurno, {
-          ...cierreValido(e, turnoId),
-          observacionesCierre,
-        }),
-      ).rejects.toThrow(/observaciones generales/i);
     }
     await sigueAbierto();
   });
@@ -396,12 +394,13 @@ describe("el relevo escrito a mano y las autorizaciones de siempre", () => {
     expect((await leerTurno(t, turnoId)).recibe).toBe("Beto Guarda");
   });
 
-  test("otro guarda que no es del turno no lo puede cerrar", async () => {
-    await expect(
-      como(t, "carla").mutation(api.guardia.cerrarTurno, {
-        ...cierreValido(e, turnoId),
-      }),
-    ).rejects.toThrow(/solo el guardia del turno/i);
+  test("otro guarda de la portería puede cerrar un turno ajeno y queda dicho quién cerró", async () => {
+    await como(t, "carla").mutation(api.guardia.cerrarTurno, {
+      ...cierreValido(e, turnoId),
+    });
+    const turno = await leerTurno(t, turnoId);
+    expect(turno.estado).toBe("cerrado");
+    expect(turno.cerradoPorUserId).toBe(e.carla);
   });
 
   test("un residente no puede cerrar turnos", async () => {
