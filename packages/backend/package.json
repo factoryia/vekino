@@ -60,6 +60,10 @@
       "types": "./convex/lib/cierreTurno.ts",
       "default": "./convex/lib/cierreTurno.ts"
     },
+    "./recordatorioCierre": {
+      "types": "./convex/lib/recordatorioCierre.ts",
+      "default": "./convex/lib/recordatorioCierre.ts"
+    },
     "./incidentes": {
       "types": "./convex/lib/incidentes.ts",
       "default": "./convex/lib/incidentes.ts"

@@ -27,6 +27,37 @@ export function isGuardiaOnly(roles: string[]): boolean {
 }
 
 /**
+ * Si a quien está en la portería le toca el recordatorio de cierre de turno.
+ *
+ * A `/guardia/:id` entra todo el que tiene `porteria.operar`, y eso incluye a
+ * la administración y a la junta: estar en la ruta no dice que sea guarda. Se
+ * responde con los mismos criterios que ya lo mandan a la portería —
+ * `isGuardiaOnly` para el guarda del conjunto y la asignación `guardia` para
+ * el de compañía (`homeHrefForAsignacion`)—, sin una lista de roles nueva.
+ *
+ * Cualquier rol de administración pesa más que una asignación, y el staff de
+ * plataforma y el supervisor quedan fuera aunque además figuren como guarda.
+ */
+export function recibeRecordatorioCierre({
+  esPlataforma,
+  rolesConjunto,
+  rolesAsignacion,
+}: {
+  esPlataforma: boolean;
+  /** Roles de la membresía en ESTE conjunto (vacío si no tiene). */
+  rolesConjunto: string[];
+  /** Roles de sus asignaciones vigentes en ESTE conjunto. */
+  rolesAsignacion: string[];
+}): boolean {
+  if (esPlataforma) return false;
+  if (rolesConjunto.some((r) => (CONDO_ADMIN_ROLES as readonly string[]).includes(r))) {
+    return false;
+  }
+  if (rolesAsignacion.includes("supervisor")) return false;
+  return isGuardiaOnly(rolesConjunto) || rolesAsignacion.includes("guardia");
+}
+
+/**
  * Destino de quien llega por el eje de vigilancia (una compañía, no el
  * conjunto). No tiene membresía, así que `homeHrefForRoles` no le aplica.
  *
