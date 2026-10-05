@@ -244,6 +244,25 @@ afterEach(() => vi.useRealTimers());
 
 const CUBRIENDO_BOSQUE = "Está cubriendo Conjunto Bosque";
 
+/** Una portería tal como la devuelve `contextoOperativoGuardia.conjuntos`. */
+const porteria = (
+  condominioId: Id<"condominios">,
+  condominioNombre: string,
+  por: "membership" | "asignacion" | "cobertura",
+) => ({
+  condominioId,
+  condominioNombre,
+  condominioLogo: null,
+  condominioColor: null,
+  condominioCoverImage: null,
+  por,
+});
+/** Las de siempre de Jason: Alamos y Cedros, por asignación. */
+const deSiempreDeJason = () => [
+  porteria(e.alamos, "Conjunto Alamos", "asignacion"),
+  porteria(e.cedros, "Conjunto Cedros", "asignacion"),
+];
+
 describe("Fase 8: activación de la cobertura", () => {
   test("A. aceptada pero futura: opera con sus vías permanentes", async () => {
     await e.cubrir(e.jason, e.bosque, e.kBosque);
@@ -291,7 +310,12 @@ describe("Fase 8: activación de la cobertura", () => {
     expect(await e.home("jason", e.alamos)).toBe(true);
     expect(await e.home("jason", e.cedros)).toBe(true);
     expect(await e.home("jason", e.bosque)).toBe(false);
-    expect(await e.contexto("jason")).toEqual({ tipo: "permanente", cobertura: null, refrescarEn: null });
+    expect(await e.contexto("jason")).toEqual({
+      tipo: "permanente",
+      cobertura: null,
+      conjuntos: deSiempreDeJason(),
+      refrescarEn: null,
+    });
     await e.abrirTurno("jason", e.alamos);
   });
 
@@ -514,7 +538,12 @@ describe("Fase 8: activación de la cobertura", () => {
     await e.cubrir(e.jason, e.bosque, e.kBosque, { inicio: FIN + 3 * HORA, fin: FIN + 5 * HORA });
 
     en(AHORA);
-    expect(await e.contexto("jason")).toEqual({ tipo: "permanente", cobertura: null, refrescarEn: INICIO });
+    expect(await e.contexto("jason")).toEqual({
+      tipo: "permanente",
+      cobertura: null,
+      conjuntos: deSiempreDeJason(),
+      refrescarEn: INICIO,
+    });
 
     en(DURANTE);
     expect(await e.contexto("jason")).toEqual({
@@ -530,6 +559,8 @@ describe("Fase 8: activación de la cobertura", () => {
         inicio: INICIO,
         fin: FIN,
       },
+      // Solo la que cubre: Alamos y Cedros quedan suspendidas.
+      conjuntos: [porteria(e.bosque, "Conjunto Bosque", "cobertura")],
       refrescarEn: FIN,
     });
 
@@ -537,6 +568,7 @@ describe("Fase 8: activación de la cobertura", () => {
     expect(await e.contexto("jason")).toEqual({
       tipo: "permanente",
       cobertura: null,
+      conjuntos: deSiempreDeJason(),
       refrescarEn: FIN + 3 * HORA,
     });
 
@@ -614,7 +646,12 @@ describe("Fase 8: activación de la cobertura", () => {
 
   test("Q. sin cobertura: el contexto es permanente y las vías no cambian", async () => {
     en(DURANTE);
-    expect(await e.contexto("jason")).toEqual({ tipo: "permanente", cobertura: null, refrescarEn: null });
+    expect(await e.contexto("jason")).toEqual({
+      tipo: "permanente",
+      cobertura: null,
+      conjuntos: deSiempreDeJason(),
+      refrescarEn: null,
+    });
     expect(await e.home("jason", e.alamos)).toBe(true);
     expect(await e.home("jason", e.cedros)).toBe(true);
     expect(await e.home("mateo", e.alamos)).toBe(true);
@@ -667,7 +704,12 @@ describe("Fase 8: activación de la cobertura", () => {
     en(INICIO - 1);
     expect(await e.home("jason", e.bosque)).toBe(false);
     expect(await e.home("jason", e.alamos)).toBe(true);
-    expect(await e.contexto("jason")).toEqual({ tipo: "permanente", cobertura: null, refrescarEn: INICIO });
+    expect(await e.contexto("jason")).toEqual({
+      tipo: "permanente",
+      cobertura: null,
+      conjuntos: deSiempreDeJason(),
+      refrescarEn: INICIO,
+    });
 
     en(INICIO);
     expect(await e.home("jason", e.bosque)).toBe(true);
@@ -685,7 +727,12 @@ describe("Fase 8: activación de la cobertura", () => {
     en(FIN);
     expect(await e.home("jason", e.bosque)).toBe(false);
     expect(await e.home("jason", e.alamos)).toBe(true);
-    expect(await e.contexto("jason")).toEqual({ tipo: "permanente", cobertura: null, refrescarEn: null });
+    expect(await e.contexto("jason")).toEqual({
+      tipo: "permanente",
+      cobertura: null,
+      conjuntos: deSiempreDeJason(),
+      refrescarEn: null,
+    });
   });
 });
 

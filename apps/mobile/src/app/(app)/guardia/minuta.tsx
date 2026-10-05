@@ -17,13 +17,18 @@ import * as ImagePicker from "expo-image-picker";
 import { useMutation, useQuery, useAction, Authenticated } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Doc, Id } from "@vekino/backend/dataModel";
-import { erroresCierreTurno } from "@vekino/backend/cierreTurno";
 import { useCondominio } from "@/context/condominio-context";
 import { ScreenBackground, GlassCard, GlassBadge } from "@/components/ui/glass";
 import { Tap } from "@/components/ui/tap";
 import { AuthUI } from "@/lib/auth-ui";
 import { C } from "@/lib/theme";
 import { uploadLocalFile } from "@/lib/guardia-upload";
+import {
+  CerrarTurnoModal,
+  Field,
+  FieldError,
+} from "@/components/guardia/cerrar-turno-modal";
+export { ErrorBoundaryOperativo as ErrorBoundary } from "@/components/guardia/error-operativo";
 
 type ChecklistRow = {
   item: string;
@@ -461,268 +466,6 @@ function IniciarTurnoModal({
   );
 }
 
-/** Chip del selector de relevo para escribir el nombre a mano. */
-const RELEVO_OTRO = "__otro__";
-
-function CerrarTurnoModal({
-  turno,
-  stats,
-  onClose,
-}: {
-  turno: Doc<"guardiaTurnos"> & { rondasCount: number };
-  stats: { visitantes: number; paquetes: number; incidentes: number; rondas: number };
-  onClose: () => void;
-}) {
-  const cerrar = useMutation(api.guardia.cerrarTurno);
-  const equipo = useQuery(api.guardia.equipo, { condominioId: turno.condominioId });
-  const [hayNovedades, setHayNovedades] = useState(false);
-  const [detalleNovedades, setDetalleNovedades] = useState("");
-  /* userId del relevo elegido, RELEVO_OTRO para escribirlo, o null. */
-  const [relevo, setRelevo] = useState<string | null>(null);
-  const [relevoManual, setRelevoManual] = useState("");
-  const [consignas, setConsignas] = useState("");
-  const [obs, setObs] = useState("");
-  const [intentado, setIntentado] = useState(false);
-  const [busy, setBusy] = useState(false);
-
-  /* Quien entrega no se ofrece como relevo: ni el que abrió ni su compañero. */
-  const opciones = (equipo ?? []).filter(
-    (g) =>
-      g.userId !== turno.guardiaUserId && g.userId !== turno.guardiaSecundarioUserId,
-  );
-  /* Cuenta compartida o portería sin más usuarios: el relevo se escribe. */
-  const manual =
-    relevo === RELEVO_OTRO || (equipo !== undefined && opciones.length === 0);
-  const recibeNombre = manual
-    ? relevoManual
-    : (opciones.find((g) => g.userId === relevo)?.nombre ?? "");
-  const elementos = turno.checklist;
-
-  const errores = erroresCierreTurno({
-    consignas,
-    recibe: recibeNombre,
-    observacionesCierre: obs,
-    novedadesElementos: hayNovedades,
-    novedadesElementosDetalle: detalleNovedades,
-    elementosAsignados: elementos.length,
-  });
-  const valido = Object.keys(errores).length === 0;
-  const mostrar = (campo: keyof typeof errores) =>
-    intentado ? errores[campo] : undefined;
-
-  async function confirmar() {
-    if (busy) return;
-    setIntentado(true);
-    if (!valido) {
-      Alert.alert(
-        "Faltan datos",
-        Object.values(errores).join("\n"),
-      );
-      return;
-    }
-    setBusy(true);
-    try {
-      await cerrar({
-        turnoId: turno._id,
-        ...(manual
-          ? { recibe: relevoManual.trim() }
-          : { recibeUserId: relevo as Id<"users"> }),
-        consignas: consignas.trim(),
-        observacionesCierre: obs.trim(),
-        novedadesElementos: hayNovedades,
-        novedadesElementosDetalle: hayNovedades ? detalleNovedades.trim() : undefined,
-      });
-      onClose();
-    } catch (e) {
-      Alert.alert("Error", e instanceof Error ? e.message : "No se pudo cerrar.");
-      setBusy(false);
-    }
-  }
-
-  return (
-    <Modal visible animationType="slide" presentationStyle="pageSheet">
-      <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }}>
-        <View style={styles.modalHead}>
-          <Tap onPress={() => !busy && onClose()}>
-            <Text style={styles.cancel}>Cancelar</Text>
-          </Tap>
-          <Text style={styles.modalTitle}>Cerrar turno</Text>
-          <Tap onPress={confirmar} disabled={busy}>
-            <Text style={[styles.save, (!valido || busy) && { opacity: 0.45 }]}>
-              {busy ? "…" : "Cerrar"}
-            </Text>
-          </Tap>
-        </View>
-        <ScrollView
-          contentContainerStyle={{ padding: 16, gap: 12 }}
-          keyboardShouldPersistTaps="handled"
-        >
-          <View style={styles.stats}>
-            {(
-              [
-                ["Visitantes", stats.visitantes],
-                ["Paquetes", stats.paquetes],
-                ["Rondas", stats.rondas],
-                ["Incidentes", stats.incidentes],
-              ] as const
-            ).map(([label, value]) => (
-              <GlassCard key={label} style={styles.statCard}>
-                <Text style={styles.statValue}>{value}</Text>
-                <Text style={styles.statLabel}>{label}</Text>
-              </GlassCard>
-            ))}
-          </View>
-          <Field label="Entrega el turno">
-            <TextInput
-              style={[styles.input, { opacity: 0.7 }]}
-              value={turno.guardiaNombre}
-              editable={false}
-            />
-          </Field>
-
-          {/* Los elementos son los que se firmaron al iniciar: aquí solo se leen. */}
-          <Field label="Elementos asignados">
-            {elementos.length === 0 ? (
-              <Text style={styles.hintRequired}>
-                Este turno no registró elementos al iniciar.
-              </Text>
-            ) : (
-              <GlassCard style={styles.elementos}>
-                {elementos.map((c, i) => (
-                  <View
-                    key={i}
-                    style={[styles.elementoRow, i > 0 && styles.elementoDivider]}
-                  >
-                    <Ionicons name="lock-closed-outline" size={14} color={AuthUI.textMuted} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.elementoNombre}>{c.item}</Text>
-                      {!c.estadoOk ? (
-                        <Text style={styles.elementoNovedad}>
-                          Al recibir: {c.observacion || "con novedad"}
-                        </Text>
-                      ) : null}
-                    </View>
-                    <Text style={styles.elementoCantidad}>
-                      {c.cantidadEncontrada}/{c.cantidadEsperada}
-                    </Text>
-                  </View>
-                ))}
-              </GlassCard>
-            )}
-            <Text style={styles.hintRequired}>
-              Registrados al iniciar el turno. No se modifican al cerrarlo.
-            </Text>
-          </Field>
-
-          {elementos.length > 0 ? (
-            <View style={{ gap: 8 }}>
-              <View style={styles.novedadesRow}>
-                <Text style={[styles.fieldLabel, { flex: 1 }]}>
-                  ¿Existen novedades con los elementos asignados?
-                </Text>
-                <Switch
-                  value={hayNovedades}
-                  onValueChange={setHayNovedades}
-                  trackColor={{ true: "#F59E0B", false: C.border }}
-                />
-              </View>
-              {hayNovedades ? (
-                <Field label="Detalle de la novedad *">
-                  <TextInput
-                    style={[styles.input, styles.inputMultiline]}
-                    value={detalleNovedades}
-                    onChangeText={setDetalleNovedades}
-                    multiline
-                    placeholder="Ej. La linterna presenta daño en el interruptor y el radio tiene la batería descargada."
-                    placeholderTextColor={AuthUI.textMuted}
-                  />
-                  <FieldError mensaje={mostrar("novedadesElementosDetalle")} />
-                </Field>
-              ) : null}
-              <FieldError mensaje={mostrar("novedadesElementos")} />
-            </View>
-          ) : null}
-
-          <Field label="Guarda que recibe el turno *">
-            {equipo === undefined ? (
-              <ActivityIndicator color={C.brand} />
-            ) : opciones.length > 0 ? (
-              <View style={{ gap: 4 }}>
-                {[...opciones, { userId: RELEVO_OTRO, nombre: "Otro guarda (escribir nombre)" }].map(
-                  (g) => (
-                    <Tap
-                      key={g.userId}
-                      onPress={() => setRelevo(g.userId)}
-                      style={[styles.chip, relevo === g.userId && styles.chipActive]}
-                    >
-                      <Text
-                        style={[
-                          styles.chipText,
-                          relevo === g.userId && styles.chipTextActive,
-                        ]}
-                      >
-                        {g.nombre}
-                      </Text>
-                    </Tap>
-                  ),
-                )}
-              </View>
-            ) : (
-              <Text style={styles.hintRequired}>
-                No hay otros guardas registrados en esta portería: escribe el nombre
-                del relevo.
-              </Text>
-            )}
-            {manual ? (
-              <TextInput
-                style={styles.input}
-                value={relevoManual}
-                onChangeText={setRelevoManual}
-                placeholder="Nombre del relevo"
-                placeholderTextColor={AuthUI.textMuted}
-                autoCapitalize="words"
-                autoCorrect={false}
-              />
-            ) : null}
-            <FieldError mensaje={mostrar("recibe")} />
-          </Field>
-
-          <Field label="Consignas / pendientes para el relevo *">
-            <TextInput
-              style={[styles.input, styles.inputMultiline]}
-              value={consignas}
-              onChangeText={setConsignas}
-              multiline
-              placeholder="Ej. Paquetes en portería, llaves pendientes…"
-              placeholderTextColor={AuthUI.textMuted}
-            />
-            <FieldError mensaje={mostrar("consignas")} />
-          </Field>
-          <Field label="Observaciones generales del cierre *">
-            <TextInput
-              style={[styles.input, styles.inputMultiline]}
-              value={obs}
-              onChangeText={setObs}
-              multiline
-              placeholder="Ej. Turno finalizado sin novedades adicionales. Se entrega puesto, documentación y elementos al relevo."
-              placeholderTextColor={AuthUI.textMuted}
-            />
-            <FieldError mensaje={mostrar("observacionesCierre")} />
-          </Field>
-          <Tap
-            onPress={confirmar}
-            disabled={busy}
-            style={[styles.closeBtn, { marginTop: 4 }, busy && { opacity: 0.6 }]}
-          >
-            <Ionicons name="stop-circle-outline" size={18} color="#fff" />
-            <Text style={styles.closeBtnText}>{busy ? "Cerrando…" : "Cerrar turno"}</Text>
-          </Tap>
-        </ScrollView>
-      </SafeAreaView>
-    </Modal>
-  );
-}
-
 function RondaModal({
   condominioId,
   onClose,
@@ -941,20 +684,6 @@ function NotaModal({
       </SafeAreaView>
     </Modal>
   );
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <View style={{ gap: 6 }}>
-      <Text style={styles.fieldLabel}>{label}</Text>
-      {children}
-    </View>
-  );
-}
-
-function FieldError({ mensaje }: { mensaje?: string }) {
-  if (!mensaje) return null;
-  return <Text style={styles.fieldError}>{mensaje}</Text>;
 }
 
 const styles = StyleSheet.create({

@@ -26,6 +26,8 @@ const TAB_CONFIG: Record<
 const TABS_CONDOMINIO = ["index", "facturas", "comunicados", "mas", "perfil"];
 const TABS_PANEL = ["index", "administradores", "perfil"];
 const TABS_GUARDIA = ["index", "mas", "perfil"];
+/** Guarda de compañía sin portería hoy: no hay módulos que abrir. */
+const TABS_SIN_PORTERIA = ["index", "perfil"];
 
 const IS_IOS = Platform.OS === "ios";
 
@@ -143,13 +145,15 @@ function TabRoutes({
  */
 export function GlassTabBar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
-  const { condominioId, isSuperadmin, isGuardia, theme } = useCondominio();
+  const { condominioId, isSuperadmin, isGuardia, estadoGuardia, theme } = useCondominio();
   const panelMode = isSuperadmin && !condominioId;
   const visible = panelMode
     ? TABS_PANEL
     : isGuardia
       ? TABS_GUARDIA
-      : TABS_CONDOMINIO;
+      : !condominioId && estadoGuardia
+        ? TABS_SIN_PORTERIA
+        : TABS_CONDOMINIO;
   const routes = state.routes.filter((r) => visible.includes(r.name));
   const tabsProps = {
     routes,

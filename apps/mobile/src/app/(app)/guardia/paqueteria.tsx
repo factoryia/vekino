@@ -19,6 +19,7 @@ import type { FunctionReturnType } from "convex/server";
 import { api } from "@vekino/backend/api";
 import type { Doc, Id } from "@vekino/backend/dataModel";
 import { useCondominio } from "@/context/condominio-context";
+export { ErrorBoundaryOperativo as ErrorBoundary } from "@/components/guardia/error-operativo";
 import { ScreenBackground, GlassCard, GlassBadge } from "@/components/ui/glass";
 import { Tap } from "@/components/ui/tap";
 import { AuthUI } from "@/lib/auth-ui";

@@ -30,16 +30,20 @@ function RedirectToLogin() {
  * corriendo, así que la espera se usa para cargar en vez de solo retrasar.
  */
 function Preparando() {
-  const { condominioId, coverImage } = useCondominio();
+  const { condominioId, coverImage, isGuardia } = useCondominio();
   const splashCumplido = useSplashCumplido();
 
+  /* Lo que precarga es el inicio del RESIDENTE. En una portería no se pide:
+   * el guarda de compañía no es miembro del conjunto y esas consultas le
+   * responderían "no pertenece" aquí, fuera de cualquier pantalla. */
+  const residente = condominioId && !isGuardia ? condominioId : null;
   const facturas = useQuery(
     api.facturas.listMia,
-    condominioId ? { condominioId } : "skip",
+    residente ? { condominioId: residente } : "skip",
   );
   const comunicados = useQuery(
     api.comunicados.listRecent,
-    condominioId ? { condominioId, limit: 3 } : "skip",
+    residente ? { condominioId: residente, limit: 3 } : "skip",
   );
 
   const portadaAviso = comunicados?.[0]?.imagenUrl ?? null;
@@ -50,7 +54,7 @@ function Preparando() {
 
   // Sin condominio resuelto no hay nada que esperar (p. ej. superadmin).
   const datosListos =
-    !condominioId || (facturas !== undefined && comunicados !== undefined);
+    !residente || (facturas !== undefined && comunicados !== undefined);
   const listo = splashCumplido && datosListos;
 
   const [saliendo, setSaliendo] = useState(false);

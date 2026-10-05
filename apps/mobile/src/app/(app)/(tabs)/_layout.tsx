@@ -9,6 +9,8 @@ import { useCondominio } from "@/context/condominio-context";
 const TABS_CONDOMINIO = ["index", "facturas", "comunicados", "mas", "perfil"];
 const TABS_PANEL = ["index", "administradores", "perfil"];
 const TABS_GUARDIA = ["index", "mas", "perfil"];
+/** Guarda de compañía sin portería hoy: no hay módulos que abrir. */
+const TABS_SIN_PORTERIA = ["index", "perfil"];
 
 /**
  * iOS → UITabBarController nativo (expo-router NativeTabs).
@@ -16,13 +18,15 @@ const TABS_GUARDIA = ["index", "mas", "perfil"];
  * traslúcido nativo clásico en versiones anteriores — cero CSS a mano.
  */
 function IosTabsLayout() {
-  const { condominioId, isSuperadmin, isGuardia, theme } = useCondominio();
+  const { condominioId, isSuperadmin, isGuardia, estadoGuardia, theme } = useCondominio();
   const panelMode = isSuperadmin && !condominioId;
   const visible = panelMode
     ? TABS_PANEL
     : isGuardia
       ? TABS_GUARDIA
-      : TABS_CONDOMINIO;
+      : !condominioId && estadoGuardia
+        ? TABS_SIN_PORTERIA
+        : TABS_CONDOMINIO;
 
   const triggers = [
     visible.includes("index") && (

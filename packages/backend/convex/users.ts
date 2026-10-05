@@ -8,7 +8,7 @@ import {
 } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import type { QueryCtx } from "./_generated/server";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { authComponent, createAuth } from "./auth";
 import { verifyPassword } from "better-auth/crypto";
 import {
@@ -22,23 +22,54 @@ import { tipoDocumentoValidator } from "./model/roles";
 import { evaluarPassword } from "./lib/passwordFuerte";
 import { fijarPasswordDeCuenta } from "./model/credencial";
 import { resolveUserImage } from "./model/userImage";
-import { misAsignacionesVigentes } from "./model/asignacion";
+import { misAsignacionesDesde, viasDeAsignacionDe } from "./model/asignacion";
 import {
+  aplicarContexto,
+  esViaDeGuarda,
   resolverContextoOperativoGuardia,
   viasDeMembershipDe,
   type ContextoOperativoGuardia,
+  type Via,
 } from "./model/vias";
 import { miCompaniaDe } from "./model/acceso";
 import { scheduleDeleteS3Keys, s3KeyFromPublicUrl } from "./model/s3";
 import { normalizarTelefonoE164 } from "./lib/telefono";
 
 /**
- * Dónde opera como guarda la persona AHORA, tal como lo necesita el cliente
- * para rutear: la cobertura que la lleva a otro conjunto, si la hay, y cuándo
- * volver a preguntar. Es el contexto de `model/vias.ts` sin los documentos
- * internos; la decisión sigue siendo del servidor.
+ * Las porterías donde la persona opera como guarda AHORA: sus vías de guarda
+ * con el contexto aplicado, una por conjunto.
+ *
+ * Es `aplicarContexto` —la regla con la que deciden `requireCondominioRole` y
+ * `resolverAcceso`— sobre todas sus vías permanentes, conjunto por conjunto.
+ * Sin cobertura salen sus porterías de siempre; con cobertura, solo la que
+ * cubre; bloqueado, ninguna. Se calcula aquí para que ningún cliente tenga
+ * que reconstruir la regla con las membresías y las asignaciones.
  */
-function contextoParaSesion(contexto: ContextoOperativoGuardia) {
+function porteriasDeGuardia(
+  permanentes: readonly Via[],
+  contexto: ContextoOperativoGuardia,
+): Via[] {
+  const conjuntos = new Set(permanentes.map((v) => v.condominioId));
+  if (contexto.tipo === "cobertura") conjuntos.add(contexto.via.condominioId);
+  return [...conjuntos].flatMap((condominioId) => {
+    const aqui = permanentes.filter((v) => v.condominioId === condominioId);
+    const deGuarda = aplicarContexto(aqui, contexto, condominioId).vias.filter(esViaDeGuarda);
+    return deGuarda.slice(0, 1);
+  });
+}
+
+/**
+ * Dónde opera como guarda la persona AHORA, tal como lo necesita el cliente
+ * para rutear: la cobertura que la lleva a otro conjunto, si la hay, las
+ * porterías que puede operar (`conjuntos`) y cuándo volver a preguntar. Es el
+ * contexto de `model/vias.ts` sin los documentos internos; la decisión sigue
+ * siendo del servidor.
+ */
+function contextoParaSesion(
+  contexto: ContextoOperativoGuardia,
+  porterias: readonly Via[],
+  condominioDe: (via: Via) => Doc<"condominios"> | null,
+) {
   const cobertura =
     contexto.tipo === "cobertura"
       ? {
@@ -53,7 +84,21 @@ function contextoParaSesion(contexto: ContextoOperativoGuardia) {
           fin: contexto.via.cobertura.fin,
         }
       : null;
-  return { tipo: contexto.tipo, cobertura, refrescarEn: contexto.refrescarEn };
+  const conjuntos = porterias
+    .map((via) => {
+      const condominio = condominioDe(via);
+      return {
+        condominioId: via.condominioId,
+        condominioNombre: condominio?.name ?? "",
+        condominioLogo: condominio?.logo ?? null,
+        condominioColor: condominio?.primaryColor ?? null,
+        condominioCoverImage: condominio?.coverImage ?? null,
+        /** Por qué vía opera allí: su membresía, su asignación o la cobertura. */
+        por: via.tipo,
+      };
+    })
+    .sort((a, b) => a.condominioNombre.localeCompare(b.condominioNombre, "es"));
+  return { tipo: contexto.tipo, cobertura, conjuntos, refrescarEn: contexto.refrescarEn };
 }
 
 /**
@@ -88,10 +133,14 @@ async function sesionActual(ctx: QueryCtx) {
    * lo que la sesión ofrece y lo que la portería deja pasar no pueden
    * medirse con criterios distintos. */
   const memberships = await viasDeMembershipDe(ctx, user._id);
+  /* Los conjuntos de las membresías, para no volver a leerlos al armar las
+   * porterías de guarda (la vía de membresía no trae el documento). */
+  const condominiosDeMembresia = new Map<Id<"condominios">, Doc<"condominios"> | null>();
 
   const withCondominio = await Promise.all(
     memberships.map(async (via) => {
       const condominio = await ctx.db.get(via.condominioId);
+      condominiosDeMembresia.set(via.condominioId, condominio);
       return {
         membershipId: via.membership._id,
         condominioId: via.condominioId,
@@ -113,7 +162,8 @@ async function sesionActual(ctx: QueryCtx) {
    * a la vista. Van en un campo aparte, y no fingidos como membresías,
    * porque no dan lo mismo: un guarda de compañía no es residente ni tiene
    * unidades. */
-  const asignaciones = await misAsignacionesVigentes(ctx, user._id);
+  const viasDeAsignacion = await viasDeAsignacionDe(ctx, user._id);
+  const asignaciones = misAsignacionesDesde(viasDeAsignacion);
 
   /* Y EL TERCERO. El administrador de una compañía no tiene membresía ni
    * asignación: no pisa ninguna portería, administra la empresa que las
@@ -126,8 +176,14 @@ async function sesionActual(ctx: QueryCtx) {
    * termina—; esto dice si hoy una cobertura las suspende y lo lleva a otro
    * conjunto. El cliente lo usa para rutear, no para decidir: cada consulta
    * y cada mutación de la portería lo vuelve a resolver en el servidor. */
+  const contexto = await resolverContextoOperativoGuardia(ctx, user._id);
   const contextoOperativoGuardia = contextoParaSesion(
-    await resolverContextoOperativoGuardia(ctx, user._id),
+    contexto,
+    porteriasDeGuardia([...memberships, ...viasDeAsignacion], contexto),
+    (via) =>
+      via.tipo === "membership"
+        ? (condominiosDeMembresia.get(via.condominioId) ?? null)
+        : via.condominio,
   );
 
   return {

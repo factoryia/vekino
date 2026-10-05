@@ -31,6 +31,9 @@ import { SoftUI, softShadow } from "@/lib/soft-ui";
 import { SuperadminPanel } from "@/components/platform/superadmin-panel";
 import { AdminCondominioHome } from "@/components/condominio/admin-home";
 import { GuardiaHome } from "@/components/guardia/guardia-home";
+import { AvisoEstadoGuardia, SinPorteria } from "@/components/guardia/sin-porteria";
+import { SolicitudesCobertura } from "@/components/guardia/solicitudes-cobertura";
+import { LimiteOperativo } from "@/components/guardia/error-operativo";
 
 const ESTADO_TONE: Record<
   string,
@@ -106,6 +109,7 @@ function HomeContent() {
     isSuperadmin,
     canManage,
     isGuardia,
+    estadoGuardia,
     isLoading,
     clearCondominio,
   } = useCondominio();
@@ -155,12 +159,29 @@ function HomeContent() {
   }
 
   if (isGuardia && condominioId) {
+    /* El límite se reinicia al cambiar de portería: si la de antes dejó de
+     * valer a media pantalla, la nueva arranca limpia. */
     return (
-      <GuardiaHome
-        displayName={displayName}
+      <LimiteOperativo key={condominioId}>
+        <GuardiaHome
+          displayName={displayName}
+          saludo={saludo}
+          avatarUrl={me.image}
+          condominioId={condominioId}
+        />
+      </LimiteOperativo>
+    );
+  }
+
+  /* Guarda de compañía sin portería hoy (o con el contexto bloqueado): no es
+   * "no estás vinculado a ningún condominio", y no se le inventa uno. */
+  if (!condominioId && estadoGuardia) {
+    return (
+      <SinPorteria
+        estado={estadoGuardia}
         saludo={saludo}
+        displayName={displayName}
         avatarUrl={me.image}
-        condominioId={condominioId}
       />
     );
   }
@@ -172,6 +193,8 @@ function HomeContent() {
       avatarUrl={me.image}
       condominioId={condominioId}
       condominioName={condominioName}
+      esGuardaDeCompania={!!me.compania?.roles.includes("guardia")}
+      bloqueado={estadoGuardia === "bloqueado"}
     />
   );
 }
@@ -184,12 +207,18 @@ function ResidentHome({
   avatarUrl,
   condominioId,
   condominioName,
+  esGuardaDeCompania,
+  bloqueado,
 }: {
   firstName: string;
   saludo: string;
   avatarUrl?: string | null;
   condominioId: Id<"condominios"> | undefined;
   condominioName: string | null;
+  /** Guarda de compañía mirando su casa: sus solicitudes también salen aquí. */
+  esGuardaDeCompania: boolean;
+  /** Y si su operación como guarda está bloqueada, se le dice igual. */
+  bloqueado: boolean;
 }) {
   const router = useRouter();
   const { theme, coverImage } = useCondominio();
@@ -221,6 +250,9 @@ function ResidentHome({
         contentContainerStyle={styles.scroll}
         showsVerticalScrollIndicator={false}
       >
+        {bloqueado && <AvisoEstadoGuardia estado="bloqueado" />}
+        {esGuardaDeCompania && <SolicitudesCobertura />}
+
         {/* 1. Tarjeta de uso / plan (facturas) */}
         {condominioId && (
           <GlassCard style={styles.usageCard}>

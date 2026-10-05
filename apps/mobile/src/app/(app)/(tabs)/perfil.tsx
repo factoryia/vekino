@@ -79,7 +79,21 @@ function PerfilContent() {
   const router = useRouter();
   const me = useQuery(api.users.me);
   const pushStatus = useQuery(api.notifications.myStatus);
-  const { condominioId, selectCondominio, theme } = useCondominio();
+  const { condominioId, selectCondominio, theme, opciones, isSuperadmin } = useCondominio();
+  /* Los conjuntos que se pueden abrir los da la sesión, no las membresías
+   * crudas: con una cobertura activa la portería de siempre no se ofrece, y
+   * la de un guarda de compañía (que no tiene membresía) sí. El superadmin
+   * conserva su lista de siempre. */
+  const condominios = isSuperadmin
+    ? me?.memberships.map((m) => ({
+        condominioId: m.condominioId as string,
+        nombre: m.condominioName,
+        logo: m.condominioLogo,
+        color: m.condominioPrimaryColor,
+        roles: m.roles,
+        guardiaPor: null,
+      })) ?? []
+    : opciones;
   const generateUploadUrl = useAction(api.files.generateUploadUrl);
   const setMyAvatar = useMutation(api.users.setMyAvatar);
   const clearMyAvatar = useMutation(api.users.clearMyAvatar);
@@ -337,30 +351,34 @@ function PerfilContent() {
         }}
       />
 
-      {me.memberships.length > 0 && (
+      {condominios.length > 0 && (
         <View style={styles.section}>
           <Text style={styles.sectionLabel}>Mis condominios</Text>
           <View style={styles.listGap}>
-            {me.memberships.map((m) => {
-              const condoTheme = m.condominioPrimaryColor
-                ? themeFromPrimary(m.condominioPrimaryColor)
-                : theme;
+            {condominios.map((m) => {
+              const condoTheme = m.color ? themeFromPrimary(m.color) : theme;
               const active = m.condominioId === condominioId;
+              /* El rol de guarda sale de la sesión: dónde opera hoy. */
+              const etiquetas = [
+                ...m.roles.map((r) => ({ key: r, label: ROL_LABEL[r] ?? r, tone: ROL_TONE[r] ?? "neutral" })),
+                ...(m.guardiaPor === "cobertura"
+                  ? [{ key: "cobertura", label: "Cobertura", tone: "orange" as const }]
+                  : m.guardiaPor
+                    ? [{ key: "guardia", label: ROL_LABEL.guardia!, tone: ROL_TONE.guardia! }]
+                    : []),
+              ];
               return (
                 <Tap
-                  key={m.membershipId}
+                  key={m.condominioId}
                   onPress={() => {
-                    if (!m.condominioId || !m.condominioName) return;
-                    selectCondominio(
-                      m.condominioId as Id<"condominios">,
-                      m.condominioName,
-                    );
+                    if (!m.condominioId || !m.nombre) return;
+                    selectCondominio(m.condominioId as Id<"condominios">, m.nombre);
                   }}
                 >
                   <GlassCard style={styles.condoRow}>
-                    {m.condominioLogo ? (
+                    {m.logo ? (
                       <Image
-                        source={{ uri: m.condominioLogo }}
+                        source={{ uri: m.logo }}
                         style={styles.condoLogo}
                         resizeMode="cover"
                       />
@@ -377,24 +395,20 @@ function PerfilContent() {
                             { color: condoTheme.accent },
                           ]}
                         >
-                          {initials(m.condominioName ?? "?")}
+                          {initials(m.nombre ?? "?")}
                         </Text>
                       </View>
                     )}
                     <View style={styles.rowBody}>
                       <Text style={styles.condoName} numberOfLines={1}>
-                        {m.condominioName}
+                        {m.nombre}
                       </Text>
                       {/* Antes salía "{subdomain}.vekino.app": un dominio que
                           no existe. `subdomain` es un identificador interno
                           (mapea el convenio de Aval), no un host publicado. */}
                       <View style={styles.badgeRow}>
-                        {m.roles.map((r) => (
-                          <GlassBadge
-                            key={r}
-                            label={ROL_LABEL[r] ?? r}
-                            tone={ROL_TONE[r] ?? "neutral"}
-                          />
+                        {etiquetas.map((e) => (
+                          <GlassBadge key={e.key} label={e.label} tone={e.tone} />
                         ))}
                       </View>
                     </View>

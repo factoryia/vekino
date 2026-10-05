@@ -10,6 +10,7 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "typecheck": "tsc --noEmit",
+    "test": "node --test --experimental-strip-types pruebas/*.prueba.ts",
     "eas:build:ios": "eas build --platform ios --profile development",
     "eas:build:preview": "eas build --platform ios --profile preview"
   },

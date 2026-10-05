@@ -362,8 +362,17 @@ export async function misAsignacionesVigentes(
   userId: Id<"users">,
   ahora: number = Date.now(),
 ): Promise<MiAsignacion[]> {
-  const vias = await viasDeAsignacionDe(ctx, userId, ahora);
+  return misAsignacionesDesde(await viasDeAsignacionDe(ctx, userId, ahora));
+}
 
+/**
+ * Las vías de asignación ya resueltas, tal como las pinta la sesión. Aparte
+ * para quien ya tiene las vías en la mano (`users.me`, que además las usa para
+ * el contexto de guarda) y no debe leerlas dos veces.
+ */
+export function misAsignacionesDesde(
+  vias: readonly ViaAsignacion[],
+): MiAsignacion[] {
   return vias
     .map((via) => ({
       asignacionId: via.asignacion._id,

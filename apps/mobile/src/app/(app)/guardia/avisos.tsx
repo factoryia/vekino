@@ -5,6 +5,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useQuery, Authenticated } from "convex/react";
 import { api } from "@vekino/backend/api";
 import { useCondominio } from "@/context/condominio-context";
+export { ErrorBoundaryOperativo as ErrorBoundary } from "@/components/guardia/error-operativo";
 import { ScreenBackground, GlassCard, GlassBadge } from "@/components/ui/glass";
 import { Tap } from "@/components/ui/tap";
 import { AuthUI } from "@/lib/auth-ui";
