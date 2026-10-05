@@ -1,4 +1,5 @@
 import { ESTADOS_INCIDENTE } from "../lib/incidentes.ts";
+import { TIPOS_INASISTENCIA } from "../lib/inasistencias.ts";
 import { v } from "convex/values";
 
 /**
@@ -281,6 +282,15 @@ export const tipoEventoIncidenteValidator = v.union(
   v.literal("CIERRE"), v.literal("PERSONA_AGREGADA"),
   v.literal("PERSONA_EDITADA"), v.literal("PERSONA_RETIRADA"),
   v.literal("EVIDENCIA_AGREGADA"), v.literal("EVIDENCIA_RETIRADA"),
+);
+
+/** Inasistencias del personal de guarda. La lista vive en `lib/inasistencias.ts`. */
+export const tipoInasistenciaValidator = v.union(
+  ...TIPOS_INASISTENCIA.map((tipo) => v.literal(tipo)),
+);
+export const estadoInasistenciaValidator = v.union(
+  v.literal("activa"),
+  v.literal("anulada"),
 );
 
 // ─────────────────────────────────────────────────────────────

@@ -72,6 +72,10 @@
       "types": "./convex/lib/incidenteMetricas.ts",
       "default": "./convex/lib/incidenteMetricas.ts"
     },
+    "./inasistencias": {
+      "types": "./convex/lib/inasistencias.ts",
+      "default": "./convex/lib/inasistencias.ts"
+    },
     "./incidenteReporte": {
       "types": "./convex/lib/incidenteReporte.ts",
       "default": "./convex/lib/incidenteReporte.ts"

@@ -18,6 +18,8 @@ import {
   tipoNovedadItemValidator,
   rolActorDepositoValidator,
   origenDepositoValidator,
+  tipoInasistenciaValidator,
+  estadoInasistenciaValidator,
 } from "./model/roles";
 
 /**
@@ -3136,4 +3138,60 @@ export default defineSchema({
       "condominioId",
       "devueltaEn",
     ]),
+
+  // ─────────────────────────────────────────────────────────────
+  // INASISTENCIAS DEL PERSONAL DE GUARDA
+  //
+  // "Durante esta ventana este guarda no está disponible para planificar, y
+  // por qué." Es información de planificación, no de autorización: no
+  // termina asignaciones, no cierra turnos ni quita acceso a ningún conjunto.
+  //
+  // Pertenece al guarda DENTRO de su compañía, no a una asignación ni a un
+  // conjunto: el guarda que cubre dos porterías tiene una sola incapacidad.
+  // Solo guardas (`companiaMiembros.roles` = ["guardia"]), igual que la
+  // futura cobertura temporal.
+  //
+  // No se borra ni se reescribe: se registra y, si sobra, se anula. La fila
+  // lleva su propio rastro —quién la registró, quién la anuló y cuándo—, el
+  // mismo camino que `terminadoPorUserId` en contratos y asignaciones.
+  // ─────────────────────────────────────────────────────────────
+
+  inasistencias: defineTable({
+    companiaId: v.id("companiasSeguridad"),
+    /** El guarda. */
+    userId: v.id("users"),
+
+    tipo: tipoInasistenciaValidator,
+    /** Obligatorio en `inasistencia` y `otro`; ver `lib/inasistencias.ts`. */
+    motivo: v.optional(v.string()),
+
+    /**
+     * La ventana, en instantes exactos y con `fin` EXCLUIDO, en las dos
+     * modalidades: las consultas por rango y el solape no distinguen casos.
+     */
+    inicio: v.number(),
+    fin: v.number(),
+    /**
+     * Días completos: además de los instantes se guarda la fecha civil tal
+     * como se pidió (`fechaFin` incluida), que es lo que se muestra. Ausentes
+     * cuando la ventana va con hora.
+     */
+    diaCompleto: v.boolean(),
+    fechaInicio: v.optional(v.string()),
+    fechaFin: v.optional(v.string()),
+
+    /** Solo `activa` cuenta como indisponibilidad. */
+    estado: estadoInasistenciaValidator,
+
+    registradaPorUserId: v.id("users"),
+    /** Cuándo se registró. Sin `updatedAt`: no se reescribe. */
+    createdAt: v.number(),
+    anuladaEn: v.optional(v.number()),
+    anuladaPorUserId: v.optional(v.id("users")),
+  })
+    /* El historial de un guarda y el solape al registrar: una lectura. */
+    .index("by_compania_user", ["companiaId", "userId", "inicio"])
+    /* Las activas de la compañía que aún no han terminado en una fecha: el
+     * listado por rango empieza por aquí y descarta las que empiezan tarde. */
+    .index("by_compania_estado_fin", ["companiaId", "estado", "fin"]),
 });

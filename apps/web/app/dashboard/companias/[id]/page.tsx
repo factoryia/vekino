@@ -18,6 +18,7 @@ import {
   ArchiveRestore,
   Pencil,
   Boxes,
+  CalendarX,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
@@ -33,6 +34,7 @@ import { cn } from "@/lib/utils";
 import { EstadoBadge, Campo } from "../page";
 import { EditarPersonaDialog } from "@/components/companias/editar-persona-dialog";
 import { PanelInventario } from "@/components/companias/inventario/panel-inventario";
+import { PanelInasistencias } from "@/components/companias/inasistencias/panel-inasistencias";
 
 type Estado = "activa" | "suspendida" | "inactiva";
 type RolCompania = "admin_compania" | "supervisor" | "guardia";
@@ -88,8 +90,13 @@ function CompaniaDetalleContent() {
   const data = useQuery(api.companias.detail, { companiaId });
   const me = useQuery(api.users.me);
   const requestedTab = search.get("tab");
-  const tab = requestedTab === "contratos" || requestedTab === "inventario" ? requestedTab : "personal";
-  function setTab(next: "personal" | "contratos" | "inventario") {
+  const tab =
+    requestedTab === "contratos" ||
+    requestedTab === "inventario" ||
+    requestedTab === "inasistencias"
+      ? requestedTab
+      : "personal";
+  function setTab(next: "personal" | "contratos" | "inventario" | "inasistencias") {
     router.push(`/dashboard/companias/${companiaId}?tab=${next}`, { scroll: false });
   }
 
@@ -107,6 +114,15 @@ function CompaniaDetalleContent() {
    * la pagina entera y perdia tambien Personal y Conjuntos. */
   const puedeInventario =
     esPlataforma || me?.compania?.roles?.includes("admin_compania") === true;
+
+  /* Las inasistencias las lleva el administrador para toda la compañía y el
+   * supervisor para los guardas de sus conjuntos. Qué ve cada uno lo decide
+   * el servidor; aquí solo se oculta la pestaña a quien no tiene ninguna de
+   * las dos cosas. */
+  const puedeInasistencias =
+    esPlataforma ||
+    me?.compania?.roles?.includes("admin_compania") === true ||
+    me?.compania?.roles?.includes("supervisor") === true;
 
   if (data === undefined) {
     return (
@@ -167,6 +183,14 @@ function CompaniaDetalleContent() {
               label="Inventario"
             />
           )}
+          {puedeInasistencias && (
+            <TabSimple
+              activo={tab === "inasistencias"}
+              onClick={() => setTab("inasistencias")}
+              icon={CalendarX}
+              label="Inasistencias"
+            />
+          )}
         </div>
 
         {tab === "personal" && (
@@ -193,6 +217,18 @@ function CompaniaDetalleContent() {
             )}
           >
             <PanelInventario companiaId={companiaId} />
+          </ErrorBoundary>
+        )}
+        {tab === "inasistencias" && puedeInasistencias && (
+          /* Mismo motivo que el inventario: una compañía suspendida deja pasar
+           * `companias.detail` pero no las consultas del panel. */
+          <ErrorBoundary
+            resetKey={companiaId}
+            fallback={(e) => (
+              <ErrorMessage title="No se pueden ver las inasistencias" detail={e.message} />
+            )}
+          >
+            <PanelInasistencias companiaId={companiaId} />
           </ErrorBoundary>
         )}
       </div>

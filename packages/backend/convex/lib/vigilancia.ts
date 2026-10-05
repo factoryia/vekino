@@ -209,6 +209,15 @@ export const CAPACIDADES = [
   "incidentes.crear",
   "incidentes.gestionar",
   "incidentes.cerrar",
+  /**
+   * Registrar, consultar y anular las inasistencias de los guardas.
+   *
+   * La tiene el administrador para toda su compañía y el supervisor solo
+   * sobre los guardas que hoy trabajan en alguno de los conjuntos que
+   * supervisa: va en `POR_ROL_ASIGNACION`, igual que `inventario.custodiar`.
+   * El guarda no la tiene: no registra ni anula sus propias inasistencias.
+   */
+  "seguridad.inasistencias",
 ] as const;
 
 export type Capacidad = (typeof CAPACIDADES)[number];
@@ -246,7 +255,7 @@ const POR_ROL_CONJUNTO: Record<string, readonly Capacidad[]> = {
  */
 const POR_ROL_ASIGNACION: Record<string, readonly Capacidad[]> = {
   guardia: ["porteria.operar", "porteria.ver", "incidentes.ver", "incidentes.crear"],
-  supervisor: ["porteria.ver", "seguridad.asignar", "inventario.custodiar", "incidentes.ver", "incidentes.crear", "incidentes.gestionar"],
+  supervisor: ["porteria.ver", "seguridad.asignar", "seguridad.inasistencias", "inventario.custodiar", "incidentes.ver", "incidentes.crear", "incidentes.gestionar"],
 };
 
 /** Lo que habilita pertenecer a una compania, sin mirar conjunto alguno. */
@@ -274,6 +283,7 @@ const POR_ROL_COMPANIA: Record<string, readonly Capacidad[]> = {
     "incidentes.crear",
     "incidentes.gestionar",
     "incidentes.cerrar",
+    "seguridad.inasistencias",
   ],
   supervisor: [],
   guardia: [],

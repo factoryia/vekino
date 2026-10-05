@@ -5,7 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "convex/react";
-import { Boxes, Building2, FileText, LayoutDashboard, LogOut, Menu, ShieldCheck, ShieldAlert, Users, X } from "lucide-react";
+import { Boxes, Building2, CalendarX, FileText, LayoutDashboard, LogOut, Menu, ShieldCheck, ShieldAlert, Users, X } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import { authClient } from "@/lib/auth-client";
 import { cn } from "@/lib/utils";
@@ -120,7 +120,10 @@ function CompanySidebar({ company, onNavigate }: { company: Company; onNavigate?
   const companyPath = `/dashboard/companias/${company.id}`;
   const onCompanyPage = pathname === companyPath;
   const requestedTab = search.get("tab");
-  const tab = requestedTab === "contratos" || requestedTab === "inventario" ? requestedTab : "personal";
+  const tab =
+    requestedTab === "contratos" || requestedTab === "inventario" || requestedTab === "inasistencias"
+      ? requestedTab
+      : "personal";
 
   async function signOut() {
     onNavigate?.();
@@ -132,6 +135,7 @@ function CompanySidebar({ company, onNavigate }: { company: Company; onNavigate?
     { label: "Personal", tab: "personal", icon: Users },
     { label: "Contratos", tab: "contratos", icon: FileText },
     { label: "Inventario", tab: "inventario", icon: Boxes },
+    { label: "Inasistencias", tab: "inasistencias", icon: CalendarX },
   ];
 
   return (
@@ -152,6 +156,9 @@ function CompanySidebar({ company, onNavigate }: { company: Company; onNavigate?
               ))}
             </div>
           )}
+          {/* El supervisor no tiene la sección "Compañía", pero sí lleva las
+              inasistencias de los guardas de sus conjuntos. */}
+          {!company.isAdmin && <NavLink href={`${companyPath}?tab=inasistencias`} label="Inasistencias" icon={CalendarX} active={onCompanyPage && tab === "inasistencias"} onNavigate={onNavigate} />}
         </div>
         {company.isAdmin && (
           <div className="space-y-0.5">

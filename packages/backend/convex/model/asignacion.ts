@@ -199,10 +199,10 @@ export async function viasDeAsignacionEn(
 }
 
 /** Todas las asignaciones vigentes de una persona, en cualquier conjunto. */
-async function viasDeAsignacionDe(
+export async function viasDeAsignacionDe(
   ctx: Ctx,
   userId: Id<"users">,
-  ahora: number,
+  ahora: number = Date.now(),
 ): Promise<ViaAsignacion[]> {
   const filas = await ctx.db
     .query("asignaciones")
