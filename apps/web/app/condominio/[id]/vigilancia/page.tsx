@@ -7,6 +7,7 @@ import {
   AlertTriangle, BookOpenCheck, CalendarDays, Car, Check, ClipboardCheck, Download, Eye, Footprints, Loader2, Paperclip, Plus, Search, Settings2, ShieldCheck, Timer, Trash2, Users,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
+import { EtiquetaCobertura } from "@/components/vigilancia/etiqueta-cobertura";
 import type { Id, Doc } from "@vekino/backend/dataModel";
 import type { FunctionReturnType } from "convex/server";
 import { PageContainer } from "@/components/layout/page-container";
@@ -525,7 +526,10 @@ function MinutaTab({ minuta }: { minuta: EventoMinuta[] | undefined }) {
                     <EtiquetaRonda numero={e.rondaNumero} zona={e.rondaZona} />
                   </div>
                   <p className="mt-1 text-sm text-foreground">{e.resumen}</p>
-                  <p className="mt-0.5 text-[11px] text-muted-foreground">{e.actorNombre}</p>
+                  <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+                    {e.actorNombre}
+                    <EtiquetaCobertura cobertura={e.cobertura} compacta />
+                  </p>
                 </div>
               </div>
             );
@@ -558,6 +562,7 @@ function TurnosTab({ condominioId }: { condominioId: Id<"condominios"> }) {
                     {t.guardiaSecundarioNombre && <span className="text-muted-foreground"> + {t.guardiaSecundarioNombre}</span>}
                   </p>
                   <Badge tone={t.estado === "abierto" ? "success" : "neutral"}>{t.estado === "abierto" ? "Abierto" : "Cerrado"}</Badge>
+                  <EtiquetaCobertura cobertura={t.cobertura} compacta />
                 </div>
                 <p className="mt-0.5 text-xs text-muted-foreground">
                   {fmtFechaHora(t.fechaInicio)} → {t.fechaCierre ? fmtFechaHora(t.fechaCierre) : "en curso"}
@@ -630,6 +635,11 @@ function TurnoDetalleModal({ turnoId, onClose }: { turnoId: Id<"guardiaTurnos">;
               {turno.guardiaNombre}
               {turno.guardiaSecundarioNombre && <span className="text-muted-foreground"> · compartido con {turno.guardiaSecundarioNombre}</span>}
             </p>
+            {turno.cobertura && (
+              <div className="mt-1">
+                <EtiquetaCobertura cobertura={turno.cobertura} />
+              </div>
+            )}
             <p className="mt-0.5 text-xs text-muted-foreground">
               {fmtFechaHora(turno.fechaInicio)} → {turno.fechaCierre ? fmtFechaHora(turno.fechaCierre) : "en curso"}
             </p>
@@ -828,6 +838,7 @@ function NovedadCard({
 
       <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
         <span>{n.reportadoPorNombre}</span>
+        <EtiquetaCobertura cobertura={n.cobertura} compacta />
         <span>·</span>
         <span>Ocurrió {fmtFechaHora(n.ocurrioEn)}</span>
         {n.ocurrioEn !== n.createdAt && (

@@ -14,6 +14,7 @@ import {
 } from "./model/authz";
 import { exigirAcceso, resolverAcceso } from "./model/acceso";
 import { viasDeAsignacionDe } from "./model/asignacion";
+import { coberturaQueAmpara, lectorDeCoberturasHistoricas } from "./model/cobertura";
 import {
   esViaDeGuarda,
   primeraVia,
@@ -268,11 +269,15 @@ export const iniciarTurno = mutation({
       throw new Error("El compañero de turno no puede ser el mismo nombre.");
     }
 
+    /* El contexto bajo el que se hace, sellado ahora y para siempre (ver
+     * `coberturaQueAmpara`). Solo si opera aquí por una cobertura. */
+    const coberturaId = await coberturaQueAmpara(ctx, user._id, args.condominioId);
     const now = Date.now();
     const turnoId = await ctx.db.insert("guardiaTurnos", {
       condominioId: args.condominioId,
       guardiaUserId: user._id,
       guardiaNombre,
+      ...(coberturaId ? { coberturaId } : {}),
       guardiaSecundarioUserId: secundarioUserId,
       guardiaSecundarioNombre: secundarioNombre,
       observacionesInicio: args.observacionesInicio?.trim() || undefined,
@@ -533,13 +538,21 @@ export const listTurnos = query({
       .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
       .order("desc")
       .take(100);
+    /* El contexto con el que se ABRIÓ cada turno, leído del sello: un turno
+     * abierto cubriendo este conjunto lo dice; los demás salen como siempre. */
+    const contexto = lectorDeCoberturasHistoricas(ctx);
     return await Promise.all(
       turnos.map(async (t) => {
         const rondas = await ctx.db
           .query("guardiaRondas")
           .withIndex("by_turno", (q) => q.eq("turnoId", t._id))
           .collect();
-        return { ...t, rondasCount: rondas.length, checklistCount: t.checklist.length };
+        return {
+          ...t,
+          rondasCount: rondas.length,
+          checklistCount: t.checklist.length,
+          ...(await contexto(t)),
+        };
       }),
     );
   },
@@ -562,19 +575,26 @@ export const getTurno = query({
       .query("guardiaRondas")
       .withIndex("by_turno", (q) => q.eq("turnoId", args.turnoId))
       .collect();
+    /* El contexto de cada cosa, leído de su propio sello: el turno, cada
+     * ronda y cada evento pueden ser de guardas distintos. */
+    const contexto = lectorDeCoberturasHistoricas(ctx);
     const rondas = await Promise.all(
       rondasRaw.map(async (r) => ({
         ...r,
         fotoUrls: (await resolveMediaUrlList(ctx, r.fotos)).filter(
           (u): u is string => u !== null,
         ),
+        ...(await contexto(r)),
       })),
     );
 
-    const eventos = await ctx.db
+    const eventosRaw = await ctx.db
       .query("minutaEventos")
       .withIndex("by_turno", (q) => q.eq("turnoId", args.turnoId))
       .collect();
+    const eventos = await Promise.all(
+      eventosRaw.map(async (e) => ({ ...e, ...(await contexto(e)) })),
+    );
 
     const cerradoPor = turno.cerradoPorUserId
       ? await ctx.db.get(turno.cerradoPorUserId)
@@ -582,6 +602,7 @@ export const getTurno = query({
 
     return {
       ...turno,
+      ...(await contexto(turno)),
       cerradoPorNombre: cerradoPor ? displayNameFromUser(cerradoPor) : null,
       rondas: rondas.sort((a, b) => b.createdAt - a.createdAt),
       eventos: eventos.sort((a, b) => b.createdAt - a.createdAt),
@@ -617,10 +638,14 @@ export const registrarRonda = mutation({
     }
     if (!zona) throw new Error("Selecciona la zona de la ronda.");
 
+    /* El contexto bajo el que se hace, sellado ahora y para siempre (ver
+     * `coberturaQueAmpara`). Solo si opera aquí por una cobertura. */
+    const coberturaId = await coberturaQueAmpara(ctx, user._id, args.condominioId);
     const now = Date.now();
     await ctx.db.insert("guardiaRondas", {
       condominioId: args.condominioId,
       turnoId: turno._id,
+      ...(coberturaId ? { coberturaId } : {}),
       zonaId: args.zonaId,
       zona,
       novedad: args.novedad?.trim() || undefined,
@@ -852,14 +877,19 @@ export const listMinuta = query({
       });
     }
 
-    return eventos.map((e) => {
-      const ronda = e.rondaId ? rondaPorId.get(e.rondaId) : undefined;
-      return {
-        ...e,
-        rondaNumero: ronda?.numero ?? null,
-        rondaZona: ronda?.zona ?? null,
-      };
-    });
+    /* Bajo qué contexto operaba el actor de cada evento, de su sello. */
+    const contexto = lectorDeCoberturasHistoricas(ctx);
+    return await Promise.all(
+      eventos.map(async (e) => {
+        const ronda = e.rondaId ? rondaPorId.get(e.rondaId) : undefined;
+        return {
+          ...e,
+          rondaNumero: ronda?.numero ?? null,
+          rondaZona: ronda?.zona ?? null,
+          ...(await contexto(e)),
+        };
+      }),
+    );
   },
 });
 
@@ -2080,9 +2110,12 @@ async function listarReportesGuardia(
           )
         : [];
 
+    /* Bajo qué contexto reportó quien reportó, de su sello. */
+    const contexto = lectorDeCoberturasHistoricas(ctx);
     return await Promise.all(
       reportes.map(async (n) => ({
         ...n,
+        ...(await contexto(n)),
         propietarios: propietariosDe(n),
         archivoUrl:
           (await resolveMediaUrl(ctx, {
@@ -2260,12 +2293,16 @@ export const reportarNovedad = mutation({
      * pregunta al guarda: la especificación pide que la asociación sea
      * automática, y a las 2 a. m. nadie se acuerda de marcar una casilla. */
     const ronda = await rondaEnCurso(ctx, args.condominioId);
+    /* El contexto bajo el que se hace, sellado ahora y para siempre (ver
+     * `coberturaQueAmpara`). Solo si opera aquí por una cobertura. */
+    const coberturaId = await coberturaQueAmpara(ctx, user._id, args.condominioId);
     const now = Date.now();
     const id = await ctx.db.insert("guardiaNovedadReportes", {
       condominioId: args.condominioId,
       tipoReporte: args.tipoReporte ?? (vehiculoPlaca ? "aporte_voluntario" : "novedad"),
       turnoId: turno?._id,
       rondaId: ronda?._id,
+      ...(coberturaId ? { coberturaId } : {}),
       /* Nace pendiente de cobrar cuando senala un vehiculo: es plata por
        * cobrarle a una casa, y hasta que alguien diga lo contrario sigue
        * debiendose. */

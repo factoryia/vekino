@@ -24,6 +24,7 @@ import {
   type Capacidad,
 } from "./lib/vigilancia";
 import { displayNameFromUser } from "./model/displayName";
+import { ventanaQueOcupa } from "./lib/coberturas";
 
 /**
  * Asignaciones: quién opera en qué conjunto, desde cuándo y hasta cuándo.
@@ -568,6 +569,13 @@ export const miEquipo = query({
  * Con `en` responde la pregunta puntual —"¿dónde estaba este guarda el 14 de
  * marzo?"—, que es justo lo que hace falta cuando se revisa un incidente
  * meses después.
+ *
+ * Y dónde CUBRIÓ: las coberturas que llegaron a ocurrir salen como entradas
+ * propias (`tipo: "cobertura"`), aparte de las asignaciones, porque durante
+ * una cobertura la respuesta a "¿dónde estaba?" no es su conjunto de siempre.
+ * Salen de la fila de la cobertura tal cual quedó —la ventana pactada, o
+ * hasta su corte si se inhabilitó—, no del contexto de hoy. Sin coberturas,
+ * la lista es exactamente la de antes. Quién puede verlo no cambia.
  */
 export const historialDePersona = query({
   args: {
@@ -620,7 +628,68 @@ export const historialDePersona = query({
         estado: estadoVigencia(a, enFecha ?? Date.now()),
       })),
     );
-    return salida.sort((a, b) => b.vigenciaDesde - a.vigenciaDesde);
+
+    /* Las coberturas que llegaron a ocurrir: aceptadas, o inhabilitadas hasta
+     * su corte. De la compañía de quien pregunta, si no es plataforma: es la
+     * misma frontera que ya pone esta consulta. Sin quién la pidió ni por qué
+     * se cortó. */
+    const companiaVisible = esPlataforma
+      ? null
+      : (await getCompaniaMiembro(ctx, solicitante._id))?.companiaId ?? null;
+    const delGuarda = await Promise.all(
+      (["aceptada", "inhabilitada"] as const).map((estado) =>
+        ctx.db
+          .query("coberturas")
+          .withIndex("by_user_estado", (q) => q.eq("userId", args.userId).eq("estado", estado))
+          .collect(),
+      ),
+    );
+    const ahora = Date.now();
+    const coberturas = await Promise.all(
+      delGuarda.flat().flatMap((c) => {
+        const ventana = ventanaQueOcupa(c);
+        if (!ventana) return [];
+        if (!esPlataforma && solicitante._id !== args.userId && c.companiaId !== companiaVisible) {
+          return [];
+        }
+        if (enFecha != null && !(ventana.inicio <= enFecha && enFecha < ventana.fin)) return [];
+        return [
+          (async () => {
+            const [u, condo, compania] = await Promise.all([
+              ctx.db.get(c.userId),
+              ctx.db.get(c.condominioId),
+              ctx.db.get(c.companiaId),
+            ]);
+            const momento = enFecha ?? ahora;
+            return {
+              tipo: "cobertura" as const,
+              coberturaId: c._id,
+              userId: c.userId,
+              nombre: u ? displayNameFromUser(u) : "(perfil eliminado)",
+              condominioId: c.condominioId,
+              condominioNombre: condo?.name ?? "(conjunto eliminado)",
+              companiaId: c.companiaId,
+              companiaNombre: compania?.nombre ?? "(compañía eliminada)",
+              rol: "guardia" as const,
+              /** Lo que de verdad ocupó: la ventana, o hasta el corte. */
+              inicio: ventana.inicio,
+              fin: ventana.fin,
+              inhabilitada: c.estado === "inhabilitada",
+              estado:
+                momento < ventana.inicio
+                  ? ("programada" as const)
+                  : momento < ventana.fin
+                    ? ("vigente" as const)
+                    : ("terminada" as const),
+            };
+          })(),
+        ];
+      }),
+    );
+
+    const desde = (fila: { vigenciaDesde?: number; inicio?: number }) =>
+      fila.vigenciaDesde ?? fila.inicio ?? 0;
+    return [...salida, ...coberturas].sort((a, b) => desde(b) - desde(a));
   },
 });
 

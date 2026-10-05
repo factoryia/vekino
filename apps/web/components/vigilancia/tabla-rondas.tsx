@@ -3,6 +3,7 @@
 import { Footprints } from "lucide-react";
 import type { FunctionReturnType } from "convex/server";
 import type { api } from "@vekino/backend/api";
+import { EtiquetaCobertura } from "@/components/vigilancia/etiqueta-cobertura";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -85,7 +86,10 @@ export function TablaRondas({
                 </td>
                 <td className="px-5 py-3 text-foreground">{r.zona}</td>
                 <td className="px-5 py-3 text-muted-foreground">
-                  {r.guardiaNombre ?? "—"}
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    {r.guardiaNombre ?? "—"}
+                    <EtiquetaCobertura cobertura={r.cobertura} compacta />
+                  </span>
                 </td>
                 <td className="px-5 py-3 text-muted-foreground">
                   {fechaHora(r.fechaInicio)}

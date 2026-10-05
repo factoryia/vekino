@@ -11,6 +11,7 @@ import {
   type ViaMembership,
 } from "./model/vias";
 import { displayNameFromUser } from "./model/displayName";
+import { lectorDeCoberturasHistoricas } from "./model/cobertura";
 import { logNovedadItem } from "./model/inventarioNovedad";
 import {
   aVistaCustodiaGuarda,
@@ -287,6 +288,7 @@ export const itemsDelCondominio = query({
       ),
     );
     const usuario = cacheDeUsuarios(ctx);
+    const contexto = lectorDeCoberturasHistoricas(ctx);
 
     const items = await Promise.all(
       enElConjunto.map((a) => ctx.db.get(a.itemId)),
@@ -308,7 +310,7 @@ export const itemsDelCondominio = query({
           estado: item.estado,
           asignadaEnElConjuntoDesde: a.asignadaEn,
           custodia: c
-            ? await aVistaCustodiaGuarda(ctx, c, usuario, vigentes)
+            ? await aVistaCustodiaGuarda(ctx, c, usuario, vigentes, contexto)
             : null,
         };
       }),
@@ -377,8 +379,9 @@ export const historialDeItem = query({
 
     const filas = await custodiasGuardaDeItem(ctx, item._id, TOPE_HISTORIAL);
     const usuario = cacheDeUsuarios(ctx);
+    const contexto = lectorDeCoberturasHistoricas(ctx);
     return await Promise.all(
-      filas.map((c) => aVistaCustodiaGuarda(ctx, c, usuario, vigentes)),
+      filas.map((c) => aVistaCustodiaGuarda(ctx, c, usuario, vigentes, contexto)),
     );
   },
 });
@@ -469,6 +472,9 @@ export const entregar = mutation({
       /* Cuelga de la custodia del conjunto: cerrarla invalida ésta sin tocar
        * una fila, igual que `asignaciones` cuelga del contrato. */
       inventarioAsignacionId: asignacion._id,
+      /* Si lo recibe porque cubre este conjunto, queda dicho: es la vía con la
+       * que se le acaba de aceptar, no una suposición posterior. */
+      ...(via.tipo === "cobertura" ? { coberturaId: via.cobertura._id } : {}),
       itemId: item._id,
       companiaId: item.companiaId,
       condominioId,

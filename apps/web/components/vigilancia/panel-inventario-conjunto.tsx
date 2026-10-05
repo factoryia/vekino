@@ -14,6 +14,7 @@ import {
   UserCheck,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
+import { EtiquetaCobertura } from "@/components/vigilancia/etiqueta-cobertura";
 import type { Id } from "@vekino/backend/dataModel";
 import { MAX_OBSERVACION } from "@vekino/backend/inventario";
 import { Badge } from "@/components/ui/badge";
@@ -160,6 +161,7 @@ export function PanelInventarioConjunto({
                           <UserCheck className="h-3 w-3" aria-hidden />
                           {i.custodia.guardaNombre}
                         </Badge>
+                        <EtiquetaCobertura cobertura={i.custodia.cobertura} compacta />
                         {i.custodia.pendiente && (
                           <Badge tone="warning">Ya no está asignado</Badge>
                         )}
@@ -620,6 +622,7 @@ function HistorialDialog({
                 <span className="font-medium text-foreground">
                   {c.guardaNombre}
                 </span>
+                <EtiquetaCobertura cobertura={c.cobertura} />
                 {c.activa && <Badge tone="info">Lo tiene ahora</Badge>}
                 {c.pendiente && <Badge tone="warning">Ya no está asignado</Badge>}
               </div>

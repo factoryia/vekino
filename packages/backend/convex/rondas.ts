@@ -5,6 +5,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { requireCondominioRole } from "./model/authz";
 import { exigirAcceso, resolverAcceso } from "./model/acceso";
 import { logMinuta, rondaEnCurso, turnoAbierto } from "./model/minuta";
+import { coberturaQueAmpara, lectorDeCoberturasHistoricas } from "./model/cobertura";
 import {
   contar,
   duracionMs,
@@ -107,6 +108,9 @@ export const iniciar = mutation({
     }
     if (!zona) zona = "Recorrido general";
 
+    /* El contexto bajo el que se hace, sellado ahora y para siempre (ver
+     * `coberturaQueAmpara`). Solo si opera aquí por una cobertura. */
+    const coberturaId = await coberturaQueAmpara(ctx, user._id, args.condominioId);
     const ahora = Date.now();
     const numero = await siguienteNumero(ctx, args.condominioId);
     const rondaId = await ctx.db.insert("guardiaRondas", {
@@ -118,6 +122,7 @@ export const iniciar = mutation({
       numero,
       guardiaUserId: user._id,
       guardiaNombre: user.name,
+      ...(coberturaId ? { coberturaId } : {}),
       estado: "en_curso",
       fechaInicio: ahora,
       createdAt: ahora,
@@ -283,6 +288,8 @@ export const detalle = query({
       numero: ronda.numero ?? null,
       zona: ronda.zona,
       guardiaNombre: ronda.guardiaNombre ?? null,
+      /* Si la hizo cubriendo este conjunto, de su sello. */
+      ...(await lectorDeCoberturasHistoricas(ctx)(ronda)),
       estado: estadoDeRonda(ronda.estado),
       fechaInicio: inicio,
       fechaCierre: ronda.fechaCierre ?? null,
@@ -347,6 +354,7 @@ export const listar = query({
      * denormalizado se desincroniza en cuanto alguien borra un reporte, y el
      * historial es justo donde se notaría. */
     const salida = [];
+    const contexto = lectorDeCoberturasHistoricas(ctx);
     for (const r of rondas) {
       const hitos = await hitosDeRonda(ctx, r);
       const inicio = r.fechaInicio ?? r.createdAt;
@@ -355,6 +363,8 @@ export const listar = query({
         numero: r.numero ?? null,
         zona: r.zona,
         guardiaNombre: r.guardiaNombre ?? null,
+        /* Si la hizo cubriendo este conjunto, de su sello. */
+        ...(await contexto(r)),
         estado: estadoDeRonda(r.estado),
         fechaInicio: inicio,
         fechaCierre: r.fechaCierre ?? null,

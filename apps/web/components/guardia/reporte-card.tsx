@@ -1,6 +1,7 @@
 import type { FunctionReturnType } from "convex/server";
 import { Car, Home, Paperclip } from "lucide-react";
 import { api } from "@vekino/backend/api";
+import { EtiquetaCobertura } from "@/components/vigilancia/etiqueta-cobertura";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
@@ -66,6 +67,7 @@ export function ReporteCard({ n }: { n: Reporte }) {
           )}
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
             <span>{n.reportadoPorNombre}</span>
+            <EtiquetaCobertura cobertura={n.cobertura} compacta />
             <span>·</span>
             <span>{fmtFechaHora(n.ocurrioEn)}</span>
             {n.ocurrioEn !== n.createdAt && (

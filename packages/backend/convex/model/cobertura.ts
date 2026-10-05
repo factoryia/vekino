@@ -261,3 +261,85 @@ export async function coberturasActivasEnConjunto(
   );
   return vias.filter((v): v is ViaCobertura => v !== null);
 }
+
+/*
+ * LA TRAZABILIDAD: BAJO QUÉ CONTEXTO SE HIZO CADA OPERACIÓN.
+ *
+ * Dos preguntas que no se mezclan:
+ *
+ *   ahora     → ¿puede operar aquí? Lo responde `coberturaActivaDeGuardia`
+ *               con el reloj de la petición (Fase 8). Es autorización.
+ *   entonces  → ¿bajo qué contexto hizo ESTO? Lo responde la propia
+ *               operación, que guarda el `coberturaId` con el que se creó.
+ *
+ * El sello se pone UNA vez, dentro de la mutación que crea la operación y con
+ * la misma resolución que acaba de autorizarla (`coberturaQueAmpara`). Nunca
+ * se reescribe: que la cobertura termine, la inhabiliten o pierda su contrato
+ * cambia quién puede operar desde ese momento, no lo que ya pasó. Y nunca se
+ * reconstruye: las lecturas históricas leen el sello
+ * (`lectorDeCoberturasHistoricas`), no el contexto actual ni las ventanas de
+ * las coberturas. Lo que se creó antes de que existiera el sello no lo tiene
+ * y se queda así: no se adivina.
+ */
+
+/**
+ * La cobertura bajo la que esta persona opera AHORA en este conjunto, o null.
+ *
+ * Es el sello de una operación nueva: se llama dentro de la mutación que la
+ * crea, después de autorizarla, y su resultado se guarda tal cual. Null si no
+ * tiene cobertura activa, si la tiene en OTRO conjunto (el guarda que cierra
+ * en su conjunto de siempre el turno que dejó abierto antes de cubrir) o si
+ * su contexto está bloqueado. No se fía de nada que mande el cliente.
+ */
+export async function coberturaQueAmpara(
+  ctx: Ctx,
+  userId: Id<"users">,
+  condominioId: Id<"condominios">,
+): Promise<Id<"coberturas"> | null> {
+  const activa = await coberturaActivaDeGuardia(ctx, userId);
+  return activa.estado === "activa" && activa.via.condominioId === condominioId
+    ? activa.via.cobertura._id
+    : null;
+}
+
+/** El contexto de una operación hecha bajo cobertura, tal como se enseña. */
+export type CoberturaDeOperacion = {
+  coberturaId: Id<"coberturas">;
+  condominioId: Id<"condominios">;
+  /** La ventana pactada. Ni quién la pidió ni por qué se cortó: no hace falta. */
+  inicio: number;
+  fin: number;
+};
+
+/**
+ * Lee el contexto REGISTRADO de operaciones históricas.
+ *
+ * Devuelve, para cada fila, `{ cobertura }` si se creó bajo una cobertura y
+ * `{}` si no: así una fila sin sello sale exactamente igual que antes de que
+ * existiera. La cobertura se lee tal cual está guardada, sin mirar el reloj ni
+ * su estado: una inhabilitada después sigue amparando lo que se hizo antes.
+ * Cada cobertura se lee una sola vez por consulta.
+ */
+export function lectorDeCoberturasHistoricas(ctx: Ctx) {
+  const vistas = new Map<Id<"coberturas">, Promise<CoberturaDeOperacion | null>>();
+  const leer = (id: Id<"coberturas">) => {
+    if (!vistas.has(id)) {
+      vistas.set(
+        id,
+        ctx.db.get(id).then((c) =>
+          c
+            ? { coberturaId: c._id, condominioId: c.condominioId, inicio: c.inicio, fin: c.fin }
+            : null,
+        ),
+      );
+    }
+    return vistas.get(id)!;
+  };
+  return async (fila: {
+    coberturaId?: Id<"coberturas">;
+  }): Promise<{ cobertura?: CoberturaDeOperacion }> => {
+    if (!fila.coberturaId) return {};
+    const cobertura = await leer(fila.coberturaId);
+    return cobertura ? { cobertura } : {};
+  };
+}

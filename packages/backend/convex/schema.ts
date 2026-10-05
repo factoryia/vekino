@@ -1701,6 +1701,14 @@ export default defineSchema({
     novedadesElementosDetalle: v.optional(v.string()),
     /* Quién firmó el cierre: el guarda del turno o un administrador. */
     cerradoPorUserId: v.optional(v.id("users")),
+    /**
+     * La cobertura bajo la que el TITULAR abrió el turno, si abrió cubriendo
+     * este conjunto. Se sella al abrir (`coberturaQueAmpara`) y no se toca
+     * nunca más: cerrarlo después —también por la excepción de la cobertura—
+     * no cambia bajo qué contexto se abrió. Ausente = sin cobertura, o turno
+     * anterior a que existiera el sello (no se reconstruye).
+     */
+    coberturaId: v.optional(v.id("coberturas")),
     estado: v.union(v.literal("abierto"), v.literal("cerrado")),
     fechaInicio: v.number(),
     fechaCierre: v.optional(v.number()),
@@ -1739,6 +1747,15 @@ export default defineSchema({
      * puede hacer el guarda secundario, y el reporte debe decir cual. */
     guardiaUserId: v.optional(v.id("users")),
     guardiaNombre: v.optional(v.string()),
+    /**
+     * La cobertura bajo la que la hizo quien la registró, sellada al crearla.
+     *
+     * No se hereda del turno, a propósito: el turno es de la portería y lo
+     * comparten todos los guardas que operan en ella, así que el contexto de
+     * quien lo abrió no es el de quien hace la ronda. Ausente = sin cobertura
+     * o ronda anterior al sello.
+     */
+    coberturaId: v.optional(v.id("coberturas")),
 
     /**
      * `en_curso` admite registros; `finalizada` ya no.
@@ -1784,6 +1801,13 @@ export default defineSchema({
     estado: v.union(v.literal("abierto"), v.literal("cerrado")),
     actorUserId: v.optional(v.id("users")),
     actorNombre: v.string(),
+    /**
+     * La cobertura bajo la que operaba el ACTOR, sellada por `logMinuta` al
+     * escribir el evento. `turnoId` no basta: es el turno abierto de la
+     * portería, que puede ser de otro guarda. Ausente = sin cobertura o
+     * evento anterior al sello.
+     */
+    coberturaId: v.optional(v.id("coberturas")),
     createdAt: v.number(),
   })
     .index("by_condominio", ["condominioId"])
@@ -1796,6 +1820,12 @@ export default defineSchema({
     turnoId: v.optional(v.id("guardiaTurnos")),
     /** Ronda durante la cual se reporto, si habia una en curso. */
     rondaId: v.optional(v.id("guardiaRondas")),
+    /**
+     * La cobertura bajo la que reportó quien la reportó, sellada al crearla.
+     * Por lo mismo que en la minuta: el turno ligado es el de la portería, no
+     * el del reportante. Ausente = sin cobertura o reporte anterior al sello.
+     */
+    coberturaId: v.optional(v.id("coberturas")),
 
     /**
      * Estado del cobro de este reporte.
@@ -3105,6 +3135,14 @@ export default defineSchema({
     /** El supervisor que se lo entregó. */
     entregadaPorUserId: v.id("users"),
     observacionEntrega: v.optional(v.string()),
+    /**
+     * La cobertura por la que el guarda operaba en este conjunto cuando
+     * recibió el elemento: la vía con la que `entregar` lo aceptó. Es lo que
+     * permite decir después "lo recibió mientras cubría este conjunto" sin
+     * cruzar fechas. Ausente = lo recibió por su asignación, o custodia
+     * anterior al sello.
+     */
+    coberturaId: v.optional(v.id("coberturas")),
 
     /**
      * EL ÚNICO FINAL. Ausente = el guarda todavía lo tiene.

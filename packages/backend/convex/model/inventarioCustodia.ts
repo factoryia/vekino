@@ -1,6 +1,7 @@
 import type { MutationCtx, QueryCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import { displayNameFromUser } from "./displayName";
+import { lectorDeCoberturasHistoricas, type CoberturaDeOperacion } from "./cobertura";
 
 /**
  * DÓNDE ESTÁ CADA ELEMENTO.
@@ -293,6 +294,13 @@ export type VistaCustodiaGuarda = {
    * `null` cuando no se ha comprobado (historial cerrado: no aplica).
    */
   pendiente: boolean | null;
+  /**
+   * La cobertura por la que el guarda operaba en el conjunto cuando lo
+   * recibió, si lo recibió cubriendo. Sale del sello de la custodia, nunca
+   * de cruzar fechas. Ausente si lo recibió por su asignación o si la
+   * custodia es anterior al sello.
+   */
+  cobertura?: CoberturaDeOperacion;
 };
 
 export async function aVistaCustodiaGuarda(
@@ -301,6 +309,8 @@ export async function aVistaCustodiaGuarda(
   usuario: (id: Id<"users">) => Promise<Doc<"users"> | null>,
   /** Quiénes operan hoy en el conjunto. Ausente = no se marca pendiente. */
   guardasVigentes?: ReadonlySet<Id<"users">>,
+  /** Para compartir la lectura de coberturas entre las filas de una consulta. */
+  contexto: ReturnType<typeof lectorDeCoberturasHistoricas> = lectorDeCoberturasHistoricas(ctx),
 ): Promise<VistaCustodiaGuarda> {
   const [guarda, quienEntrego, quienRecibio] = await Promise.all([
     usuario(c.guardaUserId),
@@ -321,5 +331,6 @@ export async function aVistaCustodiaGuarda(
     activa,
     pendiente:
       activa && guardasVigentes ? !guardasVigentes.has(c.guardaUserId) : null,
+    ...(await contexto(c)),
   };
 }
