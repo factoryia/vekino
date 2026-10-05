@@ -5,7 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "convex/react";
-import { Boxes, Building2, CalendarX, FileText, LayoutDashboard, LogOut, Menu, ShieldCheck, ShieldAlert, Users, X } from "lucide-react";
+import { Boxes, Building2, CalendarClock, CalendarX, FileText, LayoutDashboard, LogOut, Menu, ShieldCheck, ShieldAlert, Users, X } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import { authClient } from "@/lib/auth-client";
 import { cn } from "@/lib/utils";
@@ -121,7 +121,10 @@ function CompanySidebar({ company, onNavigate }: { company: Company; onNavigate?
   const onCompanyPage = pathname === companyPath;
   const requestedTab = search.get("tab");
   const tab =
-    requestedTab === "contratos" || requestedTab === "inventario" || requestedTab === "inasistencias"
+    requestedTab === "contratos" ||
+    requestedTab === "inventario" ||
+    requestedTab === "inasistencias" ||
+    requestedTab === "horarios"
       ? requestedTab
       : "personal";
 
@@ -136,6 +139,7 @@ function CompanySidebar({ company, onNavigate }: { company: Company; onNavigate?
     { label: "Contratos", tab: "contratos", icon: FileText },
     { label: "Inventario", tab: "inventario", icon: Boxes },
     { label: "Inasistencias", tab: "inasistencias", icon: CalendarX },
+    { label: "Horarios", tab: "horarios", icon: CalendarClock },
   ];
 
   return (
@@ -156,9 +160,11 @@ function CompanySidebar({ company, onNavigate }: { company: Company; onNavigate?
               ))}
             </div>
           )}
-          {/* El supervisor no tiene la sección "Compañía", pero sí lleva las
-              inasistencias de los guardas de sus conjuntos. */}
+          {/* El supervisor no tiene la sección "Compañía", pero sí lleva la
+              planificación —inasistencias y horarios— de los guardas de sus
+              conjuntos. */}
           {!company.isAdmin && <NavLink href={`${companyPath}?tab=inasistencias`} label="Inasistencias" icon={CalendarX} active={onCompanyPage && tab === "inasistencias"} onNavigate={onNavigate} />}
+          {!company.isAdmin && <NavLink href={`${companyPath}?tab=horarios`} label="Horarios" icon={CalendarClock} active={onCompanyPage && tab === "horarios"} onNavigate={onNavigate} />}
         </div>
         {company.isAdmin && (
           <div className="space-y-0.5">

@@ -19,6 +19,7 @@ import {
   Pencil,
   Boxes,
   CalendarX,
+  CalendarClock,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
@@ -35,6 +36,7 @@ import { EstadoBadge, Campo } from "../page";
 import { EditarPersonaDialog } from "@/components/companias/editar-persona-dialog";
 import { PanelInventario } from "@/components/companias/inventario/panel-inventario";
 import { PanelInasistencias } from "@/components/companias/inasistencias/panel-inasistencias";
+import { PanelHorarios } from "@/components/companias/horarios/panel-horarios";
 
 type Estado = "activa" | "suspendida" | "inactiva";
 type RolCompania = "admin_compania" | "supervisor" | "guardia";
@@ -93,10 +95,13 @@ function CompaniaDetalleContent() {
   const tab =
     requestedTab === "contratos" ||
     requestedTab === "inventario" ||
-    requestedTab === "inasistencias"
+    requestedTab === "inasistencias" ||
+    requestedTab === "horarios"
       ? requestedTab
       : "personal";
-  function setTab(next: "personal" | "contratos" | "inventario" | "inasistencias") {
+  function setTab(
+    next: "personal" | "contratos" | "inventario" | "inasistencias" | "horarios",
+  ) {
     router.push(`/dashboard/companias/${companiaId}?tab=${next}`, { scroll: false });
   }
 
@@ -115,11 +120,11 @@ function CompaniaDetalleContent() {
   const puedeInventario =
     esPlataforma || me?.compania?.roles?.includes("admin_compania") === true;
 
-  /* Las inasistencias las lleva el administrador para toda la compañía y el
-   * supervisor para los guardas de sus conjuntos. Qué ve cada uno lo decide
-   * el servidor; aquí solo se oculta la pestaña a quien no tiene ninguna de
-   * las dos cosas. */
-  const puedeInasistencias =
+  /* La planificación del personal —inasistencias y horarios— la lleva el
+   * administrador para toda la compañía y el supervisor para los guardas de
+   * sus conjuntos. Qué ve cada uno lo decide el servidor; aquí solo se ocultan
+   * las pestañas a quien no tiene ninguna de las dos cosas. */
+  const puedePlanificar =
     esPlataforma ||
     me?.compania?.roles?.includes("admin_compania") === true ||
     me?.compania?.roles?.includes("supervisor") === true;
@@ -142,6 +147,20 @@ function CompaniaDetalleContent() {
   }
 
   const { compania, personal, contratos } = data;
+
+  /* Los conjuntos donde se puede planificar un horario: los de sus contratos
+   * no archivados. Para el supervisor `detail` ya los trae acotados a los que
+   * supervisa, que es la misma regla que aplica el servidor al registrar. */
+  const conjuntosPlanificables = [
+    ...new Map(
+      contratos
+        .filter((c) => !c.archivado)
+        .map((c) => [
+          c.condominioId,
+          { condominioId: c.condominioId, condominioNombre: c.condominioNombre },
+        ]),
+    ).values(),
+  ].sort((a, b) => a.condominioNombre.localeCompare(b.condominioNombre, "es"));
 
   return (
     <PageContainer>
@@ -183,12 +202,20 @@ function CompaniaDetalleContent() {
               label="Inventario"
             />
           )}
-          {puedeInasistencias && (
+          {puedePlanificar && (
             <TabSimple
               activo={tab === "inasistencias"}
               onClick={() => setTab("inasistencias")}
               icon={CalendarX}
               label="Inasistencias"
+            />
+          )}
+          {puedePlanificar && (
+            <TabSimple
+              activo={tab === "horarios"}
+              onClick={() => setTab("horarios")}
+              icon={CalendarClock}
+              label="Horarios"
             />
           )}
         </div>
@@ -219,7 +246,7 @@ function CompaniaDetalleContent() {
             <PanelInventario companiaId={companiaId} />
           </ErrorBoundary>
         )}
-        {tab === "inasistencias" && puedeInasistencias && (
+        {tab === "inasistencias" && puedePlanificar && (
           /* Mismo motivo que el inventario: una compañía suspendida deja pasar
            * `companias.detail` pero no las consultas del panel. */
           <ErrorBoundary
@@ -229,6 +256,16 @@ function CompaniaDetalleContent() {
             )}
           >
             <PanelInasistencias companiaId={companiaId} />
+          </ErrorBoundary>
+        )}
+        {tab === "horarios" && puedePlanificar && (
+          <ErrorBoundary
+            resetKey={companiaId}
+            fallback={(e) => (
+              <ErrorMessage title="No se pueden ver los horarios" detail={e.message} />
+            )}
+          >
+            <PanelHorarios companiaId={companiaId} conjuntos={conjuntosPlanificables} />
           </ErrorBoundary>
         )}
       </div>

@@ -76,6 +76,10 @@
       "types": "./convex/lib/inasistencias.ts",
       "default": "./convex/lib/inasistencias.ts"
     },
+    "./horariosGuarda": {
+      "types": "./convex/lib/horariosGuarda.ts",
+      "default": "./convex/lib/horariosGuarda.ts"
+    },
     "./incidenteReporte": {
       "types": "./convex/lib/incidenteReporte.ts",
       "default": "./convex/lib/incidenteReporte.ts"

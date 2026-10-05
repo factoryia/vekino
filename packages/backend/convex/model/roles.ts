@@ -293,6 +293,17 @@ export const estadoInasistenciaValidator = v.union(
   v.literal("anulada"),
 );
 
+/**
+ * Un bloque de trabajo de un día de la semana, con la misma forma que
+ * `zonasComunes.horariosPorDia`: 0 = domingo, horas "HH:MM", y un fin que no
+ * supera al inicio cae al día siguiente (`lib/horarios.ts`).
+ */
+export const bloqueSemanalValidator = v.object({
+  dia: v.number(),
+  horaInicio: v.string(),
+  horaFin: v.string(),
+});
+
 // ─────────────────────────────────────────────────────────────
 // INVENTARIO DE LA COMPAÑÍA
 //

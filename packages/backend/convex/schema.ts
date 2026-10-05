@@ -20,6 +20,7 @@ import {
   origenDepositoValidator,
   tipoInasistenciaValidator,
   estadoInasistenciaValidator,
+  bloqueSemanalValidator,
 } from "./model/roles";
 
 /**
@@ -3194,4 +3195,56 @@ export default defineSchema({
     /* Las activas de la compañía que aún no han terminado en una fecha: el
      * listado por rango empieza por aquí y descarta las que empiezan tarde. */
     .index("by_compania_estado_fin", ["companiaId", "estado", "fin"]),
+
+  // ─────────────────────────────────────────────────────────────
+  // HORARIO PERMANENTE DE LOS GUARDAS (planificación)
+  //
+  // "Según lo registrado, este guarda debería trabajar en estos días y horas,
+  // en este conjunto o en general." Es INFORMATIVO: nunca decide si alguien
+  // entra, opera, abre o cierra un turno, ni si una asignación o una
+  // membresía valen. Que no haya horario significa "no tenemos esa
+  // información", no "está libre".
+  //
+  // Independiente de asignaciones y contratos: un guarda puede tener horario
+  // sin asignación, asignaciones sin horario, y varios horarios —uno por
+  // conjunto o uno general— a la vez.
+  //
+  // No se reescribe: un cambio de planificación es finalizar el horario
+  // vigente y registrar otro, así que siempre se puede saber qué estaba
+  // planificado antes. El estado (programado, vigente, terminado) se deriva
+  // de las fechas al leer, igual que en contratos y asignaciones.
+  // ─────────────────────────────────────────────────────────────
+
+  horariosGuarda: defineTable({
+    companiaId: v.id("companiasSeguridad"),
+    /** El guarda. */
+    userId: v.id("users"),
+    /** Ausente = horario general, sin conjunto. No se inventa uno. */
+    condominioId: v.optional(v.id("condominios")),
+
+    /** Vigencia en fechas civiles de Colombia, las dos incluidas. */
+    fechaInicio: v.string(),
+    /** Ausente = indefinido, igual que en asignaciones. */
+    fechaFin: v.optional(v.string()),
+
+    /** El patrón semanal. Los días sin bloques son los libres. */
+    bloques: v.array(bloqueSemanalValidator),
+
+    creadoPorUserId: v.id("users"),
+    /** Sin `updatedAt`: un horario se finaliza, no se reescribe. */
+    createdAt: v.number(),
+
+    /**
+     * Finalizarlo: el último día en que rige, cuándo se hizo y quién. Va
+     * aparte de `fechaFin` por lo mismo que `terminadoEn` en los contratos:
+     * hasta cuándo se planificó y cuándo se cortó son dos hechos distintos.
+     */
+    terminaEl: v.optional(v.string()),
+    terminadoEn: v.optional(v.number()),
+    terminadoPorUserId: v.optional(v.id("users")),
+  })
+    /* El historial de un guarda y los choques al registrar: una lectura. */
+    .index("by_compania_user", ["companiaId", "userId", "fechaInicio"])
+    /* Los de la compañía, para el listado por rango. */
+    .index("by_compania", ["companiaId", "fechaInicio"]),
 });

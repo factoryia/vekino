@@ -2,17 +2,15 @@ import { v } from "convex/values";
 import { query, mutation } from "./_generated/server";
 import type { QueryCtx, MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
+import { alcanceEnCompania, type AlcanceEnCompania } from "./model/acceso";
 import {
-  alcanceCubre,
-  alcanceEnCompania,
-  type AlcanceEnCompania,
-} from "./model/acceso";
-import { viasDeAsignacionDe } from "./model/asignacion";
-import {
-  rolPrincipalDeCompania,
-  tipoInasistenciaValidator,
-} from "./model/roles";
-import { displayNameFromUser } from "./model/displayName";
+  alcanzaAlGuarda,
+  exigirAlcanceSobreGuarda as exigirAlcance,
+  exigirGuardaActivo as exigirGuarda,
+  guardasElegibles as elegibles,
+  lectorDeNombres,
+} from "./model/alcanceGuarda";
+import { tipoInasistenciaValidator } from "./model/roles";
 import {
   pisaAlguna,
   rangoDeConsulta,
@@ -28,91 +26,30 @@ import {
  * `resolverAcceso` saben que existe: un guarda incapacitado sigue pudiendo
  * entrar y cerrar el turno que tenga abierto.
  *
- * Quién puede, con la capacidad `seguridad.inasistencias` y el alcance de
- * `alcanceEnCompania` —el mismo de los contratos—:
- *   - plataforma y `admin_compania`: todos los guardas de la compañía;
- *   - `supervisor`: los guardas que HOY trabajan en alguno de los conjuntos
- *     que supervisa;
- *   - el guarda: nada todavía.
+ * Quién puede: la capacidad `seguridad.inasistencias` con el alcance de
+ * `model/alcanceGuarda.ts` —el mismo de los horarios—: plataforma y
+ * administrador, toda la compañía; supervisor, los guardas que hoy trabajan
+ * en sus conjuntos; el guarda, nada todavía.
  */
 
 const CAPACIDAD = "seguridad.inasistencias" as const;
 
 type Ctx = QueryCtx | MutationCtx;
 
-/**
- * Dónde trabaja hoy esta persona para esta compañía.
- *
- * Sale de las vías de asignación (la cadena entera), no de las filas crudas:
- * un supervisor alcanza a quien de verdad está hoy en sus conjuntos.
- */
-async function conjuntosDelGuarda(
-  ctx: Ctx,
-  companiaId: Id<"companiasSeguridad">,
-  userId: Id<"users">,
-): Promise<Id<"condominios">[]> {
-  const vias = await viasDeAsignacionDe(ctx, userId);
-  return vias
-    .filter((via) => via.companiaId === companiaId)
-    .map((via) => via.condominioId);
-}
-
-async function alcanzaAlGuarda(
-  ctx: Ctx,
-  alcance: AlcanceEnCompania,
-  companiaId: Id<"companiasSeguridad">,
-  userId: Id<"users">,
-): Promise<boolean> {
-  if (alcance.conjuntos === null) return true;
-  return alcanceCubre(alcance, await conjuntosDelGuarda(ctx, companiaId, userId));
-}
-
-/**
- * Exige que quien pregunta alcance a este guarda dentro de la compañía.
- *
- * El alcance se comprueba ANTES que la persona: a un supervisor no se le
- * confirma si alguien de fuera de sus conjuntos pertenece o no a la empresa.
- */
-async function exigirAlcanceSobreGuarda(
+function exigirAlcanceSobreGuarda(
   ctx: Ctx,
   companiaId: Id<"companiasSeguridad">,
   userId: Id<"users">,
 ): Promise<AlcanceEnCompania> {
-  const alcance = await alcanceEnCompania(ctx, companiaId, CAPACIDAD);
-  if (!(await alcanzaAlGuarda(ctx, alcance, companiaId, userId))) {
-    throw new Error(`No tiene permiso para esta operación (${CAPACIDAD}).`);
-  }
-  return alcance;
+  return exigirAlcance(ctx, companiaId, userId, CAPACIDAD);
 }
 
-/**
- * El guarda al que se le registra: miembro de la compañía, de alta y guarda.
- *
- * No depende de que tenga una asignación hoy: la inasistencia es de la
- * persona dentro de su compañía, no de un conjunto.
- */
-async function exigirGuardaActivo(
+function exigirGuardaActivo(
   ctx: Ctx,
   companiaId: Id<"companiasSeguridad">,
   userId: Id<"users">,
 ): Promise<Doc<"companiaMiembros">> {
-  const filas = await ctx.db
-    .query("companiaMiembros")
-    .withIndex("by_compania_user", (q) =>
-      q.eq("companiaId", companiaId).eq("userId", userId),
-    )
-    .collect();
-  if (filas.length === 0) {
-    throw new Error("Esa persona no pertenece a la compañía.");
-  }
-  const miembro = filas.find((m) => m.isActive);
-  if (!miembro) {
-    throw new Error("Esa persona está dada de baja en la compañía.");
-  }
-  if (rolPrincipalDeCompania(miembro.roles) !== "guardia") {
-    throw new Error("Solo se registran inasistencias de guardas.");
-  }
-  return miembro;
+  return exigirGuarda(ctx, companiaId, userId, "Solo se registran inasistencias de guardas.");
 }
 
 /** Todas las del guarda en la compañía, por fecha de inicio. */
@@ -134,16 +71,7 @@ async function hidratar(
   ctx: Ctx,
   filas: readonly Doc<"inasistencias">[],
 ) {
-  const nombres = new Map<Id<"users">, Promise<string>>();
-  const nombre = (id: Id<"users">) => {
-    if (!nombres.has(id)) {
-      nombres.set(
-        id,
-        ctx.db.get(id).then((u) => (u ? displayNameFromUser(u) : "(perfil eliminado)")),
-      );
-    }
-    return nombres.get(id)!;
-  };
+  const nombre = lectorDeNombres(ctx);
   return await Promise.all(
     filas.map(async (i) => ({
       _id: i._id,
@@ -353,22 +281,5 @@ export const detalle = query({
  */
 export const guardasElegibles = query({
   args: { companiaId: v.id("companiasSeguridad") },
-  handler: async (ctx, args) => {
-    const alcance = await alcanceEnCompania(ctx, args.companiaId, CAPACIDAD);
-    const miembros = (
-      await ctx.db
-        .query("companiaMiembros")
-        .withIndex("by_compania", (q) => q.eq("companiaId", args.companiaId))
-        .collect()
-    ).filter((m) => m.isActive && rolPrincipalDeCompania(m.roles) === "guardia");
-
-    const salida: { userId: Id<"users">; nombre: string }[] = [];
-    for (const m of miembros) {
-      if (!(await alcanzaAlGuarda(ctx, alcance, args.companiaId, m.userId))) continue;
-      const u = await ctx.db.get(m.userId);
-      if (!u) continue;
-      salida.push({ userId: m.userId, nombre: displayNameFromUser(u) });
-    }
-    return salida.sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
-  },
+  handler: async (ctx, args) => await elegibles(ctx, args.companiaId, CAPACIDAD),
 });

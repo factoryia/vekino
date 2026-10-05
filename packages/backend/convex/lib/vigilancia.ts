@@ -218,6 +218,14 @@ export const CAPACIDADES = [
    * El guarda no la tiene: no registra ni anula sus propias inasistencias.
    */
   "seguridad.inasistencias",
+  /**
+   * Registrar, consultar y finalizar el horario permanente de los guardas.
+   *
+   * El mismo reparto que las inasistencias —es la misma planificación—, y
+   * además el supervisor solo planifica en los conjuntos que supervisa. Es
+   * informativo: ninguna puerta de portería mira el horario.
+   */
+  "seguridad.horarios",
 ] as const;
 
 export type Capacidad = (typeof CAPACIDADES)[number];
@@ -255,7 +263,7 @@ const POR_ROL_CONJUNTO: Record<string, readonly Capacidad[]> = {
  */
 const POR_ROL_ASIGNACION: Record<string, readonly Capacidad[]> = {
   guardia: ["porteria.operar", "porteria.ver", "incidentes.ver", "incidentes.crear"],
-  supervisor: ["porteria.ver", "seguridad.asignar", "seguridad.inasistencias", "inventario.custodiar", "incidentes.ver", "incidentes.crear", "incidentes.gestionar"],
+  supervisor: ["porteria.ver", "seguridad.asignar", "seguridad.inasistencias", "seguridad.horarios", "inventario.custodiar", "incidentes.ver", "incidentes.crear", "incidentes.gestionar"],
 };
 
 /** Lo que habilita pertenecer a una compania, sin mirar conjunto alguno. */
@@ -284,6 +292,7 @@ const POR_ROL_COMPANIA: Record<string, readonly Capacidad[]> = {
     "incidentes.gestionar",
     "incidentes.cerrar",
     "seguridad.inasistencias",
+    "seguridad.horarios",
   ],
   supervisor: [],
   guardia: [],
