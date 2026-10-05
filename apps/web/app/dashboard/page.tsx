@@ -3,8 +3,10 @@
 import Link from "next/link";
 import { useQuery } from "convex/react";
 import {
+  ArrowLeftRight,
   Building2,
   CheckCircle2,
+  ShieldAlert,
   ShieldCheck,
   Users,
   DoorOpen,
@@ -12,11 +14,14 @@ import {
   ArrowUpRight,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
+import { etiquetaInstante } from "@vekino/backend/inasistencias";
 import {
   homeHrefForRoles,
   homeHrefForAsignacion,
   isGuardiaOnly,
+  sesionOperativa,
 } from "@/lib/role-routing";
+import { useMeOperativo } from "@/hooks/use-contexto-operativo";
 import { PageContainer } from "@/components/layout/page-container";
 import { PageHeader } from "@/components/layout/page-header";
 import { StatCard } from "@/components/layout/stat-card";
@@ -35,7 +40,7 @@ import { CHART } from "@/components/charts/chart-colors";
 import { cn } from "@/lib/utils";
 
 export default function DashboardHome() {
-  const me = useQuery(api.users.me);
+  const me = useMeOperativo();
 
   if (me === undefined) {
     return (
@@ -418,25 +423,73 @@ function UserHome({
 }: {
   me: NonNullable<ReturnType<typeof useQuery<typeof api.users.me>>>;
 }) {
+  /* Lo que se opera hoy. Con una cobertura activa, las vías de guarda de
+   * siempre no se ofrecen: la portería de hoy es la de la cobertura. */
+  const hoy = sesionOperativa(me);
+  const contexto = me.contextoOperativoGuardia;
   return (
     <PageContainer>
       <div className="space-y-6">
         <PageHeader title={`Hola, ${me.name}`} description={me.email} />
+        {contexto.cobertura && (
+          <Card className="border-brand/30">
+            <CardHeader className="mb-0">
+              <CardTitle className="flex items-center gap-2">
+                <ArrowLeftRight className="h-4 w-4 text-brand" />
+                Cobertura de hoy
+              </CardTitle>
+              <CardDescription>
+                Mientras dure, solo operas como guarda en este conjunto.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Link
+                href={homeHrefForAsignacion(contexto.cobertura.condominioId, "guardia")}
+                className="group flex items-center justify-between py-1 hover:text-brand"
+              >
+                <span className="flex flex-col">
+                  <span className="text-sm text-foreground">
+                    {contexto.cobertura.condominioNombre}
+                  </span>
+                  <span className="text-xs tabular-nums text-muted-foreground">
+                    {contexto.cobertura.companiaNombre} · hasta el{" "}
+                    {etiquetaInstante(contexto.cobertura.fin)} (hora de Colombia)
+                  </span>
+                </span>
+                <span className="text-xs text-brand">Portería →</span>
+              </Link>
+            </CardContent>
+          </Card>
+        )}
+        {contexto.tipo === "bloqueado" && (
+          <Card className="border-destructive/40">
+            <CardHeader className="mb-0">
+              <CardTitle className="flex items-center gap-2">
+                <ShieldAlert className="h-4 w-4 text-destructive" />
+                Operación como guarda en pausa
+              </CardTitle>
+              <CardDescription>
+                Tienes más de una cobertura activa a la vez. Hasta que tu compañía
+                lo corrija no puedes operar ninguna portería.
+              </CardDescription>
+            </CardHeader>
+          </Card>
+        )}
         <Card>
           <CardHeader className="mb-0">
             <CardTitle className="flex items-center gap-2">
               <Building2 className="h-4 w-4 text-brand" />
-              Mis condominios ({me.memberships.length})
+              Mis condominios ({hoy.memberships.length})
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {me.memberships.length === 0 ? (
+            {hoy.memberships.length === 0 ? (
               <p className="text-sm text-muted-foreground">
                 Aún no perteneces a ningún condominio.
               </p>
             ) : (
               <ul className="divide-y divide-border">
-                {me.memberships.map((m) => {
+                {hoy.memberships.map((m) => {
                   const canAdmin = m.roles.some((r) =>
                     ["administrador", "contadora"].includes(r),
                   );
@@ -475,12 +528,12 @@ function UserHome({
         {/* El otro eje. Quien trabaja aquí por una compañía de vigilancia no
             tiene membresía en el conjunto, y sin esta tarjeta la sesión se le
             quedaba en blanco. */}
-        {me.asignaciones.length > 0 && (
+        {hoy.asignaciones.length > 0 && (
           <Card>
             <CardHeader className="mb-0">
               <CardTitle className="flex items-center gap-2">
                 <ShieldCheck className="h-4 w-4 text-brand" />
-                Donde trabajo ({me.asignaciones.length})
+                Donde trabajo ({hoy.asignaciones.length})
               </CardTitle>
               <CardDescription>
                 Conjuntos que cubres por la compañía de vigilancia.
@@ -488,7 +541,7 @@ function UserHome({
             </CardHeader>
             <CardContent>
               <ul className="divide-y divide-border">
-                {me.asignaciones.map((a) => (
+                {hoy.asignaciones.map((a) => (
                   <li key={a.asignacionId}>
                     <Link
                       href={homeHrefForAsignacion(a.condominioId, a.rol)}

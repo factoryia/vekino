@@ -3,6 +3,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import { hasPlatformRole, requireAppUser } from "./authz";
 import { asignacionVigente } from "./asignacion";
 import { contratoVigente, getCompaniaMiembro, exigirAccesoCompania } from "./acceso";
+import { resolverContextoOperativoGuardia, viasOperativasEnConjunto } from "./vias";
 import { capacidadesDeRolAsignacion, capacidadesDeRolesCompania, type Capacidad } from "../lib/vigilancia";
 
 type Ctx = QueryCtx | MutationCtx;
@@ -45,11 +46,20 @@ export async function exigirAccesoIncidente(
   if (capacidadesDeRolesCompania(miembro.roles).has(capacidad)) {
     return { user, rol: "admin_compania" };
   }
-  const via = await asignacionVigente(ctx, user._id, condominioId);
-  if (!via || via.asignacion.companiaId !== companiaId || !capacidadesDeRolAsignacion(via.asignacion.rol).has(capacidad)) {
+  /* Supervisor y guarda, por sus vías OPERATIVAS (`model/vias.ts`): con una
+   * cobertura activa el guarda reporta en el conjunto que cubre —por la
+   * cobertura, con la compañía de la cobertura— y no en los suyos de siempre,
+   * cuya vía de guarda queda suspendida. La primera de la compañía que cuenta,
+   * como antes la asignación vigente. */
+  const { vias } = await viasOperativasEnConjunto(ctx, user._id, condominioId);
+  const via = vias.find(
+    (v): v is Extract<typeof v, { tipo: "asignacion" | "cobertura" }> =>
+      v.tipo !== "membership",
+  );
+  if (!via || via.companiaId !== companiaId || !capacidadesDeRolAsignacion(via.rol).has(capacidad)) {
     throw new Error(`No tiene permiso para esta operación (${capacidad}).`);
   }
-  return { user, rol: via.asignacion.rol };
+  return { user, rol: via.rol };
 }
 
 /** Para ID de caso: los tenants siempre salen del documento almacenado. */
@@ -155,9 +165,15 @@ export async function obtenerContextoBandeja(ctx: QueryCtx, incluirCreacion = tr
     const miembro = await getCompaniaMiembro(ctx, user._id);
     if (!miembro) return null;
     const admin = miembro.roles.includes("admin_compania");
-    const relaciones = admin
+    const relaciones: { companiaId: Id<"companiasSeguridad">; condominioId: Id<"condominios"> }[] = admin
       ? await ctx.db.query("companiaContratos").withIndex("by_compania", (q) => q.eq("companiaId", miembro.companiaId)).collect()
       : await ctx.db.query("asignaciones").withIndex("by_user", (q) => q.eq("userId", user._id)).collect();
+    /* El conjunto que el guarda cubre hoy también es suyo para reportar; los
+     * de siempre siguen en la lista y `exigirAccesoIncidente` decide. */
+    if (!admin) {
+      const contexto = await resolverContextoOperativoGuardia(ctx, user._id);
+      if (contexto.tipo === "cobertura") relaciones.push(contexto.via);
+    }
     const conjuntos = [];
     for (const condominioId of new Set(relaciones.filter((r) => r.companiaId === miembro.companiaId).map((r) => r.condominioId))) {
       let rol: RolAccesoIncidente;

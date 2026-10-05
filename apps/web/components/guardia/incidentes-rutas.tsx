@@ -7,12 +7,22 @@ import { PageContainer } from "@/components/layout/page-container";
 import { Skeleton } from "@/components/ui/skeleton";
 import { IncidentesInicio } from "@/components/vigilancia/incidentes-inicio";
 import { IncidenteCrear } from "@/components/vigilancia/incidente-crear";
+import { sesionOperativa } from "@/lib/role-routing";
+import { useMeOperativo } from "@/hooks/use-contexto-operativo";
 
+/* Donde el guarda reporta por su compañía, con lo que opera HOY: su
+ * asignación de guarda aquí o, si cubre este conjunto, la cobertura. El
+ * servidor lo vuelve a exigir al crear (`exigirAccesoIncidente`). */
 function useConjuntoCorporativo(condominioId: Id<"condominios">) {
-  const asignaciones = useQuery(api.asignaciones.misAsignaciones);
+  const me = useMeOperativo();
   const compania = useQuery(api.companias.miCompania);
-  if (asignaciones === undefined || compania === undefined) return undefined;
-  return asignaciones
+  if (me === undefined || compania === undefined) return undefined;
+  if (!me) return [];
+  const cobertura = me.contextoOperativoGuardia.cobertura;
+  if (cobertura?.condominioId === condominioId && cobertura.companiaId === compania?.companiaId) {
+    return [{ condominioId: cobertura.condominioId, condominioNombre: cobertura.condominioNombre }];
+  }
+  return sesionOperativa(me).asignaciones
     .filter((a) => a.condominioId === condominioId && a.companiaId === compania?.companiaId && a.rol === "guardia")
     .map((a) => ({ condominioId: a.condominioId, condominioNombre: a.condominioNombre }));
 }

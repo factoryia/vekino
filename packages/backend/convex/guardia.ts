@@ -6,12 +6,24 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   getCurrentAppUser,
+  getMembership,
+  requireAppUser,
   requireCondominioRole,
   hasPlatformRole,
   vigentes,
 } from "./model/authz";
 import { exigirAcceso, resolverAcceso } from "./model/acceso";
-import { membershipEn, viasDeGuardiaDelConjunto } from "./model/vias";
+import { viasDeAsignacionDe } from "./model/asignacion";
+import {
+  esViaDeGuarda,
+  primeraVia,
+  resolverContextoOperativoGuardia,
+  viasDeGuardiaDelConjunto,
+  viasDeMembershipDe,
+  viasEnConjunto,
+  viasOperativasEnConjunto,
+  type ContextoOperativoGuardia,
+} from "./model/vias";
 import { logMinuta, rondaEnCurso, turnoAbierto } from "./model/minuta";
 import {
   esVisitanteVigente,
@@ -79,9 +91,17 @@ export const generateUploadUrl = mutation({
 // Home / acceso
 // ─────────────────────────────────────────────────────────────
 
-/** Inicio del guardia: valida acceso y devuelve la marca del condominio. */
+/**
+ * Inicio del guardia: valida acceso y devuelve la marca del condominio.
+ *
+ * `refresco` no se lee. Convex no vuelve a ejecutar una consulta porque pase
+ * el tiempo, así que en el instante en que una cobertura empieza o termina
+ * (`users.me` → `contextoOperativoGuardia.refrescarEn`) el cliente cambia este
+ * número para pedir la respuesta de nuevo. Quién entra lo sigue decidiendo el
+ * servidor, con su reloj.
+ */
 export const home = query({
-  args: { condominioId: v.id("condominios") },
+  args: { condominioId: v.id("condominios"), refresco: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const user = await getCurrentAppUser(ctx);
     if (!user) return { allowed: false as const };
@@ -140,16 +160,18 @@ export const turnoActivo = query({
 /**
  * Los guardas que hoy pueden estar en la portería de un conjunto, activos.
  *
- * Un solo criterio para dos usos: el catálogo de compañeros y relevos
- * (`equipo`) y la comprobación del relevo en `cerrarTurno`. Si fueran dos
- * copias, el selector acabaría ofreciendo a alguien que el servidor rechaza.
+ * Un solo criterio para tres usos: el catálogo de compañeros y relevos
+ * (`equipo`, `relevosDelTurno`) y la comprobación del relevo en
+ * `cerrarTurno`. Si fueran dos copias, el selector acabaría ofreciendo a
+ * alguien que el servidor rechaza.
  *
  * El turno compartido es de la portería, no de la tabla de la que cuelgue
  * cada uno: los guardas que cubren por compañía son compañeros de turno igual
- * que los del conjunto. Los dos salen de `viasDeGuardiaDelConjunto`, que
+ * que los del conjunto. Todos salen de `viasDeGuardiaDelConjunto`, que
  * pregunta si cada persona tiene una vía de GUARDA en ESTE conjunto —no una
  * asignación cualquiera—, con la misma cadena con la que la portería la deja
- * entrar.
+ * entrar y con el contexto de cobertura aplicado: el guarda que hoy cubre
+ * otro conjunto no es relevo aquí, y el que cubre éste sí.
  */
 async function guardasDeLaPorteria(
   ctx: QueryCtx | MutationCtx,
@@ -224,9 +246,14 @@ export const iniciarTurno = mutation({
       if (!sec || !sec.active) throw new Error("Guardia secundario no válido.");
       /* Solo por la vía de membresía, como siempre: el guarda de compañía no
        * entra aquí por id (va por nombre). Abrirlo es un cambio de turnos,
-       * no de esta normalización. */
-      const { via: secVia } = await membershipEn(ctx, sec._id, args.condominioId);
-      if (!secVia?.roles.includes("guardia")) {
+       * no de esta normalización. Pero la membresía OPERATIVA: el guarda que
+       * hoy cubre otro conjunto no es compañero de turno aquí. */
+      const { vias: secVias } = await viasOperativasEnConjunto(
+        ctx,
+        sec._id,
+        args.condominioId,
+      );
+      if (!primeraVia(secVias, "membership")?.roles.includes("guardia")) {
         throw new Error("El guardia secundario no tiene rol de guardia en este conjunto.");
       }
       secundarioNombre = secundarioNombre || displayNameFromUser(sec);
@@ -275,10 +302,134 @@ export const iniciarTurno = mutation({
   },
 });
 
+function esDelTurno(turno: Doc<"guardiaTurnos">, userId: Id<"users">): boolean {
+  return turno.guardiaUserId === userId || turno.guardiaSecundarioUserId === userId;
+}
+
+/**
+ * LA EXCEPCIÓN DE LA COBERTURA.
+ *
+ * Con una cobertura activa el guarda opera solo en el conjunto que cubre: no
+ * abre turnos, ni registra rondas ni minuta en los demás. Pero si el turno que
+ * tenía abierto en su conjunto de siempre YA estaba abierto cuando la
+ * cobertura empezó, puede cerrarlo: dejar una portería con un turno huérfano
+ * que solo la administración puede cerrar sería peor que permitir esta única
+ * escritura.
+ *
+ * Todo tiene que ser cierto a la vez:
+ *   - el contexto es una cobertura (bloqueado no: ahí no opera en ninguna);
+ *   - el turno es de OTRO conjunto (en el de la cobertura ya opera);
+ *   - sigue abierto y es suyo (titular o secundario, lo de siempre);
+ *   - se abrió ANTES de que la cobertura empezara;
+ *   - y en ese conjunto sigue teniendo su vía permanente de guarda: la
+ *     excepción levanta la suspensión, no inventa una vía que ya no existe.
+ */
+async function puedeCerrarloPorCobertura(
+  ctx: QueryCtx | MutationCtx,
+  userId: Id<"users">,
+  turno: Doc<"guardiaTurnos">,
+  contexto: ContextoOperativoGuardia,
+): Promise<boolean> {
+  if (contexto.tipo !== "cobertura") return false;
+  if (contexto.via.condominioId === turno.condominioId) return false;
+  if (turno.estado !== "abierto" || !esDelTurno(turno, userId)) return false;
+  if (turno.fechaInicio >= contexto.via.cobertura.inicio) return false;
+  const { vias } = await viasEnConjunto(ctx, userId, turno.condominioId);
+  return vias.some(esViaDeGuarda);
+}
+
+/**
+ * Quién puede cerrar un turno: quien opera la portería, o el guarda del turno
+ * por la excepción de la cobertura. Lo comparten el cierre y la lista de
+ * relevos que se le ofrece, para que el formulario no ofrezca lo que el
+ * servidor rechaza.
+ */
+async function autorizarCierre(
+  ctx: QueryCtx | MutationCtx,
+  turno: Doc<"guardiaTurnos">,
+): Promise<{ user: Doc<"users">; membership: Doc<"memberships"> | null }> {
+  const user = await requireAppUser(ctx);
+  const contexto = await resolverContextoOperativoGuardia(ctx, user._id);
+  if (await puedeCerrarloPorCobertura(ctx, user._id, turno, contexto)) {
+    return { user, membership: await getMembership(ctx, user._id, turno.condominioId) };
+  }
+  return await requireCondominioRole(ctx, turno.condominioId, [...GUARD_ROLES]);
+}
+
+/**
+ * El turno que el guarda dejó abierto en su conjunto de siempre y que puede
+ * cerrar por la excepción de la cobertura, o null.
+ *
+ * Mientras cubre, la portería de ese conjunto ya no le abre (la web lo manda
+ * a la del que cubre), así que sin esto el cierre que el servidor permite no
+ * tendría desde dónde hacerse. Solo mira los conjuntos donde tiene vía
+ * permanente de guarda, que son uno o dos.
+ *
+ * `refresco`: el mismo número que `home`, para volver a preguntar cuando la
+ * cobertura empieza o termina.
+ */
+export const turnoPendienteDeCierre = query({
+  args: { refresco: v.optional(v.number()) },
+  handler: async (ctx) => {
+    const user = await getCurrentAppUser(ctx);
+    if (!user || !user.active) return null;
+    const contexto = await resolverContextoOperativoGuardia(ctx, user._id);
+    if (contexto.tipo !== "cobertura") return null;
+
+    const [membresias, asignaciones] = await Promise.all([
+      viasDeMembershipDe(ctx, user._id),
+      viasDeAsignacionDe(ctx, user._id),
+    ]);
+    const conjuntos = new Set<Id<"condominios">>(
+      [...membresias, ...asignaciones]
+        .filter(esViaDeGuarda)
+        .map((via) => via.condominioId),
+    );
+    for (const condominioId of conjuntos) {
+      const turno = await turnoAbierto(ctx, condominioId);
+      if (!turno || !(await puedeCerrarloPorCobertura(ctx, user._id, turno, contexto))) {
+        continue;
+      }
+      const [condominio, rondas] = await Promise.all([
+        ctx.db.get(condominioId),
+        ctx.db
+          .query("guardiaRondas")
+          .withIndex("by_turno", (q) => q.eq("turnoId", turno._id))
+          .collect(),
+      ]);
+      return {
+        turno: { ...turno, rondasCount: rondas.length },
+        condominioNombre: condominio?.name ?? "",
+      };
+    }
+    return null;
+  },
+});
+
+/**
+ * Los guardas a los que se puede entregar un turno: los de su portería, menos
+ * quien lo entrega. Con la misma autorización que el cierre, así que sirve
+ * también para el turno que se cierra por la excepción de la cobertura.
+ */
+export const relevosDelTurno = query({
+  args: { turnoId: v.id("guardiaTurnos") },
+  handler: async (ctx, args) => {
+    const turno = await ctx.db.get(args.turnoId);
+    if (!turno) return [];
+    const { user } = await autorizarCierre(ctx, turno);
+    const quienEntrega = [user._id, turno.guardiaUserId, turno.guardiaSecundarioUserId];
+    return (await guardasDeLaPorteria(ctx, turno.condominioId)).filter(
+      (g) => !quienEntrega.includes(g.userId),
+    );
+  },
+});
+
 /**
  * Cierre formal del turno: novedades de los elementos asignados, quién
  * recibe, consignas para el relevo y observaciones generales.
  * Solo el guardia del turno (principal o secundario) o un administrador.
+ * El guarda que hoy cubre otro conjunto puede cerrar el suyo si ya estaba
+ * abierto cuando empezó la cobertura (`puedeCerrarloPorCobertura`).
  *
  * Los elementos NO se reciben aquí: son el `checklist` que se firmó al iniciar
  * el turno y no se tocan. El cierre solo dice si volvieron con novedad; no
@@ -304,19 +455,13 @@ export const cerrarTurno = mutation({
   handler: async (ctx, args) => {
     const turno = await ctx.db.get(args.turnoId);
     if (!turno) throw new Error("Turno no encontrado.");
-    const { user, membership } = await requireCondominioRole(
-      ctx,
-      turno.condominioId,
-      [...GUARD_ROLES],
-    );
+    const { user, membership } = await autorizarCierre(ctx, turno);
     if (turno.estado !== "abierto") throw new Error("El turno ya está cerrado.");
 
     const esAdmin =
       hasPlatformRole(user, "superadmin", "admin") ||
       (membership?.roles ?? []).some((r) => (ADMIN_ROLES as readonly string[]).includes(r));
-    const esDelTurno =
-      turno.guardiaUserId === user._id || turno.guardiaSecundarioUserId === user._id;
-    if (!esAdmin && !esDelTurno) {
+    if (!esAdmin && !esDelTurno(turno, user._id)) {
       throw new Error("Solo el guardia del turno puede cerrarlo.");
     }
 

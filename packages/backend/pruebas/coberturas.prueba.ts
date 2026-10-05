@@ -7,6 +7,7 @@ import {
   decidirRespuesta,
   estaActiva,
   exigirInicioFuturo,
+  proximoCambioDeContexto,
   validarMotivoInhabilitacion,
   ventanaQueOcupa,
   type CoberturaParaReglas,
@@ -149,4 +150,26 @@ test("una cobertura que ocupa vuelve al guarda 'ocupado', en cualquier conjunto"
     coberturas: [{ id: "c", condominioId: "B", inicio: AHORA, fin: AHORA + 10 * HORA }],
   });
   assert.equal(pegada.estado, "disponible");
+});
+
+test("el proximo cambio de contexto: el inicio de la que viene o el fin de la que corre", () => {
+  assert.equal(proximoCambioDeContexto([], AHORA), null);
+
+  const futura = cobertura("aceptada");
+  assert.equal(proximoCambioDeContexto([futura], AHORA), futura.inicio);
+  // En el instante exacto del inicio ya corre: lo proximo es su fin.
+  assert.equal(proximoCambioDeContexto([futura], futura.inicio), futura.fin);
+  assert.equal(proximoCambioDeContexto([futura], futura.fin - 1), futura.fin);
+  // En el fin ya termino: no queda nada a la vista.
+  assert.equal(proximoCambioDeContexto([futura], futura.fin), null);
+
+  // Con varias, el mas proximo.
+  const despues = cobertura("aceptada", { inicio: AHORA + 20 * HORA, fin: AHORA + 22 * HORA });
+  assert.equal(proximoCambioDeContexto([despues, futura], AHORA + 7 * HORA), futura.fin);
+  assert.equal(proximoCambioDeContexto([despues, futura], AHORA + 19 * HORA), despues.inicio);
+
+  // Lo que no esta aceptado no cambia nada por el paso del tiempo.
+  for (const estado of ["solicitada", "rechazada", "cancelada", "inhabilitada"] as const) {
+    assert.equal(proximoCambioDeContexto([cobertura(estado)], AHORA), null, estado);
+  }
 });

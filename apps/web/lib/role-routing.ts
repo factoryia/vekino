@@ -94,3 +94,37 @@ export function homeHrefForCompania(
   if (rol === "supervisor") return "/vigilancia";
   return null;
 }
+
+/**
+ * La sesión tal como se OPERA hoy, según el contexto que resolvió el servidor
+ * (`users.me` → `contextoOperativoGuardia`).
+ *
+ * Con una cobertura activa —o con el contexto bloqueado— las vías de guarda de
+ * siempre quedan suspendidas: las asignaciones de guarda no se ofrecen, y las
+ * membresías pierden el rol `guardia` (y desaparecen si no tenían otro). Es la
+ * misma regla que aplica el backend (`aplicarContexto` en `model/vias.ts`), y
+ * aquí solo sirve para rutear y pintar: no decide si la cobertura está activa
+ * —eso viene en `tipo`— ni deja pasar a nadie, porque cada consulta y cada
+ * mutación lo vuelve a resolver en el servidor. Las listas originales siguen
+ * en `me` sin tocar: a ellas vuelve el guarda cuando la cobertura termina.
+ */
+export function sesionOperativa<
+  M extends { roles: string[] },
+  A extends { rol: string },
+>(me: {
+  memberships: M[];
+  asignaciones: A[];
+  contextoOperativoGuardia: { tipo: "permanente" | "cobertura" | "bloqueado" };
+}): { memberships: M[]; asignaciones: A[] } {
+  if (me.contextoOperativoGuardia.tipo === "permanente") {
+    return { memberships: me.memberships, asignaciones: me.asignaciones };
+  }
+  return {
+    memberships: me.memberships.flatMap((m) => {
+      if (!m.roles.includes("guardia")) return [m];
+      const roles = m.roles.filter((r) => r !== "guardia");
+      return roles.length > 0 ? [{ ...m, roles }] : [];
+    }),
+    asignaciones: me.asignaciones.filter((a) => a.rol !== "guardia"),
+  };
+}

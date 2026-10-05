@@ -26,10 +26,16 @@ import { Spinner } from "@/components/ui/spinner";
 import { CambiarClaveTemporalModal } from "@/components/cambiar-clave-temporal-modal";
 import { RecordatorioCierreTurno } from "@/components/guardia/recordatorio-cierre";
 import { SolicitudesCobertura } from "@/components/guardia/solicitudes-cobertura";
+import { AvisoCobertura } from "@/components/guardia/aviso-cobertura";
 import { WhatsappFab } from "@/components/whatsapp-fab";
 import { hexToHslChannels, hexToBrandForeground, cn, initials } from "@/lib/utils";
 import { BrandThemeProvider } from "@/lib/brand-theme";
-import { recibeRecordatorioCierre } from "@/lib/role-routing";
+import { recibeRecordatorioCierre, sesionOperativa } from "@/lib/role-routing";
+import {
+  useConservado,
+  useMeOperativo,
+  useRefrescoOperativo,
+} from "@/hooks/use-contexto-operativo";
 import { Footprints } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -96,11 +102,17 @@ function Redirect({ to }: { to: string }) {
 function Guard({ children }: { children: React.ReactNode }) {
   const params = useParams<{ id: string }>();
   const condominioId = params.id as Id<"condominios">;
-  const home = useQuery(api.guardia.home, { condominioId });
-  const asignaciones = useQuery(api.asignaciones.misAsignaciones);
+  /* `home` y `me` se vuelven a pedir en el instante en que una cobertura
+   * empieza o termina (`refresco`): Convex no lo haría solo, porque el paso
+   * del tiempo no cambia ningún dato. Quién entra lo decide el servidor. */
+  const refresco = useRefrescoOperativo();
+  const home = useConservado(
+    useQuery(api.guardia.home, refresco ? { condominioId, refresco } : { condominioId }),
+    condominioId,
+  );
   const compania = useQuery(api.companias.miCompania);
   // Ya suscrita por `CambiarClaveTemporalModal`: Convex comparte la consulta.
-  const me = useQuery(api.users.me);
+  const me = useMeOperativo();
 
   if (home === undefined) {
     return (
@@ -109,23 +121,46 @@ function Guard({ children }: { children: React.ReactNode }) {
       </Fullscreen>
     );
   }
-  if (!home.allowed) return <Redirect to="/dashboard" />;
+  const cobertura = me?.contextoOperativoGuardia.cobertura ?? null;
+  if (!home.allowed) {
+    /* La URL de otra portería no salta nada: el servidor ya dijo que aquí no
+     * entra. Si es porque hoy cubre otro conjunto, se le lleva allí. */
+    if (me === undefined) {
+      return (
+        <Fullscreen>
+          <Spinner className="h-5 w-5" />
+        </Fullscreen>
+      );
+    }
+    const destino =
+      cobertura && cobertura.condominioId !== condominioId
+        ? `/guardia/${cobertura.condominioId}`
+        : "/dashboard";
+    return <Redirect to={destino} />;
+  }
 
   const base = `/guardia/${condominioId}`;
-  const incidentesCorporativos = !!asignaciones?.some((a) =>
-    a.condominioId === condominioId && a.companiaId === compania?.companiaId && a.rol === "guardia");
+  /* Con lo que se opera hoy: con una cobertura activa, las vías de guarda de
+   * siempre no cuentan aquí y la cobertura sí, como una asignación de guarda
+   * de su compañía. */
+  const hoy = me ? sesionOperativa(me) : null;
+  const cubreAqui = cobertura?.condominioId === condominioId ? cobertura : null;
+  const asignacionesAqui = (hoy?.asignaciones ?? []).filter((a) => a.condominioId === condominioId);
+  const incidentesCorporativos =
+    asignacionesAqui.some((a) => a.companiaId === compania?.companiaId && a.rol === "guardia") ||
+    (!!cubreAqui && cubreAqui.companiaId === compania?.companiaId);
   /* Solo al guarda: a esta portería también entran administración y junta.
    * Hasta tener roles y asignaciones cargados no se decide nada. */
   const recordatorioCierre =
-    !!me &&
-    asignaciones !== undefined &&
+    !!hoy &&
     recibeRecordatorioCierre({
       esPlataforma: home.isPlatform,
       rolesConjunto:
-        me.memberships.find((m) => m.condominioId === condominioId)?.roles ?? [],
-      rolesAsignacion: asignaciones
-        .filter((a) => a.condominioId === condominioId)
-        .map((a) => a.rol),
+        hoy.memberships.find((m) => m.condominioId === condominioId)?.roles ?? [],
+      rolesAsignacion: [
+        ...asignacionesAqui.map((a) => a.rol),
+        ...(cubreAqui ? (["guardia"] as const) : []),
+      ],
     });
   const primary = home.condominio.primaryColor;
   const brandChannels = primary ? hexToHslChannels(primary) : null;
@@ -167,6 +202,9 @@ function Guard({ children }: { children: React.ReactNode }) {
               {/* Las solicitudes de cobertura del guarda, en cualquier página
                   de la portería. No sale si no hay nada pendiente. */}
               <SolicitudesCobertura />
+              {/* Hasta cuándo cubre este conjunto, y el turno que dejó abierto
+                  en el suyo, si lo hay. Solo sale en la portería que cubre. */}
+              <AvisoCobertura condominioId={condominioId} cobertura={cobertura} />
               {children}
             </div>
             <MobileBottomNav

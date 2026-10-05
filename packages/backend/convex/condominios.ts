@@ -174,13 +174,20 @@ export const get = query({
      *
      * Se acepta la vía de compañía además de la membresía: un guarda
      * contratado no tiene membresía en el conjunto y aun así necesita la
-     * marca para pintar su pantalla de portería. */
+     * marca para pintar su pantalla de portería. Y la cobertura, por lo
+     * mismo: el guarda que cubre este conjunto pinta su portería.
+     *
+     * Con las vías OPERATIVAS, como todo lo demás: mientras un guarda cubre
+     * otro conjunto, sus vías de guarda de aquí —la asignación y una
+     * membresía que solo es de guarda— no le abren la ficha. Sin cobertura,
+     * `rolesConjunto` es exactamente "tiene membresía activa". */
     const acceso = await resolverAcceso(ctx, args.condominioId);
     if (!acceso) throw new Error("No autenticado o perfil inexistente.");
     const pertenece =
       acceso.esPlataforma ||
-      !!acceso.membership?.isActive ||
-      !!acceso.asignacion;
+      acceso.rolesConjunto !== null ||
+      !!acceso.asignacion ||
+      !!acceso.cobertura;
     if (!pertenece) throw new Error("No tiene acceso a este conjunto.");
 
     return await ctx.db.get(args.condominioId);

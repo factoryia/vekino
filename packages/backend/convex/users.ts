@@ -7,6 +7,7 @@ import {
   internalQuery,
 } from "./_generated/server";
 import { api, internal } from "./_generated/api";
+import type { QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { authComponent, createAuth } from "./auth";
 import { verifyPassword } from "better-auth/crypto";
@@ -22,10 +23,38 @@ import { evaluarPassword } from "./lib/passwordFuerte";
 import { fijarPasswordDeCuenta } from "./model/credencial";
 import { resolveUserImage } from "./model/userImage";
 import { misAsignacionesVigentes } from "./model/asignacion";
-import { viasDeMembershipDe } from "./model/vias";
+import {
+  resolverContextoOperativoGuardia,
+  viasDeMembershipDe,
+  type ContextoOperativoGuardia,
+} from "./model/vias";
 import { miCompaniaDe } from "./model/acceso";
 import { scheduleDeleteS3Keys, s3KeyFromPublicUrl } from "./model/s3";
 import { normalizarTelefonoE164 } from "./lib/telefono";
+
+/**
+ * Dónde opera como guarda la persona AHORA, tal como lo necesita el cliente
+ * para rutear: la cobertura que la lleva a otro conjunto, si la hay, y cuándo
+ * volver a preguntar. Es el contexto de `model/vias.ts` sin los documentos
+ * internos; la decisión sigue siendo del servidor.
+ */
+function contextoParaSesion(contexto: ContextoOperativoGuardia) {
+  const cobertura =
+    contexto.tipo === "cobertura"
+      ? {
+          coberturaId: contexto.via.cobertura._id,
+          condominioId: contexto.via.condominioId,
+          condominioNombre: contexto.via.condominio.name,
+          condominioLogo: contexto.via.condominio.logo ?? null,
+          condominioColor: contexto.via.condominio.primaryColor ?? null,
+          companiaId: contexto.via.companiaId,
+          companiaNombre: contexto.via.compania.nombre,
+          inicio: contexto.via.cobertura.inicio,
+          fin: contexto.via.cobertura.fin,
+        }
+      : null;
+  return { tipo: contexto.tipo, cobertura, refrescarEn: contexto.refrescarEn };
+}
 
 /**
  * Estado de sesión + perfil + membresías del usuario actual.
@@ -33,66 +62,93 @@ import { normalizarTelefonoE164 } from "./lib/telefono";
  */
 export const me = query({
   args: {},
-  handler: async (ctx) => {
-    const user = await getCurrentAppUser(ctx);
-    if (!user) return null;
-
-    /* Las dos listas salen de las mismas vías que autorizan (`model/vias.ts`):
-     * lo que la sesión ofrece y lo que la portería deja pasar no pueden
-     * medirse con criterios distintos. */
-    const memberships = await viasDeMembershipDe(ctx, user._id);
-
-    const withCondominio = await Promise.all(
-      memberships.map(async (via) => {
-        const condominio = await ctx.db.get(via.condominioId);
-        return {
-          membershipId: via.membership._id,
-          condominioId: via.condominioId,
-          condominioName: condominio?.name ?? null,
-          condominioSubdomain: condominio?.subdomain ?? null,
-          condominioLogo: condominio?.logo ?? null,
-          condominioCoverImage: condominio?.coverImage ?? null,
-          condominioPrimaryColor: condominio?.primaryColor ?? null,
-          roles: via.roles,
-        };
-      }),
-    );
-
-    /* EL SEGUNDO EJE. `memberships` dice a qué conjuntos pertenece la persona;
-     * `asignaciones` dice en cuáles trabaja por una compañía de vigilancia.
-     * El supervisor y el guarda de compañía no tienen NINGUNA membresía —no
-     * son del conjunto, son de la empresa que lo cubre—, así que devolver
-     * solo lo de arriba los dejaba entrando a una sesión sin un solo conjunto
-     * a la vista. Van en un campo aparte, y no fingidos como membresías,
-     * porque no dan lo mismo: un guarda de compañía no es residente ni tiene
-     * unidades. */
-    const asignaciones = await misAsignacionesVigentes(ctx, user._id);
-
-    /* Y EL TERCERO. El administrador de una compañía no tiene membresía ni
-     * asignación: no pisa ninguna portería, administra la empresa que las
-     * cubre. Sin este campo entraba a una sesión sin un solo conjunto a la
-     * vista, aunque su empresa tuviera contratos vigentes con varios. */
-    const compania = await miCompaniaDe(ctx, user._id);
-
-    return {
-      id: user._id,
-      name: user.name,
-      email: user.email,
-      image: await resolveUserImage(ctx, user),
-      firstName: user.firstName,
-      lastName: user.lastName,
-      telefono: user.telefono,
-      active: user.active,
-      platformRole: user.platformRole ?? null,
-      isSuperadmin: user.platformRole === "superadmin",
-      /** Sigue usando la clave que le generó la administración. */
-      claveTemporal: user.claveTemporal === true,
-      memberships: withCondominio,
-      asignaciones,
-      compania,
-    };
-  },
+  handler: async (ctx) => await sesionActual(ctx),
 });
+
+/**
+ * Lo mismo que `me`, para quien necesita el contexto de guarda al día.
+ *
+ * `refresco` no se lee: es el número que el cliente cambia en
+ * `contextoOperativoGuardia.refrescarEn` para que Convex vuelva a ejecutar la
+ * consulta cuando el paso del tiempo cambia la respuesta (ver `guardia.home`).
+ * Va en una consulta aparte, y no como argumento opcional de `me`, porque un
+ * argumento obligaría a reescribir las veintisiete llamadas de la web y del
+ * móvil que piden `me` sin argumentos. La respuesta es la misma función.
+ */
+export const meOperativo = query({
+  args: { refresco: v.optional(v.number()) },
+  handler: async (ctx) => await sesionActual(ctx),
+});
+
+async function sesionActual(ctx: QueryCtx) {
+  const user = await getCurrentAppUser(ctx);
+  if (!user) return null;
+
+  /* Las dos listas salen de las mismas vías que autorizan (`model/vias.ts`):
+   * lo que la sesión ofrece y lo que la portería deja pasar no pueden
+   * medirse con criterios distintos. */
+  const memberships = await viasDeMembershipDe(ctx, user._id);
+
+  const withCondominio = await Promise.all(
+    memberships.map(async (via) => {
+      const condominio = await ctx.db.get(via.condominioId);
+      return {
+        membershipId: via.membership._id,
+        condominioId: via.condominioId,
+        condominioName: condominio?.name ?? null,
+        condominioSubdomain: condominio?.subdomain ?? null,
+        condominioLogo: condominio?.logo ?? null,
+        condominioCoverImage: condominio?.coverImage ?? null,
+        condominioPrimaryColor: condominio?.primaryColor ?? null,
+        roles: via.roles,
+      };
+    }),
+  );
+
+  /* EL SEGUNDO EJE. `memberships` dice a qué conjuntos pertenece la persona;
+   * `asignaciones` dice en cuáles trabaja por una compañía de vigilancia.
+   * El supervisor y el guarda de compañía no tienen NINGUNA membresía —no
+   * son del conjunto, son de la empresa que lo cubre—, así que devolver
+   * solo lo de arriba los dejaba entrando a una sesión sin un solo conjunto
+   * a la vista. Van en un campo aparte, y no fingidos como membresías,
+   * porque no dan lo mismo: un guarda de compañía no es residente ni tiene
+   * unidades. */
+  const asignaciones = await misAsignacionesVigentes(ctx, user._id);
+
+  /* Y EL TERCERO. El administrador de una compañía no tiene membresía ni
+   * asignación: no pisa ninguna portería, administra la empresa que las
+   * cubre. Sin este campo entraba a una sesión sin un solo conjunto a la
+   * vista, aunque su empresa tuviera contratos vigentes con varios. */
+  const compania = await miCompaniaDe(ctx, user._id);
+
+  /* Y dónde opera como guarda AHORA. Las asignaciones de arriba siguen
+   * siendo todas las permanentes —a ellas vuelve cuando la cobertura
+   * termina—; esto dice si hoy una cobertura las suspende y lo lleva a otro
+   * conjunto. El cliente lo usa para rutear, no para decidir: cada consulta
+   * y cada mutación de la portería lo vuelve a resolver en el servidor. */
+  const contextoOperativoGuardia = contextoParaSesion(
+    await resolverContextoOperativoGuardia(ctx, user._id),
+  );
+
+  return {
+    id: user._id,
+    name: user.name,
+    email: user.email,
+    image: await resolveUserImage(ctx, user),
+    firstName: user.firstName,
+    lastName: user.lastName,
+    telefono: user.telefono,
+    active: user.active,
+    platformRole: user.platformRole ?? null,
+    isSuperadmin: user.platformRole === "superadmin",
+    /** Sigue usando la clave que le generó la administración. */
+    claveTemporal: user.claveTemporal === true,
+    memberships: withCondominio,
+    asignaciones,
+    compania,
+    contextoOperativoGuardia,
+  };
+}
 
 /**
  * Crea (o enlaza) el perfil de aplicación del usuario autenticado con Better

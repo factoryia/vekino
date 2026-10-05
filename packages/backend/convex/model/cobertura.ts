@@ -1,17 +1,26 @@
 import type { QueryCtx, MutationCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
-import { estaActiva, ventanaQueOcupa } from "../lib/coberturas";
+import {
+  estaActiva,
+  proximoCambioDeContexto,
+  ventanaQueOcupa,
+} from "../lib/coberturas";
 import type { CoberturaQueOcupa } from "../lib/disponibilidad";
+import { estaVigente } from "../lib/vigilancia";
+import { cacheDeCadena, type CacheDeCadena } from "./asignacion";
+import { rolPrincipalDeCompania } from "./roles";
 
 type Ctx = QueryCtx | MutationCtx;
 
 /**
- * Las coberturas de un guarda leídas para dos preguntas que no son de acceso:
- * qué lo ocupa (disponibilidad) y cuáles están activas ahora.
+ * Las coberturas de un guarda leídas para tres preguntas: qué lo ocupa
+ * (disponibilidad), cuáles están activas (pantalla) y cuál le da HOY una vía
+ * de guarda en otro conjunto (acceso).
  *
- * Ninguna de las dos da acceso a nada en esta fase: una cobertura aceptada es
- * un compromiso confirmado, no una vía. Las reglas viven en
- * `lib/coberturas.ts`; aquí solo se leen las filas.
+ * Solo la tercera da acceso, y no la da la fila sola: la da la cobertura
+ * aceptada, dentro de su ventana, que además pasa su propia cadena. Las reglas
+ * del ciclo de vida viven en `lib/coberturas.ts`; aquí se leen las filas y se
+ * juzga la cadena.
  */
 
 async function deEstado(
@@ -24,6 +33,23 @@ async function deEstado(
     .query("coberturas")
     .withIndex("by_user_estado", (q) =>
       q.eq("userId", userId).eq("estado", estado).lt("inicio", antesDe),
+    )
+    .collect();
+}
+
+/**
+ * Las aceptadas de un guarda que todavía no terminan: la que corre y las que
+ * vienen. Por `fin`, así que el histórico no se recorre.
+ */
+async function aceptadasSinTerminar(
+  ctx: Ctx,
+  userId: Id<"users">,
+  ahora: number,
+): Promise<Doc<"coberturas">[]> {
+  return await ctx.db
+    .query("coberturas")
+    .withIndex("by_user_estado_fin", (q) =>
+      q.eq("userId", userId).eq("estado", "aceptada").gt("fin", ahora),
     )
     .collect();
 }
@@ -50,13 +76,188 @@ export async function coberturasQueOcupan(
 
 /**
  * Las coberturas activas de un guarda: aceptadas y con `ahora` dentro de su
- * ventana. Derivado al leer, nunca guardado.
+ * ventana. Derivado al leer, nunca guardado. Es la lista que se PINTA: no
+ * mira la cadena, eso es cosa de `coberturaActivaDeGuardia`.
  */
 export async function coberturasActivasDe(
   ctx: Ctx,
   userId: Id<"users">,
   ahora: number,
 ): Promise<Doc<"coberturas">[]> {
-  const aceptadas = await deEstado(ctx, userId, "aceptada", ahora + 1);
-  return aceptadas.filter((c) => estaActiva(c, ahora));
+  const vivas = await aceptadasSinTerminar(ctx, userId, ahora);
+  return vivas.filter((c) => estaActiva(c, ahora));
+}
+
+/**
+ * Una cobertura que da acceso AHORA, con la procedencia a la vista.
+ *
+ * Tiene los mismos campos de arriba que las otras vías de `model/vias.ts`
+ * —quién, dónde, por qué compañía, con qué rol— y los documentos que la
+ * prueban. El rol es siempre `guardia`: solo un guarda de la compañía puede
+ * cubrir (`exigirElegible` en `coberturas.ts`).
+ */
+export type ViaCobertura = {
+  tipo: "cobertura";
+  userId: Id<"users">;
+  condominioId: Id<"condominios">;
+  companiaId: Id<"companiasSeguridad">;
+  rol: "guardia";
+  cobertura: Doc<"coberturas">;
+  contrato: Doc<"companiaContratos">;
+  compania: Doc<"companiasSeguridad">;
+  condominio: Doc<"condominios">;
+};
+
+/** La persona sigue de alta en la compañía, y como guarda. */
+async function guardaDeAlta(
+  ctx: Ctx,
+  companiaId: Id<"companiasSeguridad">,
+  userId: Id<"users">,
+): Promise<boolean> {
+  const filas = await ctx.db
+    .query("companiaMiembros")
+    .withIndex("by_compania_user", (q) =>
+      q.eq("companiaId", companiaId).eq("userId", userId),
+    )
+    .collect();
+  return filas.some(
+    (m) => m.isActive && rolPrincipalDeCompania(m.roles) === "guardia",
+  );
+}
+
+/*
+ * LA CADENA DE LA COBERTURA.
+ *
+ * Los mismos cinco eslabones que la asignación (`model/asignacion.ts`), sobre
+ * la fila de la cobertura en vez de la de la asignación:
+ *
+ *   1. aceptada y `ahora` dentro de [inicio, fin)  → `estaActiva`;
+ *   2. su contrato existe, es del mismo par compañía-conjunto y está vigente
+ *      (terminarlo corta la cobertura en ese instante);
+ *   3. la compañía está activa (suspenderla la corta);
+ *   4. el guarda sigue de alta en ella, como guarda (darlo de baja la corta);
+ *   5. el conjunto existe y está activo.
+ *
+ * Ninguna fila se toca: cuando un eslabón cae, la cobertura deja de ser vía
+ * al leer, y el guarda vuelve a sus vías permanentes sin que nadie haga nada.
+ * El contrato, la compañía y el conjunto se leen con los lectores de la
+ * cadena de asignación, para compartir el caché cuando se juzgan varias.
+ */
+async function viaDeCobertura(
+  ctx: Ctx,
+  c: Doc<"coberturas">,
+  ahora: number,
+  cache: CacheDeCadena,
+): Promise<ViaCobertura | null> {
+  if (!estaActiva(c, ahora)) return null;
+
+  const contrato = await cache.contrato(c.contratoId);
+  if (
+    !contrato ||
+    contrato.companiaId !== c.companiaId ||
+    contrato.condominioId !== c.condominioId ||
+    !estaVigente(contrato, ahora)
+  ) {
+    return null;
+  }
+
+  const compania = await cache.compania(c.companiaId);
+  if (!compania || compania.estado !== "activa") return null;
+
+  if (!(await guardaDeAlta(ctx, c.companiaId, c.userId))) return null;
+
+  const condominio = await cache.condominio(c.condominioId);
+  if (!condominio || !condominio.isActive) return null;
+
+  return {
+    tipo: "cobertura",
+    userId: c.userId,
+    condominioId: c.condominioId,
+    companiaId: c.companiaId,
+    rol: "guardia",
+    cobertura: c,
+    contrato,
+    compania,
+    condominio,
+  };
+}
+
+/**
+ * La cobertura con la que un guarda opera HOY, si tiene una.
+ *
+ *   ninguna       → opera con sus vías permanentes, como siempre;
+ *   activa        → opera como guarda SOLO en el conjunto de la cobertura;
+ *   inconsistente → hay más de una que pasa la cadena a la vez. No debería
+ *                   ocurrir —crear y aceptar rechazan los choques—, y si
+ *                   ocurre no se elige ninguna: elegir sería adivinar en qué
+ *                   portería está. Quien pregunta lo trata como bloqueo.
+ *
+ * `refrescarEn` es el próximo instante en que la respuesta cambia sola (ver
+ * `proximoCambioDeContexto`). Se calcula con TODAS las aceptadas que no han
+ * terminado, pasen o no su cadena: es solo un aviso de cuándo volver a
+ * preguntar, y preguntar de más no cuesta nada.
+ */
+export type CoberturaActivaDeGuardia =
+  | { estado: "ninguna"; refrescarEn: number | null }
+  | { estado: "activa"; via: ViaCobertura; refrescarEn: number | null }
+  | {
+      estado: "inconsistente";
+      coberturaIds: Id<"coberturas">[];
+      refrescarEn: number | null;
+    };
+
+export async function coberturaActivaDeGuardia(
+  ctx: Ctx,
+  userId: Id<"users">,
+  ahora: number = Date.now(),
+): Promise<CoberturaActivaDeGuardia> {
+  const vivas = await aceptadasSinTerminar(ctx, userId, ahora);
+  const refrescarEn = proximoCambioDeContexto(vivas, ahora);
+  if (vivas.length === 0) return { estado: "ninguna", refrescarEn };
+
+  const cache = cacheDeCadena(ctx);
+  const vias = (
+    await Promise.all(vivas.map((c) => viaDeCobertura(ctx, c, ahora, cache)))
+  ).filter((v): v is ViaCobertura => v !== null);
+
+  const [unica, ...otras] = vias;
+  if (!unica) return { estado: "ninguna", refrescarEn };
+  if (otras.length === 0) return { estado: "activa", via: unica, refrescarEn };
+  return {
+    estado: "inconsistente",
+    coberturaIds: vias.map((v) => v.cobertura._id),
+    refrescarEn,
+  };
+}
+
+/**
+ * Las coberturas que HOY dan vía de guarda en un conjunto, de cualquier
+ * persona: los guardas que llegan a esta portería de paso.
+ *
+ * Cada una se confirma contra el contexto de su guarda: si esa persona tiene
+ * dos activas a la vez no está en ninguna de las dos porterías, y no puede
+ * salir como relevo en ésta.
+ */
+export async function coberturasActivasEnConjunto(
+  ctx: Ctx,
+  condominioId: Id<"condominios">,
+  ahora: number = Date.now(),
+): Promise<ViaCobertura[]> {
+  const filas = await ctx.db
+    .query("coberturas")
+    .withIndex("by_condominio_estado_fin", (q) =>
+      q.eq("condominioId", condominioId).eq("estado", "aceptada").gt("fin", ahora),
+    )
+    .collect();
+  const vias = await Promise.all(
+    filas
+      .filter((c) => estaActiva(c, ahora))
+      .map(async (c) => {
+        const suya = await coberturaActivaDeGuardia(ctx, c.userId, ahora);
+        return suya.estado === "activa" && suya.via.cobertura._id === c._id
+          ? suya.via
+          : null;
+      }),
+  );
+  return vias.filter((v): v is ViaCobertura => v !== null);
 }

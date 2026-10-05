@@ -14,8 +14,9 @@
  * rehabilita. Si hace falta otra vez, se crea otra cobertura.
  *
  * "Activa" NO es un estado guardado: se deriva (aceptada y ahora dentro de la
- * ventana). Y aceptada no es acceso concedido: en esta fase la cobertura solo
- * confirma el compromiso; el acceso operativo llega después.
+ * ventana). Aceptada tampoco es acceso: el acceso lo da la cobertura activa
+ * que además pasa su cadena (contrato, compañía, guarda y conjunto), y eso se
+ * resuelve en `model/cobertura.ts`, al leer.
  */
 
 export const ESTADOS_COBERTURA = [
@@ -149,4 +150,29 @@ export function ventanaQueOcupa(
  */
 export function estaActiva(c: CoberturaParaReglas, ahora: number): boolean {
   return c.estado === "aceptada" && c.inicio <= ahora && ahora < c.fin;
+}
+
+/**
+ * El próximo instante en que el contexto operativo de un guarda cambia solo,
+ * por el paso del tiempo, o null si no hay ninguno a la vista.
+ *
+ * Es el `inicio` de la próxima aceptada que aún no empezó, o el `fin` de la
+ * que está corriendo. Lo que cambia por una escritura —inhabilitar, cancelar,
+ * terminar un contrato— no hace falta anunciarlo: Convex vuelve a ejecutar la
+ * consulta por su cuenta. El paso del tiempo no, y por eso existe esto.
+ *
+ * No decide nada: le dice al cliente cuándo volver a PREGUNTAR. La respuesta
+ * sigue saliendo del servidor con su propio reloj.
+ */
+export function proximoCambioDeContexto(
+  coberturas: readonly CoberturaParaReglas[],
+  ahora: number,
+): number | null {
+  let proximo: number | null = null;
+  for (const c of coberturas) {
+    if (c.estado !== "aceptada" || c.fin <= ahora) continue;
+    const limite = c.inicio > ahora ? c.inicio : c.fin;
+    if (proximo === null || limite < proximo) proximo = limite;
+  }
+  return proximo;
 }

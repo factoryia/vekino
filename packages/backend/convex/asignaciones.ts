@@ -653,6 +653,17 @@ export const miAcceso = query({
             contratoHasta: acceso.contrato?.vigenciaHasta ?? null,
           }
         : null,
+      /* Y si opera aquí de paso, por una cobertura: "cubres este conjunto
+       * por Seguridad Andina hasta las 18:00". */
+      viaCobertura: acceso.cobertura
+        ? {
+            coberturaId: acceso.cobertura.cobertura._id,
+            companiaId: acceso.cobertura.companiaId,
+            companiaNombre: acceso.cobertura.compania.nombre,
+            inicio: acceso.cobertura.cobertura.inicio,
+            fin: acceso.cobertura.cobertura.fin,
+          }
+        : null,
     };
   },
 });

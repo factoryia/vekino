@@ -19,7 +19,9 @@ import {
   homeHrefForRoles,
   homeHrefForAsignacion,
   homeHrefForCompania,
+  sesionOperativa,
 } from "@/lib/role-routing";
+import { useMeOperativo } from "@/hooks/use-contexto-operativo";
 import {
   PlatformSidebar,
   PlatformMobileNav,
@@ -70,7 +72,9 @@ function Redirect({ to }: { to: string }) {
 
 function Shell({ children }: { children: React.ReactNode }) {
   const ensureProfile = useMutation(api.users.ensureProfile);
-  const me = useQuery(api.users.me);
+  /* Con el contexto de guarda al día: si una cobertura empieza o termina con
+   * la sesión abierta, el ruteo de abajo se vuelve a decidir solo. */
+  const me = useMeOperativo();
   const pathname = usePathname();
 
   // Cuando `me` aún es null, el JWT puede no haber llegado: reintentamos al
@@ -107,13 +111,33 @@ function Shell({ children }: { children: React.ReactNode }) {
     return <Redirect to={homeHrefForCompania("admin_compania", me.compania.companiaId)!} />;
   }
 
+  /* El ruteo de abajo mira la sesión como se OPERA hoy: con una cobertura
+   * activa, las vías de guarda de siempre no cuentan (`sesionOperativa`). Sin
+   * esto, el guarda que cubre otro conjunto acababa en su portería de siempre,
+   * que el servidor ya no le abre, y de vuelta aquí: un bucle. */
+  const hoy = sesionOperativa(me);
+  const cobertura = me.contextoOperativoGuardia.cobertura;
+
+  /* Con una cobertura activa, su portería de hoy es la que cubre. Solo si no
+   * le queda nada más que atender: el residente o el administrador de un
+   * conjunto siguen entrando a su panel, con la cobertura a la vista. */
   if (
     !isPlatform && !administraCompania &&
-    me.memberships.length === 1 &&
-    me.memberships[0] &&
-    me.asignaciones.length === 0
+    cobertura &&
+    hoy.memberships.length === 0 &&
+    hoy.asignaciones.length === 0
   ) {
-    const m = me.memberships[0];
+    return <Redirect to={homeHrefForAsignacion(cobertura.condominioId, "guardia")} />;
+  }
+
+  if (
+    !isPlatform && !administraCompania &&
+    hoy.memberships.length === 1 &&
+    hoy.memberships[0] &&
+    hoy.asignaciones.length === 0 &&
+    !cobertura
+  ) {
+    const m = hoy.memberships[0];
     return <Redirect to={homeHrefForRoles(m.condominioId, m.roles)} />;
   }
 
@@ -121,10 +145,10 @@ function Shell({ children }: { children: React.ReactNode }) {
    * no al conjunto. Sin esta rama caía en el panel de "Mis condominios" con
    * la lista vacía —entraba bien y no veía nada— porque todo el ruteo se
    * apoyaba solo en `memberships`. */
-  if (!isPlatform && !administraCompania && me.memberships.length === 0 && me.asignaciones.length > 0) {
+  if (!isPlatform && !administraCompania && hoy.memberships.length === 0 && hoy.asignaciones.length > 0) {
     /* El supervisor primero: su panel es transversal a todos sus conjuntos,
      * así que cubre también al que supervisa varios. */
-    const supervisa = me.asignaciones.find((a) => a.rol === "supervisor");
+    const supervisa = hoy.asignaciones.find((a) => a.rol === "supervisor");
     if (supervisa) {
       return (
         <Redirect
@@ -132,8 +156,8 @@ function Shell({ children }: { children: React.ReactNode }) {
         />
       );
     }
-    if (me.asignaciones.length === 1 && me.asignaciones[0]) {
-      const a = me.asignaciones[0];
+    if (hoy.asignaciones.length === 1 && hoy.asignaciones[0]) {
+      const a = hoy.asignaciones[0];
       return <Redirect to={homeHrefForAsignacion(a.condominioId, a.rol)} />;
     }
   }
@@ -150,8 +174,8 @@ function Shell({ children }: { children: React.ReactNode }) {
    * desempatar entre "tiene guardia" y "además tiene supervisor". */
   if (
     !isPlatform &&
-    me.memberships.length === 0 &&
-    me.asignaciones.length === 0 &&
+    hoy.memberships.length === 0 &&
+    hoy.asignaciones.length === 0 &&
     me.compania
   ) {
     const destino = homeHrefForCompania(

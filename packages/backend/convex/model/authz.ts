@@ -2,7 +2,12 @@ import type { QueryCtx, MutationCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { OperationalRole, PlatformRole } from "./roles";
 import { asignacionVigente } from "./asignacion";
-import { getMembership, membershipEn } from "./vias";
+import {
+  getMembership,
+  membershipEn,
+  motivoDeSuspension,
+  resolverContextoOperativoGuardia,
+} from "./vias";
 
 /* La lectura de la membresía vive con las demás vías en `model/vias.ts`. Se
  * reexporta porque casi cuarenta módulos la importan desde aquí. */
@@ -107,9 +112,12 @@ export async function misUnidadIds(
  * Exige que el usuario actual pertenezca al condominio con al menos uno de los
  * roles indicados. Superadmin/admin de plataforma tienen paso libre.
  *
- * Pregunta por las vías de `model/vias.ts` en orden y se detiene en la
- * primera que basta: un residente no paga la lectura de asignaciones en cada
- * llamada. El resultado es el mismo que pedirlas todas de golpe.
+ * Decide con las vías OPERATIVAS de `model/vias.ts` —las permanentes con el
+ * contexto de guarda aplicado—, las mismas con las que `resolverAcceso` suma
+ * capacidades. Las pregunta en orden y se detiene en la primera que basta: un
+ * residente o un administrador no pagan la lectura de asignaciones ni la de
+ * coberturas en cada llamada. El resultado es el mismo que pedirlas todas de
+ * golpe y aplicarles `aplicarContexto`.
  */
 export async function requireCondominioRole(
   ctx: Ctx,
@@ -128,12 +136,37 @@ export async function requireCondominioRole(
     return { user, membership };
   }
 
-  if (
-    porMembresia &&
-    (roles.length === 0 || porMembresia.roles.some((r) => roles.includes(r)))
-  ) {
+  const admite = (rs: readonly string[]) =>
+    roles.length === 0 || rs.some((r) => roles.includes(r as OperationalRole));
+  const pideGuardia = roles.includes("guardia" as OperationalRole);
+  const sinPermiso = () =>
+    new Error(
+      porMembresia
+        ? "No tiene el rol requerido en este condominio."
+        : "No pertenece a este condominio.",
+    );
+
+  /* PRIMERA VÍA, sin su parte de guarda: la membresía.
+   *
+   * Lo que no es de guarda no depende de ninguna cobertura —el residente sigue
+   * siendo residente y el administrador sigue administrando—, así que si basta
+   * con eso se pasa sin mirar nada más. Una membresía que SOLO es de guarda no
+   * cuenta aquí: con una cobertura activa queda suspendida entera. */
+  const rolesNoGuarda = porMembresia?.roles.filter((r) => r !== "guardia") ?? [];
+  const sobreviveSinGuarda =
+    !!porMembresia &&
+    (rolesNoGuarda.length > 0 || !porMembresia.roles.includes("guardia"));
+  if (sobreviveSinGuarda && admite(rolesNoGuarda)) {
     return { user, membership };
   }
+
+  /* De aquí en adelante solo se pasa COMO GUARDA: por el rol `guardia` de la
+   * membresía, por una asignación de guarda o por una cobertura. Si la
+   * operación no admite a un guarda y la membresía no pasaba por ese rol, no
+   * hay nada más que mirar. */
+  const porMembresiaDeGuarda =
+    !!porMembresia && porMembresia.roles.includes("guardia") && admite(porMembresia.roles);
+  if (!porMembresiaDeGuarda && !pideGuardia) throw sinPermiso();
 
   /* SEGUNDA VÍA: el guarda que llega por una compañía de vigilancia.
    *
@@ -150,15 +183,38 @@ export async function requireCondominioRole(
    * contratada no es parte de la comunidad, y esa puerta debe seguir cerrada.
    *
    * `asignacionVigente` comprueba la cadena entera (asignación, contrato,
-   * compañía activa, miembro no dado de baja), así que el acceso se corta
-   * solo el día que cualquiera de esos eslabones caduque. */
-  if (roles.includes("guardia" as OperationalRole)) {
-    const via = await asignacionVigente(ctx, user._id, condominioId);
-    if (via && via.rol === "guardia") return { user, membership };
+   * compañía activa, miembro no dado de baja, conjunto activo), así que el
+   * acceso se corta solo el día que cualquiera de esos eslabones caduque.
+   *
+   * Y antes de usar cualquier vía de guarda, el contexto: con una cobertura
+   * activa la persona opera como guarda SOLO en el conjunto que cubre. */
+  const contexto = await resolverContextoOperativoGuardia(ctx, user._id);
+
+  if (contexto.tipo === "permanente") {
+    if (porMembresiaDeGuarda) return { user, membership };
+    if (pideGuardia) {
+      const via = await asignacionVigente(ctx, user._id, condominioId);
+      if (via && via.rol === "guardia") return { user, membership };
+    }
+    throw sinPermiso();
   }
 
-  if (!porMembresia) {
-    throw new Error("No pertenece a este condominio.");
+  /* TERCERA VÍA: la cobertura, solo en su conjunto y solo como guarda. */
+  if (
+    pideGuardia &&
+    contexto.tipo === "cobertura" &&
+    contexto.via.condominioId === condominioId
+  ) {
+    return { user, membership };
   }
-  throw new Error("No tiene el rol requerido en este condominio.");
+
+  /* Las vías permanentes de guarda están suspendidas. Si aquí habría pasado
+   * por una de ellas, se le dice por qué no pasa ahora: "no pertenece" sería
+   * falso y no le diría a dónde ir. */
+  const suspendida =
+    porMembresiaDeGuarda ||
+    (pideGuardia &&
+      (await asignacionVigente(ctx, user._id, condominioId))?.rol === "guardia");
+  if (suspendida) throw new Error(motivoDeSuspension(contexto));
+  throw sinPermiso();
 }

@@ -2,7 +2,7 @@ import type { QueryCtx, MutationCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import { getCurrentAppUser, hasPlatformRole } from "./authz";
 import { asignacionVigente, condominiosSupervisados } from "./asignacion";
-import { primeraVia, viasEnConjunto } from "./vias";
+import { primeraVia, viasOperativasEnConjunto, type ViaCobertura } from "./vias";
 
 import {
   capacidadesDePlataforma,
@@ -43,6 +43,12 @@ export type Acceso = {
   /** Membresía en el conjunto, si la tiene. Eje residencial. */
   membership: Doc<"memberships"> | null;
   /**
+   * Los roles con los que opera AHORA por esa membresía, o null si no opera
+   * por ella (no la tiene, está inactiva, o era solo de guarda y una
+   * cobertura la suspende). Sin cobertura son los roles de la fila activa.
+   */
+  rolesConjunto: Doc<"memberships">["roles"] | null;
+  /**
    * Asignación vigente en ESTE conjunto, si la tiene. Eje seguridad. Es la
    * primera vía de asignación de `viasEnConjunto` (en la práctica, la única).
    */
@@ -50,6 +56,14 @@ export type Acceso = {
   /** El contrato que ampara esa asignación. */
   contrato: Doc<"companiaContratos"> | null;
   compania: Doc<"companiasSeguridad"> | null;
+  /**
+   * La cobertura temporal con la que opera HOY como guarda en ESTE conjunto,
+   * si la tiene, con su contrato y su compañía. Va aparte de `asignacion`,
+   * `contrato` y `compania` a propósito: esos tres siguen siendo la vía
+   * permanente de la compañía, y quien los lee —el inventario del supervisor,
+   * el contacto del equipo— no tiene nada que hacer con un guarda de paso.
+   */
+  cobertura: ViaCobertura | null;
   capacidades: Set<Capacidad>;
 };
 
@@ -143,8 +157,10 @@ export async function contratoVigente(
 /**
  * Resuelve todo lo que una persona puede hacer en un conjunto.
  *
- * Coste acotado: como mucho cinco lecturas por índice, ninguna de colección
- * completa. Importa porque las queries del shell (`guardia.home`,
+ * Coste acotado: como mucho seis lecturas por índice —la sexta, la de las
+ * coberturas vivas del usuario, casi siempre vacía— más los documentos de la
+ * cadena de una cobertura solo para quien tiene una corriendo; ninguna de
+ * colección completa. Importa porque las queries del shell (`guardia.home`,
  * `condominios.adminHome`) corren en CADA página, y su propio código ya
  * advierte de eso. Resolver una vez por función y pasar el resultado; nunca
  * llamar a esto varias veces en el mismo handler.
@@ -157,12 +173,22 @@ export async function resolverAcceso(
   if (!user || !user.active) return null;
 
   const esPlataforma = hasPlatformRole(user, "superadmin", "admin");
-  /* Todas las vías de una vez (`model/vias.ts`). De cada clase se usa la
-   * primera, como siempre: la membresía es única por conjunto y, con la regla
-   * 3 de `asignaciones.crear`, también la asignación viva. */
-  const { membership, vias } = await viasEnConjunto(ctx, user._id, condominioId);
+  /* Todas las vías OPERATIVAS de una vez (`model/vias.ts`): las permanentes
+   * con el contexto de guarda aplicado, el mismo criterio con el que decide
+   * `requireCondominioRole`. Con una cobertura activa, las vías de guarda de
+   * los demás conjuntos no aparecen aquí y la cobertura sí, en el suyo.
+   *
+   * De cada clase se usa la primera, como siempre: la membresía es única por
+   * conjunto, con la regla 3 de `asignaciones.crear` también la asignación
+   * viva, y la cobertura que da vía es como mucho una. */
+  const { membership, vias } = await viasOperativasEnConjunto(
+    ctx,
+    user._id,
+    condominioId,
+  );
   const viaMembership = primeraVia(vias, "membership");
   const viaCompania = primeraVia(vias, "asignacion");
+  const viaCobertura = primeraVia(vias, "cobertura");
 
   // El staff de plataforma mantiene el paso libre que ya tiene hoy.
   if (esPlataforma) {
@@ -170,9 +196,11 @@ export async function resolverAcceso(
       user,
       esPlataforma,
       membership,
+      rolesConjunto: viaMembership?.roles ?? null,
       asignacion: viaCompania?.asignacion ?? null,
       contrato: viaCompania?.contrato ?? null,
       compania: viaCompania?.compania ?? null,
+      cobertura: viaCobertura,
       capacidades: capacidadesDePlataforma(),
     };
   }
@@ -188,6 +216,12 @@ export async function resolverAcceso(
     ? capacidadesDeRolAsignacion(viaCompania.rol)
     : new Set<Capacidad>();
 
+  /* La cobertura da lo mismo que una asignación de guarda: la misma tabla
+   * (`POR_ROL_ASIGNACION`), sin una lista nueva. */
+  const deLaCobertura = viaCobertura
+    ? capacidadesDeRolAsignacion(viaCobertura.rol)
+    : new Set<Capacidad>();
+
   /* TERCERA VÍA: el administrador de la compañía que cubre este conjunto.
    *
    * No tiene asignación —no cubre turnos, dirige a quien los cubre—, así que
@@ -201,7 +235,11 @@ export async function resolverAcceso(
    * pierde nada — cualquier rol del conjunto que otorgue algo ya otorga
    * `porteria.ver`, que es lo único que esta vía añade. */
   let deLaCompania = new Set<Capacidad>();
-  if (delConjunto.size === 0 && deLaAsignacion.size === 0) {
+  if (
+    delConjunto.size === 0 &&
+    deLaAsignacion.size === 0 &&
+    deLaCobertura.size === 0
+  ) {
     const miCompania = await getCompaniaMiembro(ctx, user._id);
     if (miCompania?.roles.includes("admin_compania")) {
       const empresa = await ctx.db.get(miCompania.companiaId);
@@ -221,10 +259,12 @@ export async function resolverAcceso(
     user,
     esPlataforma,
     membership,
+    rolesConjunto: viaMembership?.roles ?? null,
     asignacion: viaCompania?.asignacion ?? null,
     contrato: viaCompania?.contrato ?? null,
     compania: viaCompania?.compania ?? null,
-    capacidades: unir(delConjunto, deLaAsignacion, deLaCompania),
+    cobertura: viaCobertura,
+    capacidades: unir(delConjunto, deLaAsignacion, deLaCobertura, deLaCompania),
   };
 }
 

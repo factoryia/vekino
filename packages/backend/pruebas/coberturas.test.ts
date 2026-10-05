@@ -14,8 +14,9 @@ const modules = import.meta.glob("../convex/**/*.ts");
  *
  * Fija quien puede pedir, a quien, cuando; que solo se pide a quien esta
  * `disponible`; que aceptar vuelve a comprobarlo todo dentro de la mutacion;
- * las transiciones y su rastro; y, sobre todo, que aceptar NO da acceso: el
- * guarda sigue operando con sus vias de siempre.
+ * las transiciones y su rastro; y que aceptar NO da acceso por si solo: hasta
+ * que la cobertura empieza, el guarda sigue operando con sus vias de siempre.
+ * Lo que pasa cuando empieza (Fase 8) esta en `coberturasAcceso.test.ts`.
  *
  * Las fechas se calculan desde hoy (hora de Colombia): el proximo lunes, etc.
  */
@@ -494,7 +495,7 @@ describe("O a R: choques, carreras y revalidacion al aceptar", () => {
 });
 
 // ─────────────────────────────────────────────────────────────
-describe("S y T: aceptada no es acceso", () => {
+describe("S y T: aceptada (y aun no empezada) no es acceso", () => {
   let e: Escenario;
   beforeEach(async () => {
     e = await montar();
@@ -518,7 +519,7 @@ describe("S y T: aceptada no es acceso", () => {
     expect(await foto()).toEqual(antes);
   });
 
-  test("T: aceptar no cambia miAcceso, guardia.home ni requireCondominioRole", async () => {
+  test("T: aceptar una futura no cambia miAcceso, guardia.home ni requireCondominioRole", async () => {
     const turnoId = await e.como("jason").mutation(api.guardia.iniciarTurno, {
       condominioId: e.alamos,
       checklist: CHECKLIST,
@@ -656,8 +657,11 @@ describe("permisos y consultas", () => {
       userId: e.jason,
     });
     expect(deSofia.map((c) => c._id)).toEqual([base]);
-    // Y aun activa, no le da acceso a Cedros.
-    const home = await e.como("jason").query(api.guardia.home, { condominioId: e.cedros });
-    expect(home.allowed).toBe(false);
+    // Y activa, desde la Fase 8 es su contexto operativo: opera en Cedros y
+    // no en Alamos, su conjunto de siempre.
+    const homeCedros = await e.como("jason").query(api.guardia.home, { condominioId: e.cedros });
+    expect(homeCedros.allowed).toBe(true);
+    const homeAlamos = await e.como("jason").query(api.guardia.home, { condominioId: e.alamos });
+    expect(homeAlamos.allowed).toBe(false);
   });
 });

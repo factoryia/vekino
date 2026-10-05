@@ -3305,6 +3305,12 @@ export default defineSchema({
     /* Las de un guarda por estado: sus pendientes, sus aceptadas (choques y
      * ocupación) y sus activas. */
     .index("by_user_estado", ["userId", "estado", "inicio"])
+    /* Las aceptadas de un guarda que aún no terminan: de ahí salen su contexto
+     * operativo (la activa) y el próximo instante en que cambia. Por `fin` y
+     * no por `inicio` para no recorrer todo su histórico en cada llamada. */
+    .index("by_user_estado_fin", ["userId", "estado", "fin"])
+    /* Las aceptadas que aún no terminan en un conjunto: el relevo de B. */
+    .index("by_condominio_estado_fin", ["condominioId", "estado", "fin"])
     /* Las de la compañía que aún no han terminado en una fecha. */
     .index("by_compania_fin", ["companiaId", "fin"]),
 });
