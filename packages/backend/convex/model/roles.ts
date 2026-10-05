@@ -304,6 +304,24 @@ export const bloqueSemanalValidator = v.object({
   horaFin: v.string(),
 });
 
+/**
+ * Una ventana de tiempo tal como llega de un formulario: días completos o con
+ * hora, en TEXTO de pared. La lee el servidor en hora de Colombia
+ * (`lib/inasistencias.ts:ventanaInasistencia`); el navegador no decide la zona.
+ */
+export const entradaVentanaValidator = v.union(
+  v.object({
+    diaCompleto: v.literal(true),
+    fechaInicio: v.string(),
+    fechaFin: v.string(),
+  }),
+  v.object({
+    diaCompleto: v.literal(false),
+    inicioLocal: v.string(),
+    finLocal: v.string(),
+  }),
+);
+
 // ─────────────────────────────────────────────────────────────
 // INVENTARIO DE LA COMPAÑÍA
 //

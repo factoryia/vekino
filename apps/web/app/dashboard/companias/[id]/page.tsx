@@ -20,6 +20,7 @@ import {
   Boxes,
   CalendarX,
   CalendarClock,
+  CalendarCheck,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
@@ -37,6 +38,7 @@ import { EditarPersonaDialog } from "@/components/companias/editar-persona-dialo
 import { PanelInventario } from "@/components/companias/inventario/panel-inventario";
 import { PanelInasistencias } from "@/components/companias/inasistencias/panel-inasistencias";
 import { PanelHorarios } from "@/components/companias/horarios/panel-horarios";
+import { PanelDisponibilidad } from "@/components/companias/disponibilidad/panel-disponibilidad";
 
 type Estado = "activa" | "suspendida" | "inactiva";
 type RolCompania = "admin_compania" | "supervisor" | "guardia";
@@ -96,11 +98,18 @@ function CompaniaDetalleContent() {
     requestedTab === "contratos" ||
     requestedTab === "inventario" ||
     requestedTab === "inasistencias" ||
-    requestedTab === "horarios"
+    requestedTab === "horarios" ||
+    requestedTab === "disponibilidad"
       ? requestedTab
       : "personal";
   function setTab(
-    next: "personal" | "contratos" | "inventario" | "inasistencias" | "horarios",
+    next:
+      | "personal"
+      | "contratos"
+      | "inventario"
+      | "inasistencias"
+      | "horarios"
+      | "disponibilidad",
   ) {
     router.push(`/dashboard/companias/${companiaId}?tab=${next}`, { scroll: false });
   }
@@ -218,6 +227,14 @@ function CompaniaDetalleContent() {
               label="Horarios"
             />
           )}
+          {puedePlanificar && (
+            <TabSimple
+              activo={tab === "disponibilidad"}
+              onClick={() => setTab("disponibilidad")}
+              icon={CalendarCheck}
+              label="Disponibilidad"
+            />
+          )}
         </div>
 
         {tab === "personal" && (
@@ -266,6 +283,16 @@ function CompaniaDetalleContent() {
             )}
           >
             <PanelHorarios companiaId={companiaId} conjuntos={conjuntosPlanificables} />
+          </ErrorBoundary>
+        )}
+        {tab === "disponibilidad" && puedePlanificar && (
+          <ErrorBoundary
+            resetKey={companiaId}
+            fallback={(e) => (
+              <ErrorMessage title="No se puede ver la disponibilidad" detail={e.message} />
+            )}
+          >
+            <PanelDisponibilidad companiaId={companiaId} />
           </ErrorBoundary>
         )}
       </div>

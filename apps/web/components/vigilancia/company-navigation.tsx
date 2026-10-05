@@ -5,7 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "convex/react";
-import { Boxes, Building2, CalendarClock, CalendarX, FileText, LayoutDashboard, LogOut, Menu, ShieldCheck, ShieldAlert, Users, X } from "lucide-react";
+import { Boxes, Building2, CalendarCheck, CalendarClock, CalendarX, FileText, LayoutDashboard, LogOut, Menu, ShieldCheck, ShieldAlert, Users, X } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import { authClient } from "@/lib/auth-client";
 import { cn } from "@/lib/utils";
@@ -124,7 +124,8 @@ function CompanySidebar({ company, onNavigate }: { company: Company; onNavigate?
     requestedTab === "contratos" ||
     requestedTab === "inventario" ||
     requestedTab === "inasistencias" ||
-    requestedTab === "horarios"
+    requestedTab === "horarios" ||
+    requestedTab === "disponibilidad"
       ? requestedTab
       : "personal";
 
@@ -140,6 +141,7 @@ function CompanySidebar({ company, onNavigate }: { company: Company; onNavigate?
     { label: "Inventario", tab: "inventario", icon: Boxes },
     { label: "Inasistencias", tab: "inasistencias", icon: CalendarX },
     { label: "Horarios", tab: "horarios", icon: CalendarClock },
+    { label: "Disponibilidad", tab: "disponibilidad", icon: CalendarCheck },
   ];
 
   return (
@@ -161,10 +163,11 @@ function CompanySidebar({ company, onNavigate }: { company: Company; onNavigate?
             </div>
           )}
           {/* El supervisor no tiene la sección "Compañía", pero sí lleva la
-              planificación —inasistencias y horarios— de los guardas de sus
-              conjuntos. */}
+              planificación —inasistencias, horarios y disponibilidad— de los
+              guardas de sus conjuntos. */}
           {!company.isAdmin && <NavLink href={`${companyPath}?tab=inasistencias`} label="Inasistencias" icon={CalendarX} active={onCompanyPage && tab === "inasistencias"} onNavigate={onNavigate} />}
           {!company.isAdmin && <NavLink href={`${companyPath}?tab=horarios`} label="Horarios" icon={CalendarClock} active={onCompanyPage && tab === "horarios"} onNavigate={onNavigate} />}
+          {!company.isAdmin && <NavLink href={`${companyPath}?tab=disponibilidad`} label="Disponibilidad" icon={CalendarCheck} active={onCompanyPage && tab === "disponibilidad"} onNavigate={onNavigate} />}
         </div>
         {company.isAdmin && (
           <div className="space-y-0.5">

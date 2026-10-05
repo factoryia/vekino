@@ -17,7 +17,7 @@
  *     asignaciones;
  *   - las fechas civiles, en hora de Colombia como las inasistencias.
  */
-import { aMinutos, rango, rangoAbsoluto, seSolapan } from "./horarios.ts";
+import { aMinutos, rango, seSolapan } from "./horarios.ts";
 import { DIA, diaColombia, limiteDiaColombia } from "./incidenteMetricas.ts";
 import { estadoVigencia, type Rango } from "./vigilancia.ts";
 
@@ -67,24 +67,46 @@ function sumarDias(fecha: string, dias: number): string {
   return diaColombia(limiteDiaColombia(fecha) + dias * DIA);
 }
 
+const MINUTO = 60_000;
+
+/** Un bloque puesto en una fecha concreta, como instantes [inicio, fin). */
+export type BloqueEnFecha = {
+  fecha: string;
+  bloque: BloqueSemanal;
+  inicio: number;
+  fin: number;
+  clave: string;
+};
+
 /**
- * Los bloques de un horario puestos en fechas concretas, en minutos absolutos.
+ * Los bloques de un horario puestos en fechas concretas, en instantes.
  *
  * Cada bloque pertenece al día en que EMPIEZA —el turno de 18:00 a 06:00 del
  * jueves es del jueves—, igual que una reserva que termina pasada la
- * medianoche se guarda con la fecha en que empieza.
+ * medianoche se guarda con la fecha en que empieza. La hora la da `rango`
+ * (que ya sabe pasar la medianoche) sobre la medianoche de Colombia de esa
+ * fecha: la misma escala que las inasistencias y las ventanas de consulta.
  */
 function instancias(
   bloques: readonly BloqueSemanal[],
   fechas: readonly string[],
-): { inicio: number; fin: number; clave: string }[] {
-  const salida: { inicio: number; fin: number; clave: string }[] = [];
+): BloqueEnFecha[] {
+  const salida: BloqueEnFecha[] = [];
   for (const fecha of fechas) {
     const dia = diaDeLaSemana(fecha);
+    const medianoche = limiteDiaColombia(fecha);
     bloques.forEach((b, i) => {
       if (b.dia !== dia) return;
-      const r = rangoAbsoluto(fecha, b.horaInicio, b.horaFin);
-      if (r) salida.push({ ...r, clave: `${fecha}#${i}` });
+      const r = rango(b.horaInicio, b.horaFin);
+      if (r) {
+        salida.push({
+          fecha,
+          bloque: b,
+          inicio: medianoche + r.inicio * MINUTO,
+          fin: medianoche + r.fin * MINUTO,
+          clave: `${fecha}#${i}`,
+        });
+      }
     });
   }
   return salida;
@@ -229,6 +251,34 @@ export function chocanHorarios(
   const deA = instancias(a.bloques, fechas.filter((f) => rigeEl(a, f)));
   const deB = instancias(b.bloques, fechas.filter((f) => rigeEl(b, f)));
   return deA.some((x) => deB.some((y) => seSolapan(x, y)));
+}
+
+/**
+ * Las fechas civiles (hora de Colombia) que toca una ventana de instantes
+ * [inicio, fin). Una ventana que termina justo a medianoche no toca el día
+ * siguiente.
+ */
+export function fechasDeVentana(ventana: { inicio: number; fin: number }): string[] {
+  const ultima = diaColombia(ventana.fin - 1);
+  const fechas: string[] = [];
+  for (let f = diaColombia(ventana.inicio); f <= ultima; f = sumarDias(f, 1)) fechas.push(f);
+  return fechas;
+}
+
+/**
+ * Los bloques de un horario que se cruzan con una ventana de instantes
+ * [inicio, fin), en las fechas en que el horario rige.
+ *
+ * Se mira también la víspera de la ventana: un turno del miércoles de 22:00
+ * a 06:00 ocupa la madrugada del jueves.
+ */
+export function bloquesQueCruzan(
+  h: VigenciaHorario & { bloques: readonly BloqueSemanal[] },
+  ventana: { inicio: number; fin: number },
+): BloqueEnFecha[] {
+  const fechas = fechasDeVentana(ventana);
+  const conVispera = [sumarDias(fechas[0]!, -1), ...fechas].filter((f) => rigeEl(h, f));
+  return instancias(h.bloques, conVispera).filter((x) => seSolapan(x, ventana));
 }
 
 /**

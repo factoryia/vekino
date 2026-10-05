@@ -20,8 +20,44 @@ type Ctx = QueryCtx | MutationCtx;
  *     que supervisa (`alcanceEnCompania`, la cadena entera);
  *   - el guarda: nada.
  *
- * La capacidad la pone cada módulo; el alcance no cambia.
+ * La capacidad la pone cada módulo; el alcance no cambia. Quien combina datos
+ * de varios módulos —la disponibilidad junta horarios e inasistencias— pide
+ * TODAS sus capacidades y alcanza solo a quien alcanzaría con cada una: no
+ * puede servir para ver lo que por separado no se vería.
  */
+
+/** Una capacidad o varias que hay que tener todas. */
+export type Capacidades = Capacidad | readonly Capacidad[];
+
+function lista(capacidades: Capacidades): readonly Capacidad[] {
+  return typeof capacidades === "string" ? [capacidades] : capacidades;
+}
+
+/**
+ * El alcance con todas las capacidades a la vez: la intersección.
+ *
+ * Con una sola es exactamente `alcanceEnCompania`. Lanza con el error de la
+ * primera capacidad que falte.
+ */
+export async function alcanceConTodas(
+  ctx: Ctx,
+  companiaId: Id<"companiasSeguridad">,
+  capacidades: Capacidades,
+): Promise<AlcanceEnCompania> {
+  const alcances: AlcanceEnCompania[] = [];
+  for (const capacidad of lista(capacidades)) {
+    alcances.push(await alcanceEnCompania(ctx, companiaId, capacidad));
+  }
+  const [primero, ...resto] = alcances;
+  if (!primero) throw new Error("Falta la capacidad que se exige.");
+
+  let conjuntos: Set<Id<"condominios">> | null = primero.conjuntos;
+  for (const { conjuntos: otros } of resto) {
+    if (otros === null) continue;
+    conjuntos = conjuntos === null ? otros : new Set([...conjuntos].filter((c) => otros.has(c)));
+  }
+  return { ...primero, conjuntos };
+}
 
 /**
  * Dónde trabaja hoy esta persona para esta compañía.
@@ -60,11 +96,11 @@ export async function exigirAlcanceSobreGuarda(
   ctx: Ctx,
   companiaId: Id<"companiasSeguridad">,
   userId: Id<"users">,
-  capacidad: Capacidad,
+  capacidades: Capacidades,
 ): Promise<AlcanceEnCompania> {
-  const alcance = await alcanceEnCompania(ctx, companiaId, capacidad);
+  const alcance = await alcanceConTodas(ctx, companiaId, capacidades);
   if (!(await alcanzaAlGuarda(ctx, alcance, companiaId, userId))) {
-    throw new Error(`No tiene permiso para esta operación (${capacidad}).`);
+    throw new Error(`No tiene permiso para esta operación (${lista(capacidades).join(", ")}).`);
   }
   return alcance;
 }
@@ -109,9 +145,9 @@ export async function exigirGuardaActivo(
 export async function guardasElegibles(
   ctx: Ctx,
   companiaId: Id<"companiasSeguridad">,
-  capacidad: Capacidad,
+  capacidades: Capacidades,
 ): Promise<{ userId: Id<"users">; nombre: string }[]> {
-  const alcance = await alcanceEnCompania(ctx, companiaId, capacidad);
+  const alcance = await alcanceConTodas(ctx, companiaId, capacidades);
   const miembros = (
     await ctx.db
       .query("companiaMiembros")

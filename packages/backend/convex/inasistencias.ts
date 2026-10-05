@@ -10,7 +10,7 @@ import {
   guardasElegibles as elegibles,
   lectorDeNombres,
 } from "./model/alcanceGuarda";
-import { tipoInasistenciaValidator } from "./model/roles";
+import { entradaVentanaValidator, tipoInasistenciaValidator } from "./model/roles";
 import {
   pisaAlguna,
   rangoDeConsulta,
@@ -114,18 +114,7 @@ export const crear = mutation({
     motivo: v.optional(v.string()),
     /* Texto de pared, no milisegundos: lo interpreta el servidor en hora de
      * Colombia (`lib/inasistencias.ts`). */
-    ventana: v.union(
-      v.object({
-        diaCompleto: v.literal(true),
-        fechaInicio: v.string(),
-        fechaFin: v.string(),
-      }),
-      v.object({
-        diaCompleto: v.literal(false),
-        inicioLocal: v.string(),
-        finLocal: v.string(),
-      }),
-    ),
+    ventana: entradaVentanaValidator,
   },
   handler: async (ctx, args) => {
     const { user } = await exigirAlcanceSobreGuarda(ctx, args.companiaId, args.userId);

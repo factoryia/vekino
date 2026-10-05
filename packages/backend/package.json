@@ -80,6 +80,10 @@
       "types": "./convex/lib/horariosGuarda.ts",
       "default": "./convex/lib/horariosGuarda.ts"
     },
+    "./disponibilidad": {
+      "types": "./convex/lib/disponibilidad.ts",
+      "default": "./convex/lib/disponibilidad.ts"
+    },
     "./incidenteReporte": {
       "types": "./convex/lib/incidenteReporte.ts",
       "default": "./convex/lib/incidenteReporte.ts"
