@@ -1,7 +1,8 @@
 import type { QueryCtx, MutationCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
-import { getCurrentAppUser, getMembership, hasPlatformRole } from "./authz";
-import { asignacionVigente } from "./asignacion";
+import { getCurrentAppUser, hasPlatformRole } from "./authz";
+import { asignacionVigente, condominiosSupervisados } from "./asignacion";
+import { primeraVia, viasEnConjunto } from "./vias";
 
 import {
   capacidadesDePlataforma,
@@ -13,10 +14,11 @@ import {
   type Capacidad,
 } from "../lib/vigilancia";
 
-/* `asignacionVigente` vive en `model/asignacion.ts` para que `authz.ts`
- * tambien pueda usarla sin cerrar un ciclo de imports. Se reexporta porque
+/* `asignacionVigente` y `condominiosSupervisados` viven en
+ * `model/asignacion.ts`, junto a la cadena que comprueban, para que `authz.ts`
+ * tambien pueda usarlas sin cerrar un ciclo de imports. Se reexportan porque
  * este sigue siendo el sitio donde se busca "el eje de seguridad". */
-export { asignacionVigente };
+export { asignacionVigente, condominiosSupervisados };
 
 type Ctx = QueryCtx | MutationCtx;
 
@@ -40,7 +42,10 @@ export type Acceso = {
   esPlataforma: boolean;
   /** Membresía en el conjunto, si la tiene. Eje residencial. */
   membership: Doc<"memberships"> | null;
-  /** Asignación vigente en ESTE conjunto, si la tiene. Eje seguridad. */
+  /**
+   * Asignación vigente en ESTE conjunto, si la tiene. Eje seguridad. Es la
+   * primera vía de asignación de `viasEnConjunto` (en la práctica, la única).
+   */
   asignacion: Doc<"asignaciones"> | null;
   /** El contrato que ampara esa asignación. */
   contrato: Doc<"companiaContratos"> | null;
@@ -152,8 +157,12 @@ export async function resolverAcceso(
   if (!user || !user.active) return null;
 
   const esPlataforma = hasPlatformRole(user, "superadmin", "admin");
-  const membership = await getMembership(ctx, user._id, condominioId);
-  const viaCompania = await asignacionVigente(ctx, user._id, condominioId);
+  /* Todas las vías de una vez (`model/vias.ts`). De cada clase se usa la
+   * primera, como siempre: la membresía es única por conjunto y, con la regla
+   * 3 de `asignaciones.crear`, también la asignación viva. */
+  const { membership, vias } = await viasEnConjunto(ctx, user._id, condominioId);
+  const viaMembership = primeraVia(vias, "membership");
+  const viaCompania = primeraVia(vias, "asignacion");
 
   // El staff de plataforma mantiene el paso libre que ya tiene hoy.
   if (esPlataforma) {
@@ -171,13 +180,12 @@ export async function resolverAcceso(
   /* Las vías se SUMAN. Un administrador del conjunto que además sea
    * supervisor de la compañía tiene lo de ambos, y un guarda que exista por
    * las dos vías no pierde acceso si una falla. */
-  const delConjunto =
-    membership && membership.isActive
-      ? capacidadesDeRolesConjunto(membership.roles)
-      : new Set<Capacidad>();
+  const delConjunto = viaMembership
+    ? capacidadesDeRolesConjunto(viaMembership.roles)
+    : new Set<Capacidad>();
 
   const deLaAsignacion = viaCompania
-    ? capacidadesDeRolAsignacion(viaCompania.asignacion.rol)
+    ? capacidadesDeRolAsignacion(viaCompania.rol)
     : new Set<Capacidad>();
 
   /* TERCERA VÍA: el administrador de la compañía que cubre este conjunto.
@@ -292,34 +300,6 @@ export async function exigirAccesoCompania(
     throw new Error(`No tiene permiso para esta operación (${capacidad}).`);
   }
   return { user, esPlataforma, miembro, compania, capacidades };
-}
-
-/**
- * Conjuntos donde esta persona supervisa hoy.
- *
- * El ámbito del supervisor NO es su compañía entera: es el conjunto de sitios
- * donde tiene asignación vigente con rol `supervisor`. Un supervisor de zona
- * norte no manda sobre la zona sur de la misma empresa.
- */
-export async function condominiosSupervisados(
-  ctx: Ctx,
-  userId: Id<"users">,
-  ahora: number = Date.now(),
-): Promise<Set<Id<"condominios">>> {
-  const filas = await ctx.db
-    .query("asignaciones")
-    .withIndex("by_user", (q) => q.eq("userId", userId))
-    .collect();
-
-  const out = new Set<Id<"condominios">>();
-  for (const a of filas) {
-    if (a.rol !== "supervisor") continue;
-    if (!estaVigente(a, ahora)) continue;
-    const contrato = await ctx.db.get(a.contratoId);
-    if (!contrato || !estaVigente(contrato, ahora)) continue;
-    out.add(a.condominioId);
-  }
-  return out;
 }
 
 /**

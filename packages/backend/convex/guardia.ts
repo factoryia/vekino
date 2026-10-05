@@ -7,12 +7,12 @@ import type { Doc, Id } from "./_generated/dataModel";
 import {
   getCurrentAppUser,
   requireCondominioRole,
-  getMembership,
   hasPlatformRole,
   vigentes,
 } from "./model/authz";
 import { exigirAcceso, resolverAcceso } from "./model/acceso";
 import { asignacionVigente } from "./model/asignacion";
+import { membershipEn, viaDeMembership } from "./model/vias";
 import { logMinuta, rondaEnCurso, turnoAbierto } from "./model/minuta";
 import {
   esVisitanteVigente,
@@ -154,7 +154,7 @@ async function guardasDeLaPorteria(
     .withIndex("by_condominio", (q) => q.eq("condominioId", condominioId))
     .collect();
   const guardias = memberships.filter(
-    (m) => m.isActive && m.roles.includes("guardia"),
+    (m) => viaDeMembership(m)?.roles.includes("guardia") === true,
   );
 
   /* El turno compartido es de la portería, no de la tabla de la que cuelgue
@@ -172,7 +172,14 @@ async function guardasDeLaPorteria(
   for (const m of guardias) ids.add(m.userId);
   for (const a of asignados) {
     /* Una asignación vigente bajo un contrato vencido no pone a nadie en la
-     * garita: se comprueba la cadena entera, no solo la fila. */
+     * garita: se comprueba la cadena entera, no solo la fila.
+     *
+     * OJO, sin corregir a propósito: esto pregunta si la PERSONA tiene alguna
+     * asignación viva aquí, con cualquier rol, y no si ESTA fila de guarda la
+     * tiene. Un guarda ascendido a supervisor en el mismo conjunto —fila de
+     * guarda terminada, fila de supervisor viva— sigue saliendo como relevo.
+     * `guardasDelConjunto` ya juzga cada fila; alinear esto cambia el relevo y
+     * queda pendiente de aprobarse aparte. */
     if (!ids.has(a.userId) && (await asignacionVigente(ctx, a.userId, condominioId))) {
       ids.add(a.userId);
     }
@@ -242,8 +249,11 @@ export const iniciarTurno = mutation({
       }
       const sec = await ctx.db.get(secundarioUserId);
       if (!sec || !sec.active) throw new Error("Guardia secundario no válido.");
-      const secMembership = await getMembership(ctx, sec._id, args.condominioId);
-      if (!secMembership?.isActive || !secMembership.roles.includes("guardia")) {
+      /* Solo por la vía de membresía, como siempre: el guarda de compañía no
+       * entra aquí por id (va por nombre). Abrirlo es un cambio de turnos,
+       * no de esta normalización. */
+      const { via: secVia } = await membershipEn(ctx, sec._id, args.condominioId);
+      if (!secVia?.roles.includes("guardia")) {
         throw new Error("El guardia secundario no tiene rol de guardia en este conjunto.");
       }
       secundarioNombre = secundarioNombre || displayNameFromUser(sec);

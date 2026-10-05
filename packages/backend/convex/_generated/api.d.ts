@@ -102,6 +102,7 @@ import type * as model_quorum from "../model/quorum.js";
 import type * as model_roles from "../model/roles.js";
 import type * as model_s3 from "../model/s3.js";
 import type * as model_userImage from "../model/userImage.js";
+import type * as model_vias from "../model/vias.js";
 import type * as model_visitantes from "../model/visitantes.js";
 import type * as notificacionesFeed from "../notificacionesFeed.js";
 import type * as notifications from "../notifications.js";
@@ -237,6 +238,7 @@ declare const fullApi: ApiFromModules<{
   "model/roles": typeof model_roles;
   "model/s3": typeof model_s3;
   "model/userImage": typeof model_userImage;
+  "model/vias": typeof model_vias;
   "model/visitantes": typeof model_visitantes;
   notificacionesFeed: typeof notificacionesFeed;
   notifications: typeof notifications;

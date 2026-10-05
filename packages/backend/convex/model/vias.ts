@@ -1,0 +1,146 @@
+import type { QueryCtx, MutationCtx } from "../_generated/server";
+import type { Doc, Id } from "../_generated/dataModel";
+import { viasDeAsignacionEn, type ViaAsignacion } from "./asignacion";
+
+type Ctx = QueryCtx | MutationCtx;
+
+/**
+ * LAS VÍAS POR LAS QUE UNA PERSONA LLEGA A UN CONJUNTO.
+ *
+ * Hoy son dos, y las dos son pertenencia PERMANENTE:
+ *
+ *   membership  → el eje residencial (`memberships`): residentes,
+ *                 administración y el guarda propio del conjunto.
+ *   asignacion  → el eje de seguridad (`asignaciones`): el guarda o el
+ *                 supervisor de una compañía con contrato vigente.
+ *
+ * Una persona puede tener las dos en el mismo conjunto, y asignaciones en
+ * varios conjuntos a la vez. Por eso aquí nada devuelve "la" vía: se
+ * devuelven todas las que valen, cada una con su procedencia (`tipo`), y qué
+ * hacer con ellas —sumar capacidades, exigir un rol, preferir una— es
+ * política de quien pregunta, no un segundo criterio.
+ *
+ * Cada vía tiene UN criterio y vive en un solo sitio: la membresía en este
+ * archivo, la asignación (los cuatro eslabones) en `model/asignacion.ts`.
+ *
+ * Lo que todavía NO existe:
+ *   - una vía temporal (la cobertura). Será una entidad propia, no una fila
+ *     de `asignaciones`, y entrará aquí como un `tipo` más de `Via`;
+ *   - un "contexto operativo". Cuando haga falta se DERIVA de estas vías
+ *     —permanentes, luego temporales, luego la precedencia entre ellas— en
+ *     `viasEnConjunto`, que es por donde ya preguntan `resolverAcceso` y la
+ *     sesión. No se guarda en ninguna tabla: sería una segunda fuente de
+ *     verdad que habría que mantener al día.
+ */
+
+/** Una membresía que da acceso: la fila existe y está activa. */
+export type ViaMembership = {
+  tipo: "membership";
+  userId: Id<"users">;
+  condominioId: Id<"condominios">;
+  roles: Doc<"memberships">["roles"];
+  membership: Doc<"memberships">;
+};
+
+export type Via = ViaMembership | ViaAsignacion;
+
+/**
+ * El criterio de la vía residencial: la membresía está activa.
+ *
+ * No mira roles. Cada operación pide los suyos, y una membresía activa sin el
+ * rol pedido sigue siendo pertenencia: es lo que distingue "no pertenece a
+ * este condominio" de "no tiene el rol requerido".
+ */
+export function viaDeMembership(
+  m: Doc<"memberships"> | null,
+): ViaMembership | null {
+  if (!m || !m.isActive) return null;
+  return {
+    tipo: "membership",
+    userId: m.userId,
+    condominioId: m.condominioId,
+    roles: m.roles,
+    membership: m,
+  };
+}
+
+/** La fila de membresía del usuario en un condominio (o null), activa o no. */
+export async function getMembership(
+  ctx: Ctx,
+  userId: Id<"users">,
+  condominioId: Id<"condominios">,
+): Promise<Doc<"memberships"> | null> {
+  return await ctx.db
+    .query("memberships")
+    .withIndex("by_condominio_user", (q) =>
+      q.eq("condominioId", condominioId).eq("userId", userId),
+    )
+    .unique();
+}
+
+/**
+ * La membresía de una persona en un conjunto, y la vía que da.
+ *
+ * Devuelve también la fila cruda porque varios consumidores la exponen tal
+ * cual, inactiva incluida —`requireCondominioRole` la devuelve y
+ * `asignaciones.miAcceso` enseña sus roles—, y cambiar eso no es parte de
+ * resolver vías.
+ */
+export async function membershipEn(
+  ctx: Ctx,
+  userId: Id<"users">,
+  condominioId: Id<"condominios">,
+): Promise<{ membership: Doc<"memberships"> | null; via: ViaMembership | null }> {
+  const membership = await getMembership(ctx, userId, condominioId);
+  return { membership, via: viaDeMembership(membership) };
+}
+
+/** Las membresías que dan acceso a una persona, en cualquier conjunto. */
+export async function viasDeMembershipDe(
+  ctx: Ctx,
+  userId: Id<"users">,
+): Promise<ViaMembership[]> {
+  const filas = await ctx.db
+    .query("memberships")
+    .withIndex("by_user", (q) => q.eq("userId", userId))
+    .collect();
+  return filas
+    .map(viaDeMembership)
+    .filter((v): v is ViaMembership => v !== null);
+}
+
+/**
+ * TODAS las vías de una persona en un conjunto, en este instante.
+ *
+ * Primero la membresía (como mucho una: el índice es único por conjunto y
+ * usuario) y después las asignaciones, en el orden del índice.
+ */
+export async function viasEnConjunto(
+  ctx: Ctx,
+  userId: Id<"users">,
+  condominioId: Id<"condominios">,
+  ahora: number = Date.now(),
+): Promise<{ membership: Doc<"memberships"> | null; vias: Via[] }> {
+  const [{ membership, via }, asignaciones] = await Promise.all([
+    membershipEn(ctx, userId, condominioId),
+    viasDeAsignacionEn(ctx, userId, condominioId, ahora),
+  ]);
+  return { membership, vias: via ? [via, ...asignaciones] : asignaciones };
+}
+
+/**
+ * La primera vía de un tipo, o null.
+ *
+ * Para los consumidores que, como hasta ahora, operan con una sola vía de
+ * cada clase: la membresía es única por conjunto, y con la regla 3 de
+ * `asignaciones.crear` también lo es la asignación viva.
+ */
+export function primeraVia<T extends Via["tipo"]>(
+  vias: readonly Via[],
+  tipo: T,
+): Extract<Via, { tipo: T }> | null {
+  return (
+    (vias.find((v) => v.tipo === tipo) as Extract<Via, { tipo: T }> | undefined) ??
+    null
+  );
+}

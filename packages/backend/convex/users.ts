@@ -22,6 +22,7 @@ import { evaluarPassword } from "./lib/passwordFuerte";
 import { fijarPasswordDeCuenta } from "./model/credencial";
 import { resolveUserImage } from "./model/userImage";
 import { misAsignacionesVigentes } from "./model/asignacion";
+import { viasDeMembershipDe } from "./model/vias";
 import { miCompaniaDe } from "./model/acceso";
 import { scheduleDeleteS3Keys, s3KeyFromPublicUrl } from "./model/s3";
 import { normalizarTelefonoE164 } from "./lib/telefono";
@@ -36,27 +37,25 @@ export const me = query({
     const user = await getCurrentAppUser(ctx);
     if (!user) return null;
 
-    const memberships = await ctx.db
-      .query("memberships")
-      .withIndex("by_user", (q) => q.eq("userId", user._id))
-      .collect();
+    /* Las dos listas salen de las mismas vías que autorizan (`model/vias.ts`):
+     * lo que la sesión ofrece y lo que la portería deja pasar no pueden
+     * medirse con criterios distintos. */
+    const memberships = await viasDeMembershipDe(ctx, user._id);
 
     const withCondominio = await Promise.all(
-      memberships
-        .filter((m) => m.isActive)
-        .map(async (m) => {
-          const condominio = await ctx.db.get(m.condominioId);
-          return {
-            membershipId: m._id,
-            condominioId: m.condominioId,
-            condominioName: condominio?.name ?? null,
-            condominioSubdomain: condominio?.subdomain ?? null,
-            condominioLogo: condominio?.logo ?? null,
-            condominioCoverImage: condominio?.coverImage ?? null,
-            condominioPrimaryColor: condominio?.primaryColor ?? null,
-            roles: m.roles,
-          };
-        }),
+      memberships.map(async (via) => {
+        const condominio = await ctx.db.get(via.condominioId);
+        return {
+          membershipId: via.membership._id,
+          condominioId: via.condominioId,
+          condominioName: condominio?.name ?? null,
+          condominioSubdomain: condominio?.subdomain ?? null,
+          condominioLogo: condominio?.logo ?? null,
+          condominioCoverImage: condominio?.coverImage ?? null,
+          condominioPrimaryColor: condominio?.primaryColor ?? null,
+          roles: via.roles,
+        };
+      }),
     );
 
     /* EL SEGUNDO EJE. `memberships` dice a qué conjuntos pertenece la persona;

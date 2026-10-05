@@ -2,6 +2,11 @@ import type { QueryCtx, MutationCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { OperationalRole, PlatformRole } from "./roles";
 import { asignacionVigente } from "./asignacion";
+import { getMembership, membershipEn } from "./vias";
+
+/* La lectura de la membresía vive con las demás vías en `model/vias.ts`. Se
+ * reexporta porque casi cuarenta módulos la importan desde aquí. */
+export { getMembership };
 
 type Ctx = QueryCtx | MutationCtx;
 
@@ -56,20 +61,6 @@ export async function requirePlatformStaff(ctx: Ctx): Promise<Doc<"users">> {
   return user;
 }
 
-/** Membresía del usuario en un condominio (o null). */
-export async function getMembership(
-  ctx: Ctx,
-  userId: Id<"users">,
-  condominioId: Id<"condominios">,
-): Promise<Doc<"memberships"> | null> {
-  return await ctx.db
-    .query("memberships")
-    .withIndex("by_condominio_user", (q) =>
-      q.eq("condominioId", condominioId).eq("userId", userId),
-    )
-    .unique();
-}
-
 /**
  * Unidades vinculadas al usuario dentro de un condominio.
  *
@@ -115,6 +106,10 @@ export async function misUnidadIds(
 /**
  * Exige que el usuario actual pertenezca al condominio con al menos uno de los
  * roles indicados. Superadmin/admin de plataforma tienen paso libre.
+ *
+ * Pregunta por las vías de `model/vias.ts` en orden y se detiene en la
+ * primera que basta: un residente no paga la lectura de asignaciones en cada
+ * llamada. El resultado es el mismo que pedirlas todas de golpe.
  */
 export async function requireCondominioRole(
   ctx: Ctx,
@@ -122,19 +117,23 @@ export async function requireCondominioRole(
   roles: OperationalRole[],
 ): Promise<{ user: Doc<"users">; membership: Doc<"memberships"> | null }> {
   const user = await requireAppUser(ctx);
+  const { membership, via: porMembresia } = await membershipEn(
+    ctx,
+    user._id,
+    condominioId,
+  );
 
   // Control maestro: la plataforma puede operar sobre cualquier condominio.
   if (hasPlatformRole(user, "superadmin", "admin")) {
-    const membership = await getMembership(ctx, user._id, condominioId);
     return { user, membership };
   }
 
-  const membership = await getMembership(ctx, user._id, condominioId);
-  const porMembresia =
-    !!membership &&
-    membership.isActive &&
-    (roles.length === 0 || membership.roles.some((r) => roles.includes(r)));
-  if (porMembresia) return { user, membership };
+  if (
+    porMembresia &&
+    (roles.length === 0 || porMembresia.roles.some((r) => roles.includes(r)))
+  ) {
+    return { user, membership };
+  }
 
   /* SEGUNDA VÍA: el guarda que llega por una compañía de vigilancia.
    *
@@ -155,10 +154,10 @@ export async function requireCondominioRole(
    * solo el día que cualquiera de esos eslabones caduque. */
   if (roles.includes("guardia" as OperationalRole)) {
     const via = await asignacionVigente(ctx, user._id, condominioId);
-    if (via && via.asignacion.rol === "guardia") return { user, membership };
+    if (via && via.rol === "guardia") return { user, membership };
   }
 
-  if (!membership || !membership.isActive) {
+  if (!porMembresia) {
     throw new Error("No pertenece a este condominio.");
   }
   throw new Error("No tiene el rol requerido en este condominio.");
