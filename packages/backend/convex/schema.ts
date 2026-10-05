@@ -21,6 +21,7 @@ import {
   tipoInasistenciaValidator,
   estadoInasistenciaValidator,
   bloqueSemanalValidator,
+  estadoCoberturaValidator,
 } from "./model/roles";
 
 /**
@@ -3247,4 +3248,63 @@ export default defineSchema({
     .index("by_compania_user", ["companiaId", "userId", "fechaInicio"])
     /* Los de la compañía, para el listado por rango. */
     .index("by_compania", ["companiaId", "fechaInicio"]),
+
+  // ─────────────────────────────────────────────────────────────
+  // COBERTURAS TEMPORALES
+  //
+  // "Este guarda aceptó cubrir temporalmente el conjunto B durante esta
+  // ventana." Un registro propio, NO una asignación: la pertenencia
+  // permanente del guarda queda intacta.
+  //
+  // En esta fase una cobertura aceptada es un compromiso confirmado, no un
+  // acceso: no cambia `resolverAcceso`, `requireCondominioRole`, las vías ni
+  // la sesión del guarda.
+  //
+  // Ciclo de vida en `lib/coberturas.ts`. "Activa" no se guarda: se deriva
+  // (aceptada y ahora dentro de la ventana). La fila lleva los sellos de cada
+  // transición —quién y cuándo—, el mismo camino que contratos y
+  // asignaciones; no hay tabla de eventos aparte porque cada cobertura pasa
+  // como mucho por dos transiciones y todas caben aquí sin ambigüedad.
+  // ─────────────────────────────────────────────────────────────
+
+  coberturas: defineTable({
+    companiaId: v.id("companiasSeguridad"),
+    /** El guarda que cubre. */
+    userId: v.id("users"),
+    /** El conjunto que se cubre. Sale del contrato, nunca del cliente. */
+    condominioId: v.id("condominios"),
+    /** El contrato que respalda el destino durante toda la ventana. */
+    contratoId: v.id("companiaContratos"),
+
+    /** Instantes exactos, `fin` excluido. Nunca se reescriben. */
+    inicio: v.number(),
+    fin: v.number(),
+
+    estado: estadoCoberturaValidator,
+
+    solicitadoPorUserId: v.id("users"),
+    solicitadoEn: v.number(),
+
+    /**
+     * La respuesta del guarda. Va aparte del estado porque una aceptada puede
+     * acabar cancelada o inhabilitada, y entonces el estado ya no dice que se
+     * llegó a aceptar.
+     */
+    respuesta: v.optional(v.union(v.literal("aceptada"), v.literal("rechazada"))),
+    respondidoEn: v.optional(v.number()),
+    respondidoPorUserId: v.optional(v.id("users")),
+
+    canceladaEn: v.optional(v.number()),
+    canceladaPorUserId: v.optional(v.id("users")),
+
+    /** El corte manual de una aceptada. La ventana pactada no se toca. */
+    inhabilitadaEn: v.optional(v.number()),
+    inhabilitadaPorUserId: v.optional(v.id("users")),
+    motivoInhabilitacion: v.optional(v.string()),
+  })
+    /* Las de un guarda por estado: sus pendientes, sus aceptadas (choques y
+     * ocupación) y sus activas. */
+    .index("by_user_estado", ["userId", "estado", "inicio"])
+    /* Las de la compañía que aún no han terminado en una fecha. */
+    .index("by_compania_fin", ["companiaId", "fin"]),
 });

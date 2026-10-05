@@ -76,6 +76,18 @@ export type InasistenciaEvaluable = {
 };
 
 /**
+ * Una cobertura que ocupa al guarda, ya reducida a la ventana en que lo ocupa
+ * (`lib/coberturas.ts:ventanaQueOcupa`). Ocupa en todos los conjuntos: el
+ * guarda que cubre B esa noche no puede cubrir C a la vez.
+ */
+export type CoberturaQueOcupa = {
+  id: string;
+  condominioId: string;
+  inicio: number;
+  fin: number;
+};
+
+/**
  * Por qué sale lo que sale.
  *
  * La inasistencia lleva solo su categoría —el tipo—, nunca el motivo escrito:
@@ -101,6 +113,13 @@ export type MotivoDisponibilidad =
       fin: number;
     }
   | {
+      tipo: "cobertura";
+      coberturaId: string;
+      condominioId: string;
+      inicio: number;
+      fin: number;
+    }
+  | {
       /** Días que toca la ventana sin ningún horario que rija. */
       tipo: "sin_horario";
       fechas: string[];
@@ -117,8 +136,9 @@ export type Disponibilidad = {
  *
  *   - `no_disponible`: alguna inasistencia activa se cruza con la ventana;
  *   - `ocupado`: algún bloque de algún horario —de cualquier conjunto o
- *     general— se cruza con ella. Conservador: no hay jerarquía entre el
- *     general y el de conjunto, cualquiera ocupa;
+ *     general— se cruza con ella, o alguna cobertura que ya lo ocupa.
+ *     Conservador: no hay jerarquía entre el general y el de conjunto,
+ *     cualquiera ocupa;
  *   - `disponible`: todos los días que toca la ventana tienen algún horario
  *     que rige y ninguno la ocupa. Un día sin bloques dentro de un horario
  *     vigente es libre SEGÚN LA PLANIFICACIÓN;
@@ -132,8 +152,10 @@ export function evaluarDisponibilidadGuarda(entrada: {
   ventana: { inicio: number; fin: number };
   horarios: readonly HorarioEvaluable[];
   inasistencias: readonly InasistenciaEvaluable[];
+  /** Las coberturas que ya lo ocupan. Sin ellas, como antes. */
+  coberturas?: readonly CoberturaQueOcupa[];
 }): Disponibilidad {
-  const { ventana, horarios, inasistencias } = entrada;
+  const { ventana, horarios, inasistencias, coberturas = [] } = entrada;
 
   const porInasistencia: MotivoDisponibilidad[] = inasistencias
     .filter((i) => i.estado === "activa" && seSolapan(i, ventana))
@@ -158,16 +180,29 @@ export function evaluarDisponibilidadGuarda(entrada: {
         inicio: x.inicio,
         fin: x.fin,
       })),
-    )
-    .sort((a, b) => a.inicio - b.inicio);
+    );
 
-  /* La inasistencia manda, pero los choques de horario se siguen contando:
-   * quien lo mire sabe además que estaba planificado. */
+  const porCobertura: MotivoDisponibilidad[] = coberturas
+    .filter((c) => seSolapan(c, ventana))
+    .map((c) => ({
+      tipo: "cobertura",
+      coberturaId: c.id,
+      condominioId: c.condominioId,
+      inicio: c.inicio,
+      fin: c.fin,
+    }));
+
+  const ocupaciones = [...porHorario, ...porCobertura].sort(
+    (a, b) => inicioDe(a) - inicioDe(b),
+  );
+
+  /* La inasistencia manda, pero los choques se siguen contando: quien lo mire
+   * sabe además que estaba planificado u ocupado. */
   if (porInasistencia.length > 0) {
-    return { estado: "no_disponible", motivos: [...porInasistencia, ...porHorario] };
+    return { estado: "no_disponible", motivos: [...porInasistencia, ...ocupaciones] };
   }
-  if (porHorario.length > 0) {
-    return { estado: "ocupado", motivos: porHorario };
+  if (ocupaciones.length > 0) {
+    return { estado: "ocupado", motivos: ocupaciones };
   }
 
   const sinPlanificacion = fechasDeVentana(ventana).filter(
@@ -180,6 +215,10 @@ export function evaluarDisponibilidadGuarda(entrada: {
     };
   }
   return { estado: "disponible", motivos: [] };
+}
+
+function inicioDe(m: MotivoDisponibilidad): number {
+  return m.tipo === "sin_horario" ? 0 : m.inicio;
 }
 
 /** Para ordenar una lista de guardas: primero quien puede cubrir. */

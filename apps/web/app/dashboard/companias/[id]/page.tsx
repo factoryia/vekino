@@ -21,6 +21,7 @@ import {
   CalendarX,
   CalendarClock,
   CalendarCheck,
+  ArrowLeftRight,
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
@@ -39,6 +40,7 @@ import { PanelInventario } from "@/components/companias/inventario/panel-inventa
 import { PanelInasistencias } from "@/components/companias/inasistencias/panel-inasistencias";
 import { PanelHorarios } from "@/components/companias/horarios/panel-horarios";
 import { PanelDisponibilidad } from "@/components/companias/disponibilidad/panel-disponibilidad";
+import { PanelCoberturas } from "@/components/companias/coberturas/panel-coberturas";
 
 type Estado = "activa" | "suspendida" | "inactiva";
 type RolCompania = "admin_compania" | "supervisor" | "guardia";
@@ -99,7 +101,8 @@ function CompaniaDetalleContent() {
     requestedTab === "inventario" ||
     requestedTab === "inasistencias" ||
     requestedTab === "horarios" ||
-    requestedTab === "disponibilidad"
+    requestedTab === "disponibilidad" ||
+    requestedTab === "coberturas"
       ? requestedTab
       : "personal";
   function setTab(
@@ -109,7 +112,8 @@ function CompaniaDetalleContent() {
       | "inventario"
       | "inasistencias"
       | "horarios"
-      | "disponibilidad",
+      | "disponibilidad"
+      | "coberturas",
   ) {
     router.push(`/dashboard/companias/${companiaId}?tab=${next}`, { scroll: false });
   }
@@ -170,6 +174,22 @@ function CompaniaDetalleContent() {
         ]),
     ).values(),
   ].sort((a, b) => a.condominioNombre.localeCompare(b.condominioNombre, "es"));
+
+  /* Los conjuntos a los que se puede mandar una cobertura: los de contratos
+   * vigentes hoy, con el contrato que los respalda. El servidor exige además
+   * que el contrato cubra toda la ventana. */
+  const contratosParaCubrir = contratos
+    .filter((c) => c.estado === "vigente" && !c.archivado)
+    .map((c) => ({
+      contratoId: c._id,
+      condominioId: c.condominioId,
+      condominioNombre: c.condominioNombre,
+    }))
+    .sort((a, b) => a.condominioNombre.localeCompare(b.condominioNombre, "es"));
+
+  /* Inhabilitar una cobertura es del administrador (o de la plataforma). */
+  const puedeInhabilitarCoberturas =
+    esPlataforma || me?.compania?.roles?.includes("admin_compania") === true;
 
   return (
     <PageContainer>
@@ -235,6 +255,14 @@ function CompaniaDetalleContent() {
               label="Disponibilidad"
             />
           )}
+          {puedePlanificar && (
+            <TabSimple
+              activo={tab === "coberturas"}
+              onClick={() => setTab("coberturas")}
+              icon={ArrowLeftRight}
+              label="Coberturas"
+            />
+          )}
         </div>
 
         {tab === "personal" && (
@@ -292,7 +320,21 @@ function CompaniaDetalleContent() {
               <ErrorMessage title="No se puede ver la disponibilidad" detail={e.message} />
             )}
           >
-            <PanelDisponibilidad companiaId={companiaId} />
+            <PanelDisponibilidad companiaId={companiaId} contratos={contratosParaCubrir} />
+          </ErrorBoundary>
+        )}
+        {tab === "coberturas" && puedePlanificar && (
+          <ErrorBoundary
+            resetKey={companiaId}
+            fallback={(e) => (
+              <ErrorMessage title="No se pueden ver las coberturas" detail={e.message} />
+            )}
+          >
+            <PanelCoberturas
+              companiaId={companiaId}
+              conjuntos={contratosParaCubrir}
+              puedeInhabilitar={puedeInhabilitarCoberturas}
+            />
           </ErrorBoundary>
         )}
       </div>

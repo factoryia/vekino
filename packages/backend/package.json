@@ -84,6 +84,10 @@
       "types": "./convex/lib/disponibilidad.ts",
       "default": "./convex/lib/disponibilidad.ts"
     },
+    "./coberturas": {
+      "types": "./convex/lib/coberturas.ts",
+      "default": "./convex/lib/coberturas.ts"
+    },
     "./incidenteReporte": {
       "types": "./convex/lib/incidenteReporte.ts",
       "default": "./convex/lib/incidenteReporte.ts"

@@ -1,19 +1,27 @@
 import { v } from "convex/values";
 import { query } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
-import type { Doc, Id } from "./_generated/dataModel";
+import type { Id } from "./_generated/dataModel";
 import {
   exigirAlcanceSobreGuarda,
   exigirGuardaActivo,
   guardasElegibles,
 } from "./model/alcanceGuarda";
+import {
+  CAPACIDADES_DISPONIBILIDAD,
+  evaluarDisponibilidadDe,
+  horarioEvaluable,
+  inasistenciaEvaluable,
+  ultimoDiaDe,
+} from "./model/disponibilidad";
 import { entradaVentanaValidator } from "./model/roles";
-import { diaColombia } from "./lib/incidenteMetricas";
 import { rigeEl, fechasDeVentana } from "./lib/horariosGuarda";
+import { ventanaQueOcupa } from "./lib/coberturas";
 import {
   ORDEN_PARA_CUBRIR,
   evaluarDisponibilidadGuarda,
   ventanaDeConsulta,
+  type CoberturaQueOcupa,
   type HorarioEvaluable,
   type InasistenciaEvaluable,
   type MotivoDisponibilidad,
@@ -22,10 +30,10 @@ import {
 /**
  * Disponibilidad de los guardas para una ventana: CALCULADA, nunca guardada.
  *
- * Solo lee horarios e inasistencias y se los pasa a
- * `evaluarDisponibilidadGuarda`, que es donde vive la regla. No escribe nada,
- * no mira asignaciones, contratos ni turnos, y ninguna puerta de acceso
- * depende de su resultado: es información para planificar.
+ * Solo lee horarios, inasistencias y las coberturas que ya ocupan al guarda,
+ * y se los pasa a `evaluarDisponibilidadGuarda`, que es donde vive la regla.
+ * No escribe nada, no mira asignaciones, contratos ni turnos, y ninguna puerta
+ * de acceso depende de su resultado: es información para planificar.
  *
  * Quién puede: junta horarios e inasistencias, así que exige las DOS
  * capacidades y el alcance de `model/alcanceGuarda.ts` con ambas a la vez
@@ -33,28 +41,6 @@ import {
  * trabajan en sus conjuntos—. No sirve para descubrir más guardas de los que
  * ya se ven en esos dos módulos.
  */
-
-const CAPACIDADES = ["seguridad.horarios", "seguridad.inasistencias"] as const;
-
-function horarioEvaluable(h: Doc<"horariosGuarda">): HorarioEvaluable {
-  return {
-    id: h._id,
-    condominioId: h.condominioId ?? null,
-    fechaInicio: h.fechaInicio,
-    fechaFin: h.fechaFin,
-    terminaEl: h.terminaEl,
-    bloques: h.bloques,
-  };
-}
-
-function inasistenciaEvaluable(i: Doc<"inasistencias">): InasistenciaEvaluable {
-  return { id: i._id, tipo: i.tipo, inicio: i.inicio, fin: i.fin, estado: i.estado };
-}
-
-/** El último día civil que toca la ventana: los horarios que empiezan después no cuentan. */
-function ultimoDiaDe(ventana: { inicio: number; fin: number }): string {
-  return diaColombia(ventana.fin - 1);
-}
 
 /**
  * Los motivos con el nombre del conjunto puesto, para pintarlos. Nada más se
@@ -78,7 +64,9 @@ async function conNombres(ctx: QueryCtx, motivos: readonly MotivoDisponibilidad[
             ...m,
             condominioNombre: m.condominioId == null ? null : await nombre(m.condominioId),
           }
-        : m,
+        : m.tipo === "cobertura"
+          ? { ...m, condominioNombre: await nombre(m.condominioId) }
+          : m,
     ),
   );
 }
@@ -96,7 +84,7 @@ export const deGuarda = query({
     ventana: entradaVentanaValidator,
   },
   handler: async (ctx, args) => {
-    await exigirAlcanceSobreGuarda(ctx, args.companiaId, args.userId, CAPACIDADES);
+    await exigirAlcanceSobreGuarda(ctx, args.companiaId, args.userId, CAPACIDADES_DISPONIBILIDAD);
     await exigirGuardaActivo(
       ctx,
       args.companiaId,
@@ -104,41 +92,12 @@ export const deGuarda = query({
       "Solo se evalúa la disponibilidad de guardas.",
     );
     const ventana = ventanaDeConsulta(args.ventana);
-
-    /* Acotado por guarda y por fechas: solo lo que empezó antes de que acabe
-     * la ventana. Lo que ya había terminado lo descarta la evaluación. */
-    const [horarios, inasistencias] = await Promise.all([
-      ctx.db
-        .query("horariosGuarda")
-        .withIndex("by_compania_user", (q) =>
-          q
-            .eq("companiaId", args.companiaId)
-            .eq("userId", args.userId)
-            .lte("fechaInicio", ultimoDiaDe(ventana)),
-        )
-        .collect(),
-      ctx.db
-        .query("inasistencias")
-        .withIndex("by_compania_user", (q) =>
-          q
-            .eq("companiaId", args.companiaId)
-            .eq("userId", args.userId)
-            .lt("inicio", ventana.fin),
-        )
-        .collect(),
-    ]);
-
-    const evaluables = horarios.map(horarioEvaluable);
-    const resultado = evaluarDisponibilidadGuarda({
-      ventana,
-      horarios: evaluables,
-      inasistencias: inasistencias.map(inasistenciaEvaluable),
-    });
+    const resultado = await evaluarDisponibilidadDe(ctx, args.companiaId, args.userId, ventana);
 
     /* Los horarios que rigen algún día de la ventana: el contexto de por qué
      * se sabe (o no) lo que se sabe. */
     const fechas = fechasDeVentana(ventana);
-    const vigentes = horarios.filter((h) => fechas.some((f) => rigeEl(h, f)));
+    const vigentes = resultado.horarios.filter((h) => fechas.some((f) => rigeEl(h, f)));
     const nombresConjunto = await Promise.all(
       vigentes.map((h) => (h.condominioId ? ctx.db.get(h.condominioId) : null)),
     );
@@ -173,14 +132,15 @@ export const deGuardasEnAlcance = query({
     ventana: entradaVentanaValidator,
   },
   handler: async (ctx, args) => {
-    const guardas = await guardasElegibles(ctx, args.companiaId, CAPACIDADES);
+    const guardas = await guardasElegibles(ctx, args.companiaId, CAPACIDADES_DISPONIBILIDAD);
     const ventana = ventanaDeConsulta(args.ventana);
     const visibles = new Set(guardas.map((g) => g.userId));
 
-    /* Dos lecturas para toda la compañía, acotadas por fechas, en vez de dos
-     * por guarda. Las inasistencias van por el índice de las activas que aún
-     * no han terminado; los horarios, por los que empezaron antes del fin. */
-    const [horarios, inasistencias] = await Promise.all([
+    /* Tres lecturas para toda la compañía, acotadas por fechas, en vez de
+     * tres por guarda. Las inasistencias y las coberturas van por los índices
+     * de lo que aún no ha terminado; los horarios, por los que empezaron
+     * antes del fin. */
+    const [horarios, inasistencias, coberturas] = await Promise.all([
       ctx.db
         .query("horariosGuarda")
         .withIndex("by_compania", (q) =>
@@ -193,21 +153,38 @@ export const deGuardasEnAlcance = query({
           q.eq("companiaId", args.companiaId).eq("estado", "activa").gt("fin", ventana.inicio),
         )
         .collect(),
+      ctx.db
+        .query("coberturas")
+        .withIndex("by_compania_fin", (q) =>
+          q.eq("companiaId", args.companiaId).gt("fin", ventana.inicio),
+        )
+        .collect(),
     ]);
 
-    const horariosDe = new Map<Id<"users">, HorarioEvaluable[]>();
-    for (const h of horarios) {
-      if (!visibles.has(h.userId)) continue;
-      horariosDe.set(h.userId, [...(horariosDe.get(h.userId) ?? []), horarioEvaluable(h)]);
+    function agrupar<T>(filas: { userId: Id<"users">; valor: T }[]) {
+      const porGuarda = new Map<Id<"users">, T[]>();
+      for (const { userId, valor } of filas) {
+        if (!visibles.has(userId)) continue;
+        porGuarda.set(userId, [...(porGuarda.get(userId) ?? []), valor]);
+      }
+      return porGuarda;
     }
-    const inasistenciasDe = new Map<Id<"users">, InasistenciaEvaluable[]>();
-    for (const i of inasistencias) {
-      if (!visibles.has(i.userId) || i.inicio >= ventana.fin) continue;
-      inasistenciasDe.set(i.userId, [
-        ...(inasistenciasDe.get(i.userId) ?? []),
-        inasistenciaEvaluable(i),
-      ]);
-    }
+    const horariosDe = agrupar<HorarioEvaluable>(
+      horarios.map((h) => ({ userId: h.userId, valor: horarioEvaluable(h) })),
+    );
+    const inasistenciasDe = agrupar<InasistenciaEvaluable>(
+      inasistencias
+        .filter((i) => i.inicio < ventana.fin)
+        .map((i) => ({ userId: i.userId, valor: inasistenciaEvaluable(i) })),
+    );
+    const coberturasDe = agrupar<CoberturaQueOcupa>(
+      coberturas.flatMap((c) => {
+        const ocupa = ventanaQueOcupa(c);
+        return ocupa
+          ? [{ userId: c.userId, valor: { id: c._id, condominioId: c.condominioId, ...ocupa } }]
+          : [];
+      }),
+    );
 
     const filas = await Promise.all(
       guardas.map(async (g) => {
@@ -215,6 +192,7 @@ export const deGuardasEnAlcance = query({
           ventana,
           horarios: horariosDe.get(g.userId) ?? [],
           inasistencias: inasistenciasDe.get(g.userId) ?? [],
+          coberturas: coberturasDe.get(g.userId) ?? [],
         });
         return {
           userId: g.userId,

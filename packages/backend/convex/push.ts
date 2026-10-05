@@ -244,3 +244,32 @@ export const avisarAUnidades = internalAction({
     });
   },
 });
+
+/**
+ * Lo mismo para personas concretas, sin pasar por casas: el guarda al que se
+ * le pide una cobertura no es residente de ninguna. Mismos tokens y mismo
+ * envío que `avisarAUnidades`.
+ */
+export const avisarAPersonas = internalAction({
+  args: {
+    userIds: v.array(v.id("users")),
+    titulo: v.string(),
+    cuerpo: v.string(),
+    ruta: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<{ enviados: number; apagados: number }> => {
+    if (args.userIds.length === 0) return { enviados: 0, apagados: 0 };
+    const tokens: { userId: Id<"users">; token: string }[] = await ctx.runQuery(
+      internal.push.tokensDe,
+      { userIds: args.userIds },
+    );
+    return await ctx.runAction(internal.push.enviar, {
+      mensajes: tokens.map((t) => ({
+        token: t.token,
+        titulo: args.titulo,
+        cuerpo: args.cuerpo,
+        ruta: args.ruta,
+      })),
+    });
+  },
+});

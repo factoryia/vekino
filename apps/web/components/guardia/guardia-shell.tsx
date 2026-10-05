@@ -25,6 +25,7 @@ import { authClient } from "@/lib/auth-client";
 import { Spinner } from "@/components/ui/spinner";
 import { CambiarClaveTemporalModal } from "@/components/cambiar-clave-temporal-modal";
 import { RecordatorioCierreTurno } from "@/components/guardia/recordatorio-cierre";
+import { SolicitudesCobertura } from "@/components/guardia/solicitudes-cobertura";
 import { WhatsappFab } from "@/components/whatsapp-fab";
 import { hexToHslChannels, hexToBrandForeground, cn, initials } from "@/lib/utils";
 import { BrandThemeProvider } from "@/lib/brand-theme";
@@ -163,6 +164,9 @@ function Guard({ children }: { children: React.ReactNode }) {
               logo={home.condominio.logo}
             />
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-20 lg:pb-0">
+              {/* Las solicitudes de cobertura del guarda, en cualquier página
+                  de la portería. No sale si no hay nada pendiente. */}
+              <SolicitudesCobertura />
               {children}
             </div>
             <MobileBottomNav

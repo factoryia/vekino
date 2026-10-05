@@ -1,5 +1,6 @@
 import { ESTADOS_INCIDENTE } from "../lib/incidentes.ts";
 import { TIPOS_INASISTENCIA } from "../lib/inasistencias.ts";
+import { ESTADOS_COBERTURA } from "../lib/coberturas.ts";
 import { v } from "convex/values";
 
 /**
@@ -309,6 +310,11 @@ export const bloqueSemanalValidator = v.object({
  * hora, en TEXTO de pared. La lee el servidor en hora de Colombia
  * (`lib/inasistencias.ts:ventanaInasistencia`); el navegador no decide la zona.
  */
+/** Ciclo de vida de una cobertura. La lista y sus reglas viven en `lib/coberturas.ts`. */
+export const estadoCoberturaValidator = v.union(
+  ...ESTADOS_COBERTURA.map((estado) => v.literal(estado)),
+);
+
 export const entradaVentanaValidator = v.union(
   v.object({
     diaCompleto: v.literal(true),
