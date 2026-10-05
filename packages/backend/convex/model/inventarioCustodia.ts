@@ -279,7 +279,9 @@ export type VistaCustodiaGuarda = {
   observacionDevolucion: string | null;
   activa: boolean;
   /**
-   * El guarda ya no está asignado al conjunto pero sigue con el elemento.
+   * El guarda hoy no opera en el conjunto —ya no está asignado, se fue a
+   * cubrir otro, o la cobertura con la que estaba aquí terminó— pero sigue con
+   * el elemento.
    *
    * NO se cierra sola. La relación laboral y la custodia física son cosas
    * distintas —el mismo criterio que hizo que la custodia del conjunto no
@@ -297,7 +299,7 @@ export async function aVistaCustodiaGuarda(
   ctx: Ctx,
   c: Doc<"inventarioCustodiaGuardas">,
   usuario: (id: Id<"users">) => Promise<Doc<"users"> | null>,
-  /** Quiénes siguen asignados hoy. Ausente = no se marca pendiente. */
+  /** Quiénes operan hoy en el conjunto. Ausente = no se marca pendiente. */
   guardasVigentes?: ReadonlySet<Id<"users">>,
 ): Promise<VistaCustodiaGuarda> {
   const [guarda, quienEntrego, quienRecibio] = await Promise.all([

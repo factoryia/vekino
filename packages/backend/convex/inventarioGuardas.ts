@@ -3,7 +3,14 @@ import { query, mutation } from "./_generated/server";
 import type { QueryCtx, MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { exigirAcceso } from "./model/acceso";
-import { asignacionVigente, guardasDelConjunto } from "./model/asignacion";
+import {
+  motivoDeSuspension,
+  viasDeGuardiaDelConjunto,
+  viasOperativasEnConjunto,
+  type Via,
+  type ViaMembership,
+} from "./model/vias";
+import { displayNameFromUser } from "./model/displayName";
 import { logNovedadItem } from "./model/inventarioNovedad";
 import {
   aVistaCustodiaGuarda,
@@ -36,6 +43,14 @@ import { MAX_OBSERVACION, normalizarTexto } from "./lib/inventario";
  * Lo que NO hay aquí, deliberadamente: mover el elemento a otro conjunto,
  * devolverlo a la compañía, archivarlo o tocar su estado. Eso es de las
  * tareas 1 y 2 y sigue siendo del administrador de la compañía.
+ *
+ * El guarda nunca es quien obra aquí: es a quien se le entrega. Lo que sí
+ * depende de él es si HOY opera en esta portería —para recibir material, para
+ * salir en el desplegable y para no figurar como "pendiente"—, y eso se
+ * pregunta con las vías operativas de `model/vias.ts`, las mismas con las que
+ * le abre la portería: con una cobertura activa opera en el conjunto que
+ * cubre y no en los suyos de siempre. Las reglas del supervisor que reparte
+ * no cambian con la cobertura de nadie.
  */
 
 /** Cuántas custodias abiertas de una portería se leen de una vez. */
@@ -144,6 +159,46 @@ function exigirCompaniaDelAcceso(
   return compania._id;
 }
 
+/**
+ * Los guardas que HOY operan en esta portería por cuenta de esta compañía.
+ *
+ * Sale de `viasDeGuardiaDelConjunto`, la resolución con la que la portería
+ * arma su relevo: la cadena entera de cada vía y el contexto de cobertura ya
+ * aplicado. Así el guarda que hoy cubre otro conjunto no figura aquí aunque
+ * su asignación siga viva, y el que cubre éste sí, aunque no tenga ninguna.
+ *
+ * Solo las vías de una compañía (asignación o cobertura) y solo de ESTA: el
+ * material es de la empresa, y dos empresas pueden cubrir la misma portería.
+ * La membresía de un guarda propio del conjunto no cuenta, como no contó
+ * nunca: no es personal de la compañía.
+ *
+ * No es la plantilla (`guardasDelConjunto`, que sigue siendo quién está
+ * asignado de forma permanente): es quién está de turno posible hoy.
+ */
+async function guardasOperativos(
+  ctx: QueryCtx | MutationCtx,
+  condominioId: Id<"condominios">,
+  companiaId: Id<"companiasSeguridad">,
+): Promise<{ userId: Id<"users">; nombre: string }[]> {
+  const vias = await viasDeGuardiaDelConjunto(ctx, condominioId);
+  const ids = new Set(
+    vias
+      .filter((v): v is Exclude<Via, ViaMembership> => v.tipo !== "membership")
+      .filter((v) => v.companiaId === companiaId)
+      .map((v) => v.userId),
+  );
+  const filas = await Promise.all(
+    [...ids].map(async (userId) => {
+      const u = await ctx.db.get(userId);
+      if (!u || !u.active) return null;
+      return { userId: u._id, nombre: displayNameFromUser(u) };
+    }),
+  );
+  return filas
+    .filter((g): g is NonNullable<typeof g> => g !== null)
+    .sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+}
+
 function exigirObservacion(bruto: string | undefined): string | undefined {
   const texto = normalizarTexto(bruto);
   if (texto && texto.length > MAX_OBSERVACION) {
@@ -161,10 +216,9 @@ function exigirObservacion(bruto: string | undefined): string | undefined {
 /**
  * Los guardas a los que este supervisor puede entregar material hoy.
  *
- * Sale de `guardasDelConjunto`, la misma función que arma el equipo del
- * supervisor: comprueba la cadena entera —asignación, contrato, compañía,
- * miembro— y filtra por compañía, así que no puede ofrecer a un guarda de la
- * empresa de al lado que cubre la misma portería.
+ * Sale de `guardasOperativos`: la cadena entera y el contexto de cobertura,
+ * filtrado por compañía, así que no ofrece a un guarda de la empresa de al
+ * lado que cubre la misma portería ni a uno propio que hoy cubre otra.
  */
 export const guardasDisponibles = query({
   args: { condominioId: v.id("condominios") },
@@ -175,8 +229,7 @@ export const guardasDisponibles = query({
       "inventario.custodiar",
     );
     const companiaId = exigirCompaniaDelAcceso(acceso.compania);
-    const guardas = await guardasDelConjunto(ctx, args.condominioId, companiaId);
-    return guardas.map((g) => ({ userId: g.userId, nombre: g.nombre }));
+    return await guardasOperativos(ctx, args.condominioId, companiaId);
   },
 });
 
@@ -189,8 +242,11 @@ export const guardasDisponibles = query({
  * Más una por elemento para hidratarlo, que es inevitable —son documentos
  * distintos— pero va en paralelo y no encadenada.
  *
- * Los guardas vigentes se resuelven UNA vez para todo el listado: es lo que
- * permite marcar los pendientes sin preguntar por cada fila.
+ * Los guardas que hoy operan aquí se resuelven UNA vez para todo el listado:
+ * es lo que permite marcar los pendientes sin preguntar por cada fila.
+ * "Pendiente" es material en manos de quien hoy NO opera en esta portería: el
+ * guarda que se fue a cubrir otro conjunto con un radio de éste, o el que
+ * cubrió éste y ya terminó. Por eso se mira con las vías operativas.
  */
 export const itemsDelCondominio = query({
   args: { condominioId: v.id("condominios") },
@@ -224,9 +280,9 @@ export const itemsDelCondominio = query({
         TOPE_CUSTODIAS,
       );
 
-    /* Una sola resolución de "quién sigue asignado", no una por fila. */
+    /* Una sola resolución de "quién opera hoy aquí", no una por fila. */
     const vigentes = new Set(
-      (await guardasDelConjunto(ctx, args.condominioId, companiaId)).map(
+      (await guardasOperativos(ctx, args.condominioId, companiaId)).map(
         (g) => g.userId,
       ),
     );
@@ -314,7 +370,7 @@ export const historialDeItem = query({
     const condominioId = ultima.condominioId;
 
     const vigentes = new Set(
-      (await guardasDelConjunto(ctx, condominioId, companiaId)).map(
+      (await guardasOperativos(ctx, condominioId, companiaId)).map(
         (g) => g.userId,
       ),
     );
@@ -339,8 +395,9 @@ export const historialDeItem = query({
  *   2. está asignado a un conjunto AHORA (si no, no hay nada que repartir);
  *   3. quien obra es supervisor de ESE conjunto;
  *   4. el elemento es de la compañía por la que lo supervisa;
- *   5. el guarda tiene asignación VIGENTE en ese conjunto, con rol de guarda,
- *      y por la misma compañía;
+ *   5. el guarda opera HOY en ese conjunto como guarda y por la misma
+ *      compañía: su asignación vigente o su cobertura activa, con el contexto
+ *      de cobertura aplicado;
  *   6. el elemento no está ya en manos de otro guarda.
  *
  * El doble submit no necesita candado: la mutación es una transacción
@@ -359,24 +416,38 @@ export const entregar = mutation({
       args.itemId,
     );
 
-    /* La cadena entera del guarda, no solo su id.
+    /* La cadena entera del guarda, no solo su id, y con su contexto.
      *
-     * `asignacionVigente` comprueba asignación, contrato, compañía activa y
-     * miembro no dado de baja: el mismo criterio con el que la portería le
-     * deja entrar. Comprobar solo que existe el `userId` habría dejado
-     * entregar material a alguien despedido la semana pasada. */
-    const via = await asignacionVigente(ctx, args.guardaUserId, condominioId);
+     * `viasOperativasEnConjunto` es el mismo criterio con el que la portería
+     * le deja entrar: asignación, contrato, compañía activa, miembro no dado
+     * de baja, conjunto activo y, encima, la cobertura. Comprobar solo que
+     * existe el `userId` habría dejado entregar material a alguien despedido
+     * la semana pasada; mirar solo su asignación, entregarle el radio de este
+     * conjunto mientras está cubriendo otro. Cuenta la vía de una compañía
+     * —asignación o cobertura—, la primera, como antes la asignación vigente;
+     * la membresía de un guarda propio no, como no contó nunca. */
+    const { vias, suspendidas, contexto } = await viasOperativasEnConjunto(
+      ctx,
+      args.guardaUserId,
+      condominioId,
+    );
+    const via = vias.find(
+      (v): v is Exclude<Via, ViaMembership> => v.tipo !== "membership",
+    );
     if (!via) {
+      if (contexto.tipo !== "permanente" && suspendidas.some((v) => v.tipo === "asignacion")) {
+        throw new Error(motivoDeSuspension(contexto));
+      }
       throw new Error(
         "Esa persona no tiene una asignación vigente en este conjunto.",
       );
     }
-    if (via.asignacion.rol !== "guardia") {
+    if (via.rol !== "guardia") {
       throw new Error("Esa persona no está asignada como guarda aquí.");
     }
     /* Y de NUESTRA compañía: dos empresas pueden cubrir la misma portería, y
      * el material de una no se le entrega al personal de la otra. */
-    if (via.asignacion.companiaId !== item.companiaId) {
+    if (via.companiaId !== item.companiaId) {
       throw new Error("Ese guarda es de otra compañía.");
     }
 

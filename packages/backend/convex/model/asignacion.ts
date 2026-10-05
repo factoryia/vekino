@@ -259,13 +259,17 @@ export async function viasDeAsignacionDelConjunto(
 }
 
 /**
- * Los guardas que HOY cubren un conjunto por cuenta de una compañía.
+ * Los guardas que HOY cubren un conjunto por cuenta de una compañía: la
+ * PLANTILLA, por asignación permanente.
  *
- * Vive aquí y no dentro de `asignaciones.ts` porque la usan dos módulos: el
- * equipo del supervisor y la custodia del inventario. Es exactamente el caso
- * del que avisa la cabecera de este archivo — tener el criterio de vigencia
- * en dos sitios es cómo se abre el agujero por el que alguien entrega un
- * radio a un guarda que ya no trabaja allí.
+ * Vive aquí y no dentro de `asignaciones.ts` junto a la cadena que comprueba:
+ * tener el criterio de vigencia en dos sitios es cómo se abre el agujero por
+ * el que alguien sigue figurando en un conjunto que ya no cubre. La usa el
+ * equipo del supervisor (`asignaciones.miEquipo`).
+ *
+ * No mira coberturas, a propósito: es quién está asignado, no quién opera hoy.
+ * La custodia del inventario, que sí necesita "quién opera hoy aquí", pregunta
+ * por las vías operativas (`guardasOperativos` en `inventarioGuardas.ts`).
  *
  * Filtra por compañía A PROPÓSITO y no por comodidad: dos empresas pueden
  * cubrir la misma portería, y "está asignado a este conjunto" no implica "es
