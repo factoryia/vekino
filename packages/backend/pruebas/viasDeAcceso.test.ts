@@ -456,10 +456,10 @@ describe("caso F: compania suspendida, inactiva o miembro de baja", () => {
     expect(await e.vias(e.jason, e.bosque)).toEqual([]);
   });
 
-  test("condominiosSupervisados conserva su criterio de solo fechas", async () => {
-    /* Decision pendiente, fijada a proposito: esta lista mira la asignacion
-     * y su contrato, no la compania. Si se decide pasarla a la cadena entera,
-     * esta prueba es la que tiene que cambiar, y no por accidente. */
+  test("condominiosSupervisados usa la misma cadena que la via", async () => {
+    /* Fase 3: antes miraba solo la asignacion y su contrato, y una compania
+     * suspendida seguia ampliando el alcance de su supervisor. Ahora la lista
+     * y la via dicen lo mismo. Ver hardeningVigilancia.test.ts. */
     await e.plataforma.mutation(api.companias.setEstado, {
       companiaId: e.andina,
       estado: "suspendida",
@@ -468,7 +468,7 @@ describe("caso F: compania suspendida, inactiva o miembro de baja", () => {
       supervisa: [...(await condominiosSupervisados(ctx, e.sofia))],
       via: await asignacionVigente(ctx, e.sofia, e.alamos),
     }));
-    expect(r.supervisa).toEqual([e.alamos]);
+    expect(r.supervisa).toEqual([]);
     expect(r.via).toBeNull();
   });
 });
@@ -557,24 +557,24 @@ describe("caso G: membresia y asignacion a la vez", () => {
 });
 
 // ─────────────────────────────────────────────────────────────
-describe("lo que se conserva tal cual, aunque haya decision pendiente", () => {
+describe("casos limite de la resolucion", () => {
   let e: Escenario;
   beforeEach(async () => {
     e = await montar();
   });
 
-  test("un conjunto inactivo sale de la sesion pero no corta la via", async () => {
-    /* Asi funcionaba: `misAsignacionesVigentes` filtra el conjunto inactivo
-     * y la autorizacion no lo mira. Se centralizo sin cambiar ninguna de las
-     * dos mitades. */
+  test("un conjunto inactivo corta la via y sale de la sesion, con el mismo criterio", async () => {
+    /* Fase 3: el conjunto activo es el quinto eslabon de la cadena. Antes la
+     * sesion lo quitaba pero la porteria seguia abierta; ahora las dos miran
+     * lo mismo. Ver hardeningVigilancia.test.ts. */
     await e.t.run(async (ctx) => {
       await ctx.db.patch(e.bosque, { isActive: false });
     });
-    expect(await e.vias(e.jason, e.bosque)).toHaveLength(1);
+    expect(await e.vias(e.jason, e.bosque)).toEqual([]);
     const home = await e.como("jason").query(api.guardia.home, {
       condominioId: e.bosque,
     });
-    expect(home.allowed).toBe(true);
+    expect(home.allowed).toBe(false);
     const me = await e.como("jason").query(api.users.me, {});
     expect(me!.asignaciones.map((a) => a.condominioId)).toEqual([e.alamos]);
   });

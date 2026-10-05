@@ -11,8 +11,7 @@ import {
   vigentes,
 } from "./model/authz";
 import { exigirAcceso, resolverAcceso } from "./model/acceso";
-import { asignacionVigente } from "./model/asignacion";
-import { membershipEn, viaDeMembership } from "./model/vias";
+import { membershipEn, viasDeGuardiaDelConjunto } from "./model/vias";
 import { logMinuta, rondaEnCurso, turnoAbierto } from "./model/minuta";
 import {
   esVisitanteVigente,
@@ -144,46 +143,20 @@ export const turnoActivo = query({
  * Un solo criterio para dos usos: el catálogo de compañeros y relevos
  * (`equipo`) y la comprobación del relevo en `cerrarTurno`. Si fueran dos
  * copias, el selector acabaría ofreciendo a alguien que el servidor rechaza.
+ *
+ * El turno compartido es de la portería, no de la tabla de la que cuelgue
+ * cada uno: los guardas que cubren por compañía son compañeros de turno igual
+ * que los del conjunto. Los dos salen de `viasDeGuardiaDelConjunto`, que
+ * pregunta si cada persona tiene una vía de GUARDA en ESTE conjunto —no una
+ * asignación cualquiera—, con la misma cadena con la que la portería la deja
+ * entrar.
  */
 async function guardasDeLaPorteria(
   ctx: QueryCtx | MutationCtx,
   condominioId: Id<"condominios">,
 ): Promise<{ userId: Id<"users">; nombre: string }[]> {
-  const memberships = await ctx.db
-    .query("memberships")
-    .withIndex("by_condominio", (q) => q.eq("condominioId", condominioId))
-    .collect();
-  const guardias = memberships.filter(
-    (m) => viaDeMembership(m)?.roles.includes("guardia") === true,
-  );
-
-  /* El turno compartido es de la portería, no de la tabla de la que cuelgue
-   * cada uno: los guardas que cubren por compañía son compañeros de turno
-   * igual que los del conjunto. Sin esto, dos guardas de la misma garita no
-   * se veían y no podían abrir turno juntos. */
-  const asignados = await ctx.db
-    .query("asignaciones")
-    .withIndex("by_condominio_rol", (q) =>
-      q.eq("condominioId", condominioId).eq("rol", "guardia"),
-    )
-    .collect();
-
-  const ids = new Set<Id<"users">>();
-  for (const m of guardias) ids.add(m.userId);
-  for (const a of asignados) {
-    /* Una asignación vigente bajo un contrato vencido no pone a nadie en la
-     * garita: se comprueba la cadena entera, no solo la fila.
-     *
-     * OJO, sin corregir a propósito: esto pregunta si la PERSONA tiene alguna
-     * asignación viva aquí, con cualquier rol, y no si ESTA fila de guarda la
-     * tiene. Un guarda ascendido a supervisor en el mismo conjunto —fila de
-     * guarda terminada, fila de supervisor viva— sigue saliendo como relevo.
-     * `guardasDelConjunto` ya juzga cada fila; alinear esto cambia el relevo y
-     * queda pendiente de aprobarse aparte. */
-    if (!ids.has(a.userId) && (await asignacionVigente(ctx, a.userId, condominioId))) {
-      ids.add(a.userId);
-    }
-  }
+  const vias = await viasDeGuardiaDelConjunto(ctx, condominioId);
+  const ids = new Set<Id<"users">>(vias.map((v) => v.userId));
 
   const rows = await Promise.all(
     [...ids].map(async (userId) => {

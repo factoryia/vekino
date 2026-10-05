@@ -39,17 +39,19 @@ function cacheDoc<T extends TableNames>(ctx: Ctx) {
 }
 
 /**
- * Los cuatro documentos que hacen falta para juzgar una asignación.
+ * Los documentos que hacen falta para juzgar una asignación.
  *
  * Se comparte entre todas las asignaciones de una misma consulta porque los
- * cincuenta guardas de una portería cuelgan del MISMO contrato y de la MISMA
- * compañía: sin caché eran cien lecturas de dos documentos.
+ * cincuenta guardas de una portería cuelgan del MISMO contrato, de la MISMA
+ * compañía y del MISMO conjunto: sin caché eran cien lecturas de dos
+ * documentos.
  */
 export function cacheDeCadena(ctx: Ctx) {
   return {
     contrato: cacheDoc<"companiaContratos">(ctx),
     compania: cacheDoc<"companiasSeguridad">(ctx),
     miembro: cacheDoc<"companiaMiembros">(ctx),
+    condominio: cacheDoc<"condominios">(ctx),
     usuario: cacheDoc<"users">(ctx),
   };
 }
@@ -73,22 +75,25 @@ export type ViaAsignacion = {
   asignacion: Doc<"asignaciones">;
   contrato: Doc<"companiaContratos">;
   compania: Doc<"companiasSeguridad">;
+  condominio: Doc<"condominios">;
 };
 
 /*
- * LOS CUATRO ESLABONES, EN UN SOLO SITIO.
+ * LOS CINCO ESLABONES, EN UN SOLO SITIO.
  *
  * Asignación vigente → contrato vigente → compañía activa → miembro no dado
- * de baja. Es EL criterio del eje de seguridad, y existe en funciones propias
- * justamente para que no haya dos versiones: la cabecera de este archivo
- * avisa de que tenerlo repetido es cómo se abren los agujeros por los que
- * alguien sigue entrando a un conjunto que ya no cubre.
+ * de baja → conjunto activo. Es EL criterio del eje de seguridad, y existe en
+ * funciones propias justamente para que no haya dos versiones: la cabecera de
+ * este archivo avisa de que tenerlo repetido es cómo se abren los agujeros
+ * por los que alguien sigue entrando a un conjunto que ya no cubre.
  *
- * Partido en dos mitades porque hay dos preguntas que no comprueban los
- * cuatro: `condominiosSupervisados` solo mira las fechas —la asignación y su
- * contrato— y `asignacionEstorba` mira las personas —compañía y miembro—
- * contra una ventana futura en vez de contra ahora. Cada una usa su mitad;
- * nadie reescribe un eslabón.
+ * El quinto eslabón es una regla del CONJUNTO, no de la asignación: un
+ * conjunto inactivo no se opera. La fila no se toca —ni fechas ni corte—, así
+ * que al reactivar el conjunto la misma asignación vuelve a valer sola.
+ *
+ * Está partido en funciones porque `asignacionEstorba` no los comprueba
+ * todos: mira las personas —compañía y miembro— contra una ventana futura en
+ * vez de contra ahora. Usa esa parte; nadie reescribe un eslabón.
  *
  * Reciben la fila ya leída —quien pregunta por un conjunto entero ya las tiene
  * todas— y los lectores cacheados, para poder resolver cincuenta a la vez sin
@@ -119,6 +124,16 @@ async function personalDeAlta(
   return compania;
 }
 
+/** Eslabón 5: el conjunto existe y está activo. */
+async function conjuntoActivo(
+  a: Doc<"asignaciones">,
+  cache: CacheDeCadena,
+): Promise<Doc<"condominios"> | null> {
+  const condominio = await cache.condominio(a.condominioId);
+  if (!condominio || !condominio.isActive) return null;
+  return condominio;
+}
+
 /** La cadena entera sobre UNA fila. Null si cae cualquier eslabón. */
 async function viaDeAsignacion(
   a: Doc<"asignaciones">,
@@ -129,6 +144,8 @@ async function viaDeAsignacion(
   if (!contrato) return null;
   const compania = await personalDeAlta(a, cache);
   if (!compania) return null;
+  const condominio = await conjuntoActivo(a, cache);
+  if (!condominio) return null;
   return {
     tipo: "asignacion",
     userId: a.userId,
@@ -138,6 +155,7 @@ async function viaDeAsignacion(
     asignacion: a,
     contrato,
     compania,
+    condominio,
   };
 }
 
@@ -202,7 +220,8 @@ async function viasDeAsignacionDe(
  * queda la misma de antes.
  *
  * Devuelve null en cuanto falla cualquier eslabón de la cadena: compañía
- * suspendida, miembro dado de baja, contrato vencido o asignación terminada.
+ * suspendida, miembro dado de baja, contrato vencido, asignación terminada o
+ * conjunto inactivo.
  */
 export async function asignacionVigente(
   ctx: Ctx,
@@ -212,6 +231,31 @@ export async function asignacionVigente(
 ): Promise<ViaAsignacion | null> {
   const vias = await viasDeAsignacionEn(ctx, userId, condominioId, ahora);
   return vias[0] ?? null;
+}
+
+/**
+ * Las asignaciones con un rol que dan acceso HOY a un conjunto, de cualquier
+ * persona.
+ *
+ * Se juzga CADA fila, no "¿tiene esta persona alguna asignación vigente
+ * aquí?". Preguntar lo segundo validaba una fila de guarda muerta con una fila
+ * viva de OTRO rol: el guarda ascendido a supervisor en el mismo conjunto
+ * seguía saliendo como relevo de la portería.
+ */
+export async function viasDeAsignacionDelConjunto(
+  ctx: Ctx,
+  condominioId: Id<"condominios">,
+  rol: Doc<"asignaciones">["rol"],
+  ahora: number = Date.now(),
+  cache: CacheDeCadena = cacheDeCadena(ctx),
+): Promise<ViaAsignacion[]> {
+  const filas = await ctx.db
+    .query("asignaciones")
+    .withIndex("by_condominio_rol", (q) =>
+      q.eq("condominioId", condominioId).eq("rol", rol),
+    )
+    .collect();
+  return await filtrarVias(filas, ahora, cache);
 }
 
 /**
@@ -239,25 +283,22 @@ export async function guardasDelConjunto(
   condominioId: Id<"condominios">,
   companiaId: Id<"companiasSeguridad">,
 ) {
-  const filas = await ctx.db
-    .query("asignaciones")
-    .withIndex("by_condominio_rol", (q) =>
-      q.eq("condominioId", condominioId).eq("rol", "guardia"),
-    )
-    .collect();
-
   const cache = cacheDeCadena(ctx);
-  const ahora = Date.now();
+  /* Fila a fila (`viasDeAsignacionDelConjunto`): preguntar por la persona
+   * hacía que alguien con dos filas en el mismo conjunto —una vencida y otra
+   * viva— apareciera DOS VECES en el listado y en el desplegable de entrega. */
+  const vias = await viasDeAsignacionDelConjunto(
+    ctx,
+    condominioId,
+    "guardia",
+    Date.now(),
+    cache,
+  );
 
-  /* Se juzga CADA fila, no "¿tiene esta persona alguna asignación vigente
-   * aquí?". Preguntar lo segundo hacía que alguien con dos filas en el mismo
-   * conjunto —una vencida y otra viva— apareciera DOS VECES en el listado y
-   * en el desplegable de entrega. */
   const resueltas = await Promise.all(
-    filas
-      .filter((a) => a.companiaId === companiaId)
-      .map(async (a) => {
-        if (!(await viaDeAsignacion(a, ahora, cache))) return null;
+    vias
+      .filter((via) => via.companiaId === companiaId)
+      .map(async ({ asignacion: a }) => {
         const u = await cache.usuario(a.userId);
         if (!u || !u.active) return null;
         return {
@@ -313,14 +354,8 @@ export type MiAsignacion = {
  *
  * Las asignaciones salen de la misma cadena que autoriza (`viasDeAsignacionDe`),
  * no de una copia: dos criterios de vigencia es exactamente cómo se abren los
- * agujeros por los que alguien sigue viendo un conjunto que ya no cubre.
- *
- * Encima de la cadena se quita el conjunto inactivo. Ese filtro es de esta
- * lista y no de la vía: la portería de un conjunto inactivo hoy NO rebota a
- * quien tiene asignación vigente —ni `requireCondominioRole` ni
- * `resolverAcceso` miran el conjunto—, solo deja de ofrecerse aquí. Se
- * conserva tal cual; si un conjunto inactivo debe cortar también el acceso es
- * una decisión pendiente, no un detalle de implementación.
+ * agujeros por los que alguien sigue viendo un conjunto que ya no cubre. El
+ * conjunto inactivo ya lo quita la cadena; aquí no se vuelve a filtrar.
  */
 export async function misAsignacionesVigentes(
   ctx: Ctx,
@@ -329,27 +364,19 @@ export async function misAsignacionesVigentes(
 ): Promise<MiAsignacion[]> {
   const vias = await viasDeAsignacionDe(ctx, userId, ahora);
 
-  const salida: MiAsignacion[] = [];
-  for (const via of vias) {
-    const condo = await ctx.db.get(via.condominioId);
-    if (!condo || !condo.isActive) continue;
-
-    salida.push({
+  return vias
+    .map((via) => ({
       asignacionId: via.asignacion._id,
       condominioId: via.condominioId,
-      condominioNombre: condo.name,
-      condominioLogo: condo.logo ?? null,
-      condominioColor: condo.primaryColor ?? null,
+      condominioNombre: via.condominio.name,
+      condominioLogo: via.condominio.logo ?? null,
+      condominioColor: via.condominio.primaryColor ?? null,
       companiaId: via.companiaId,
       companiaNombre: via.compania.nombre,
       rol: via.rol,
       vigenciaHasta: via.asignacion.vigenciaHasta ?? null,
-    });
-  }
-
-  return salida.sort((a, b) =>
-    a.condominioNombre.localeCompare(b.condominioNombre, "es"),
-  );
+    }))
+    .sort((a, b) => a.condominioNombre.localeCompare(b.condominioNombre, "es"));
 }
 
 /**
@@ -359,36 +386,25 @@ export async function misAsignacionesVigentes(
  * donde tiene asignación vigente con rol `supervisor`. Un supervisor de zona
  * norte no manda sobre la zona sur de la misma empresa.
  *
- * Solo mira los dos primeros eslabones —la asignación y su contrato—, como lo
- * hizo siempre: la compañía y el miembro los comprueba antes cada consumidor
- * sobre la membresía ACTIVA de quien pregunta (`exigirAccesoContrato`,
- * `companias.detail`, `historialDePersona`). No coincide del todo con la
- * cadena entera: una asignación de supervisor bajo una compañía suspendida, o
- * colgada de una membresía dada de baja, sigue contando aquí. Pasarla a los
- * cuatro eslabones cambiaría lo que ve un supervisor, así que se deja anotado
- * como decisión pendiente en vez de cambiarlo de paso.
+ * Con la cadena ENTERA, la misma que autoriza: una asignación de supervisor
+ * deja de ampliar su alcance en cuanto termina ella o su contrato, la
+ * compañía se suspende, la persona se da de baja o el conjunto se desactiva.
+ * Antes miraba solo las fechas, y una asignación colgada de una membresía
+ * dada de baja en OTRA compañía seguía abriendo el conjunto al supervisor de
+ * la nueva.
  *
- * Vive aquí, y no en `model/acceso.ts` donde se usa, para que la mitad de la
- * cadena que necesita no salga de este archivo.
+ * Vive aquí, y no en `model/acceso.ts` donde se usa, junto a la cadena que
+ * comprueba.
  */
 export async function condominiosSupervisados(
   ctx: Ctx,
   userId: Id<"users">,
   ahora: number = Date.now(),
 ): Promise<Set<Id<"condominios">>> {
-  const filas = await ctx.db
-    .query("asignaciones")
-    .withIndex("by_user", (q) => q.eq("userId", userId))
-    .collect();
-
-  const cache = cacheDeCadena(ctx);
-  const out = new Set<Id<"condominios">>();
-  for (const a of filas) {
-    if (a.rol !== "supervisor") continue;
-    if (!(await vigenteConSuContrato(a, ahora, cache))) continue;
-    out.add(a.condominioId);
-  }
-  return out;
+  const vias = await viasDeAsignacionDe(ctx, userId, ahora);
+  return new Set(
+    vias.filter((v) => v.rol === "supervisor").map((v) => v.condominioId),
+  );
 }
 
 /**
@@ -407,10 +423,15 @@ export async function condominiosSupervisados(
  * dada— quedaba bloqueado para siempre en el conjunto: la comprobacion de
  * solape miraba la fila cruda mientras el resto del sistema miraba la cadena.
  *
- * Esta funcion comprueba los mismos cuatro eslabones que `asignacionVigente`
+ * Esta funcion comprueba los mismos eslabones que `asignacionVigente`
  * —asignacion, contrato, compania, miembro— y vive pegada a ella para que no
  * vuelvan a separarse. Si una asignacion no puede dar acceso, no puede
  * estorbar: no hay nadie ahi con quien chocar.
+ *
+ * El quinto, el conjunto activo, NO se mira aqui a proposito. Las dos filas
+ * son del mismo conjunto, y desactivarlo es pasajero: si la vieja dejara de
+ * estorbar mientras el conjunto esta inactivo, al reactivarlo habria dos
+ * asignaciones vivas en la misma porteria.
  *
  * ── Lo que SIGUE bloqueando ──────────────────────────────────────────────
  * Dos asignaciones vivas a la misma porteria a la vez, aunque las traiga otra

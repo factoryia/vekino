@@ -1,6 +1,10 @@
 import type { QueryCtx, MutationCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
-import { viasDeAsignacionEn, type ViaAsignacion } from "./asignacion";
+import {
+  viasDeAsignacionDelConjunto,
+  viasDeAsignacionEn,
+  type ViaAsignacion,
+} from "./asignacion";
 
 type Ctx = QueryCtx | MutationCtx;
 
@@ -20,12 +24,23 @@ type Ctx = QueryCtx | MutationCtx;
  * hacer con ellas —sumar capacidades, exigir un rol, preferir una— es
  * política de quien pregunta, no un segundo criterio.
  *
- * Cada vía tiene UN criterio y vive en un solo sitio: la membresía en este
- * archivo, la asignación (los cuatro eslabones) en `model/asignacion.ts`.
+ * Cada vía tiene UN criterio y vive en un solo sitio:
+ *
+ *   membership  → la fila está activa (aquí, `viaDeMembership`);
+ *   asignacion  → asignación vigente → contrato vigente → compañía activa
+ *                 → miembro activo → conjunto activo (`model/asignacion.ts`).
+ *
+ * El conjunto activo es eslabón de la asignación y NO de la membresía: es la
+ * regla de que un conjunto inactivo no se opera por una asignación que siga
+ * en la base. La vía residencial no lo mira, como no lo miró nunca.
  *
  * Lo que todavía NO existe:
  *   - una vía temporal (la cobertura). Será una entidad propia, no una fila
- *     de `asignaciones`, y entrará aquí como un `tipo` más de `Via`;
+ *     de `asignaciones`, y entrará aquí como un `tipo` más de `Via`. Solo
+ *     podrá cubrir quien en su compañía es guarda (`companiaMiembros.roles`
+ *     = ["guardia"]): el supervisor NO es elegible. Que `asignaciones.rol`
+ *     diga que un supervisor puede cubrir un turno como guarda es otro asunto
+ *     sin resolver y no sirve para ampliar la cobertura;
  *   - un "contexto operativo". Cuando haga falta se DERIVA de estas vías
  *     —permanentes, luego temporales, luego la precedencia entre ellas— en
  *     `viasEnConjunto`, que es por donde ya preguntan `resolverAcceso` y la
@@ -126,6 +141,33 @@ export async function viasEnConjunto(
     viasDeAsignacionEn(ctx, userId, condominioId, ahora),
   ]);
   return { membership, vias: via ? [via, ...asignaciones] : asignaciones };
+}
+
+/**
+ * Las vías de GUARDA que dan acceso hoy a un conjunto, de cualquier persona.
+ *
+ * Responde "¿quién puede ser guarda en ESTE conjunto?" con el mismo criterio
+ * con el que la portería deja pasar: membresía activa con el rol `guardia`, o
+ * asignación de guarda que pasa la cadena entera. Cada fila de asignación se
+ * juzga por sí misma; que la persona tenga OTRA asignación viva aquí con otro
+ * rol no cuenta.
+ */
+export async function viasDeGuardiaDelConjunto(
+  ctx: Ctx,
+  condominioId: Id<"condominios">,
+  ahora: number = Date.now(),
+): Promise<Via[]> {
+  const [memberships, asignaciones] = await Promise.all([
+    ctx.db
+      .query("memberships")
+      .withIndex("by_condominio", (q) => q.eq("condominioId", condominioId))
+      .collect(),
+    viasDeAsignacionDelConjunto(ctx, condominioId, "guardia", ahora),
+  ]);
+  const porMembresia = memberships
+    .map(viaDeMembership)
+    .filter((v): v is ViaMembership => v?.roles.includes("guardia") === true);
+  return [...porMembresia, ...asignaciones];
 }
 
 /**
