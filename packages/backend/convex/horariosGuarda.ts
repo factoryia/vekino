@@ -130,7 +130,8 @@ async function hidratar(ctx: Ctx, filas: readonly Doc<"horariosGuarda">[]) {
  * CONJUNTO —o los dos generales— que lo planifiquen en el mismo momento.
  * Entre conjuntos distintos no se rechaza: el modelo ya admite que un guarda
  * esté asignado a dos porterías, y decidir que nunca puede estar planificado
- * en dos a la vez es una regla de disponibilidad, que es la fase siguiente.
+ * en dos a la vez es cosa de la disponibilidad, donde cualquiera de los dos lo
+ * ocupa (`lib/disponibilidad.ts`).
  * Un general frente a uno de conjunto tampoco se rechaza, por lo mismo.
  */
 export const crear = mutation({

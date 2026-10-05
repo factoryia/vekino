@@ -13,7 +13,8 @@ import { Button } from "@/components/ui/button";
  *
  * La superficie mínima: dónde, cuándo y quién la pide, y aceptar o rechazar.
  * Nada de su disponibilidad ni de sus inasistencias. No sale si no hay nada
- * pendiente. Aceptar es un compromiso: todavía no le da acceso al conjunto.
+ * pendiente. Aceptar es un compromiso: cuando empiece la ventana, el guarda
+ * operará temporalmente en ese conjunto (el shell lo lleva allí solo).
  */
 export function SolicitudesCobertura() {
   const pendientes = useQuery(api.coberturas.pendientesDeGuarda, {});

@@ -5,6 +5,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import {
+  AVISO_MOTIVO_SENSIBLE,
   ETIQUETA_TIPO_INASISTENCIA,
   MAX_MOTIVO,
   TIPOS_INASISTENCIA,
@@ -241,7 +242,9 @@ export function RegistrarInasistenciaDialog({
           ayuda={
             exigeMotivo(tipo)
               ? "Describe qué ocurrió."
-              : "Opcional."
+              : tipo === "incapacidad"
+                ? `Opcional. ${AVISO_MOTIVO_SENSIBLE}`
+                : "Opcional."
           }
         >
           <Textarea

@@ -23,61 +23,88 @@ type Ctx = QueryCtx | MutationCtx;
  * juzga la cadena.
  */
 
-async function deEstado(
+/**
+ * Las coberturas de un guarda en un estado que todavía no terminan en
+ * `desde`. Por `fin`, así que el histórico no se recorre.
+ */
+async function sinTerminar(
   ctx: Ctx,
   userId: Id<"users">,
   estado: Doc<"coberturas">["estado"],
-  antesDe: number,
+  desde: number,
 ): Promise<Doc<"coberturas">[]> {
   return await ctx.db
     .query("coberturas")
-    .withIndex("by_user_estado", (q) =>
-      q.eq("userId", userId).eq("estado", estado).lt("inicio", antesDe),
+    .withIndex("by_user_estado_fin", (q) =>
+      q.eq("userId", userId).eq("estado", estado).gt("fin", desde),
     )
     .collect();
 }
 
-/**
- * Las aceptadas de un guarda que todavía no terminan: la que corre y las que
- * vienen. Por `fin`, así que el histórico no se recorre.
- */
+/** Las aceptadas de un guarda que todavía no terminan: la que corre y las que vienen. */
 async function aceptadasSinTerminar(
   ctx: Ctx,
   userId: Id<"users">,
   ahora: number,
 ): Promise<Doc<"coberturas">[]> {
-  return await ctx.db
-    .query("coberturas")
-    .withIndex("by_user_estado_fin", (q) =>
-      q.eq("userId", userId).eq("estado", "aceptada").gt("fin", ahora),
-    )
-    .collect();
+  return await sinTerminar(ctx, userId, "aceptada", ahora);
 }
 
 /**
- * Lo que ya ocupa al guarda, en cualquier conjunto y compañía, entre las
- * coberturas que empiezan antes de `antesDe`. Una aceptada lo ocupa entera;
- * una inhabilitada, hasta su corte.
+ * Lo que ya ocupa al guarda durante una ventana, en CUALQUIER conjunto y
+ * compañía: una aceptada lo ocupa entera; una inhabilitada, hasta su corte.
+ *
+ * Es la única carga de coberturas de la disponibilidad —individual, masiva y
+ * la que revalida `crear` y `aceptar`—: si la lista dijera "disponible" y la
+ * solicitud "ocupado", sería porque alguna de las dos leyó otra cosa. Mira
+ * todas las compañías a propósito: la compañía que pregunta decide a qué
+ * guardas alcanza, no qué compromisos suyos existen.
+ *
+ * Solo lee las que no habían terminado al empezar la ventana (por `fin`), así
+ * que no recorre el histórico del guarda.
  */
 export async function coberturasQueOcupan(
   ctx: Ctx,
   userId: Id<"users">,
-  antesDe: number,
+  ventana: { inicio: number; fin: number },
 ): Promise<CoberturaQueOcupa[]> {
   const [aceptadas, inhabilitadas] = await Promise.all([
-    deEstado(ctx, userId, "aceptada", antesDe),
-    deEstado(ctx, userId, "inhabilitada", antesDe),
+    sinTerminar(ctx, userId, "aceptada", ventana.inicio),
+    sinTerminar(ctx, userId, "inhabilitada", ventana.inicio),
   ]);
   return [...aceptadas, ...inhabilitadas].flatMap((c) => {
-    const ventana = ventanaQueOcupa(c);
-    return ventana ? [{ id: c._id, condominioId: c.condominioId, ...ventana }] : [];
+    const ocupa = ventanaQueOcupa(c);
+    return ocupa && ocupa.inicio < ventana.fin && ocupa.fin > ventana.inicio
+      ? [{ id: c._id, condominioId: c.condominioId, ...ocupa }]
+      : [];
   });
+}
+
+/**
+ * La cobertura ACEPTADA del guarda que se cruza con una ventana, si la hay,
+ * en cualquier conjunto y compañía.
+ *
+ * Es la contradicción que no puede existir: una cobertura aceptada es un
+ * compromiso confirmado y una inasistencia dice que ese guarda no está. Solo
+ * las aceptadas: una inhabilitada ya no compromete a nadie, que es justamente
+ * el camino para registrar una incapacidad en mitad de una cobertura
+ * (inhabilitarla primero). Intervalos semiabiertos: tocarse en un borde no es
+ * cruzarse.
+ */
+export async function coberturaAceptadaQueSolapa(
+  ctx: Ctx,
+  userId: Id<"users">,
+  ventana: { inicio: number; fin: number },
+): Promise<Doc<"coberturas"> | null> {
+  const vivas = await sinTerminar(ctx, userId, "aceptada", ventana.inicio);
+  return vivas.find((c) => c.inicio < ventana.fin) ?? null;
 }
 
 /**
  * Las coberturas activas de un guarda: aceptadas y con `ahora` dentro de su
  * ventana. Derivado al leer, nunca guardado. Es la lista que se PINTA: no
- * mira la cadena, eso es cosa de `coberturaActivaDeGuardia`.
+ * mira la cadena, eso es cosa de `coberturaActivaDeGuardia`, que es la ÚNICA
+ * que decide acceso. Esto no se usa para autorizar nada.
  */
 export async function coberturasActivasDe(
   ctx: Ctx,

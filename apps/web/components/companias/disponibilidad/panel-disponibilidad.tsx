@@ -39,9 +39,10 @@ import { cn } from "@/lib/utils";
  *
  * La disponibilidad la calcula el servidor con horarios, inasistencias y
  * coberturas ya aceptadas. Solo a quien sale "Disponible" se le puede pedir
- * una cobertura: "Sin información" no es "libre". Pedirla no da acceso a
- * nadie: queda pendiente hasta que el guarda responda, y aceptarla todavía no
- * cambia dónde puede operar.
+ * una cobertura: "Sin información" no es "libre". Pedirla no cambia nada:
+ * queda pendiente hasta que el guarda responda. Aceptada, entra en vigencia
+ * cuando empieza su ventana, y durante ella el guarda opera temporalmente en
+ * el conjunto destino.
  */
 
 const TONO: Record<EstadoDisponibilidad, "success" | "warning" | "destructive" | "neutral"> = {
@@ -347,7 +348,7 @@ function SolicitarCoberturaDialog({
       open
       onClose={onClose}
       title="Solicitar cobertura"
-      description="El guarda recibe la solicitud y decide. Aceptarla todavía no le da acceso al conjunto."
+      description="El guarda recibe la solicitud y decide. Si la acepta, entra en vigencia cuando comienza la ventana y, durante ese periodo, opera temporalmente en este conjunto."
     >
       <div className="space-y-4">
         <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">

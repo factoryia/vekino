@@ -25,8 +25,10 @@ import type { ContratoDestino } from "../disponibilidad/panel-disponibilidad";
  * Las coberturas de la compañía: ver su estado y su rastro, cancelar e
  * inhabilitar. Se solicitan desde Disponibilidad, a un guarda disponible.
  *
- * "Activa" no aparece como estado: se deriva de la ventana. Y una aceptada
- * todavía no da acceso al conjunto: es un compromiso confirmado.
+ * "Activa" no aparece como estado: se deriva de la ventana. Una aceptada es
+ * un compromiso confirmado que entra en vigencia cuando empieza su ventana:
+ * desde ese momento, y mientras dure, el guarda opera temporalmente en el
+ * conjunto destino. Antes de empezar no cambia nada.
  */
 
 const DIA = 24 * 60 * 60 * 1000;
@@ -87,7 +89,9 @@ export function PanelCoberturas({
       <p className="max-w-2xl text-sm text-muted-foreground">
         Las coberturas temporales entre conjuntos. Se solicitan desde
         Disponibilidad a un guarda disponible, y el guarda las acepta o las
-        rechaza. Una cobertura aceptada todavía no le da acceso al conjunto.
+        rechaza. Una cobertura aceptada entra en vigencia cuando comienza su
+        ventana y, durante ese periodo, el guarda opera temporalmente en el
+        conjunto destino.
       </p>
 
       <div className="flex flex-wrap items-end gap-3">

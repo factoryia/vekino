@@ -10,20 +10,12 @@ import {
 import {
   CAPACIDADES_DISPONIBILIDAD,
   evaluarDisponibilidadDe,
-  horarioEvaluable,
-  inasistenciaEvaluable,
-  ultimoDiaDe,
 } from "./model/disponibilidad";
 import { entradaVentanaValidator } from "./model/roles";
 import { rigeEl, fechasDeVentana } from "./lib/horariosGuarda";
-import { ventanaQueOcupa } from "./lib/coberturas";
 import {
   ORDEN_PARA_CUBRIR,
-  evaluarDisponibilidadGuarda,
   ventanaDeConsulta,
-  type CoberturaQueOcupa,
-  type HorarioEvaluable,
-  type InasistenciaEvaluable,
   type MotivoDisponibilidad,
 } from "./lib/disponibilidad";
 
@@ -125,6 +117,13 @@ export const deGuarda = query({
  *
  * No crea candidatos ni nada: es la lista que una pantalla de "disponibilidad
  * para cubrir" necesita mirar.
+ *
+ * Cada guarda se evalúa con `evaluarDisponibilidadDe`, la MISMA carga y la
+ * misma regla que la consulta individual y que la revalidación de `crear` y
+ * `aceptar`. Antes esta lista cargaba los datos por su cuenta y solo veía las
+ * coberturas de esta compañía, así que un guarda ocupado por otra salía
+ * "disponible" aquí y "ocupado" al pedírsela. La compañía decide a qué
+ * guardas alcanza; lo que ocupa a cada uno se mira entero.
  */
 export const deGuardasEnAlcance = query({
   args: {
@@ -134,66 +133,10 @@ export const deGuardasEnAlcance = query({
   handler: async (ctx, args) => {
     const guardas = await guardasElegibles(ctx, args.companiaId, CAPACIDADES_DISPONIBILIDAD);
     const ventana = ventanaDeConsulta(args.ventana);
-    const visibles = new Set(guardas.map((g) => g.userId));
-
-    /* Tres lecturas para toda la compañía, acotadas por fechas, en vez de
-     * tres por guarda. Las inasistencias y las coberturas van por los índices
-     * de lo que aún no ha terminado; los horarios, por los que empezaron
-     * antes del fin. */
-    const [horarios, inasistencias, coberturas] = await Promise.all([
-      ctx.db
-        .query("horariosGuarda")
-        .withIndex("by_compania", (q) =>
-          q.eq("companiaId", args.companiaId).lte("fechaInicio", ultimoDiaDe(ventana)),
-        )
-        .collect(),
-      ctx.db
-        .query("inasistencias")
-        .withIndex("by_compania_estado_fin", (q) =>
-          q.eq("companiaId", args.companiaId).eq("estado", "activa").gt("fin", ventana.inicio),
-        )
-        .collect(),
-      ctx.db
-        .query("coberturas")
-        .withIndex("by_compania_fin", (q) =>
-          q.eq("companiaId", args.companiaId).gt("fin", ventana.inicio),
-        )
-        .collect(),
-    ]);
-
-    function agrupar<T>(filas: { userId: Id<"users">; valor: T }[]) {
-      const porGuarda = new Map<Id<"users">, T[]>();
-      for (const { userId, valor } of filas) {
-        if (!visibles.has(userId)) continue;
-        porGuarda.set(userId, [...(porGuarda.get(userId) ?? []), valor]);
-      }
-      return porGuarda;
-    }
-    const horariosDe = agrupar<HorarioEvaluable>(
-      horarios.map((h) => ({ userId: h.userId, valor: horarioEvaluable(h) })),
-    );
-    const inasistenciasDe = agrupar<InasistenciaEvaluable>(
-      inasistencias
-        .filter((i) => i.inicio < ventana.fin)
-        .map((i) => ({ userId: i.userId, valor: inasistenciaEvaluable(i) })),
-    );
-    const coberturasDe = agrupar<CoberturaQueOcupa>(
-      coberturas.flatMap((c) => {
-        const ocupa = ventanaQueOcupa(c);
-        return ocupa
-          ? [{ userId: c.userId, valor: { id: c._id, condominioId: c.condominioId, ...ocupa } }]
-          : [];
-      }),
-    );
 
     const filas = await Promise.all(
       guardas.map(async (g) => {
-        const r = evaluarDisponibilidadGuarda({
-          ventana,
-          horarios: horariosDe.get(g.userId) ?? [],
-          inasistencias: inasistenciasDe.get(g.userId) ?? [],
-          coberturas: coberturasDe.get(g.userId) ?? [],
-        });
+        const r = await evaluarDisponibilidadDe(ctx, args.companiaId, g.userId, ventana);
         return {
           userId: g.userId,
           nombre: g.nombre,

@@ -1,4 +1,4 @@
-import { test, expect, describe, beforeEach } from "vitest";
+import { test, expect, describe, beforeEach, afterEach, vi } from "vitest";
 import { convexTest } from "convex-test";
 import betterAuthTest from "@convex-dev/better-auth/test";
 import schema from "../convex/schema";
@@ -22,7 +22,17 @@ const modules = import.meta.glob("../convex/**/*.ts");
  */
 
 const DIA = 24 * 60 * 60 * 1000;
-const HOY = hoyColombia();
+/* Reloj fijo: miercoles 7 de octubre de 2026, 10:00 en Colombia. Las ventanas se
+ * cortan por dias civiles y los horarios rigen desde una fecha.
+ * Con el reloj real, HOY salia de la hora a la que se cargaba el fichero y el
+ * servidor miraba la hora de cada prueba: cerca de la medianoche de Colombia
+ * los dos no coincidian. Las fechas siguen siendo relativas a HOY. */
+const AHORA = Date.parse("2026-10-07T15:00:00Z");
+beforeEach(() => {
+  vi.setSystemTime(AHORA);
+});
+afterEach(() => vi.useRealTimers());
+const HOY = hoyColombia(AHORA);
 const fecha = (dias: number) => sumarDias(HOY, dias);
 function proximo(dia: number): string {
   for (let i = 1; i <= 7; i++) if (diaDeLaSemana(fecha(i)) === dia) return fecha(i);

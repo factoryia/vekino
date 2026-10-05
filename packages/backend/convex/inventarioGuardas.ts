@@ -329,8 +329,9 @@ export const itemsDelCondominio = query({
        * presentara como exacto sin serlo.
        */
       custodiaIncompleta,
-      /* Cuántos elementos están en manos de alguien que ya no cubre este
-       * conjunto. Es el número que hay que mirar antes de cerrar un turno. */
+      /* Cuántos elementos están en manos de alguien que hoy no opera en este
+       * conjunto (cada uno dice por qué en `causaPendiente`). Es el número que
+       * hay que mirar antes de cerrar un turno. */
       pendientes: utiles.filter((f) => f.custodia?.pendiente === true).length,
     };
   },

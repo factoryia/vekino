@@ -52,7 +52,16 @@ const ETIQUETA_ROL: Record<RolCompania, string> = {
   guardia: "Guarda",
 };
 
-/** `<input type="date">` → milisegundos de la medianoche local. */
+/**
+ * `<input type="date">` → milisegundos de la medianoche local.
+ *
+ * Pendiente técnico heredado, anterior al módulo de horarios y coberturas: la
+ * medianoche es la del NAVEGADOR, no la de Colombia, así que un contrato o una
+ * asignación cargados desde otra zona horaria empiezan unas horas corridos.
+ * Los formularios del módulo (horarios, inasistencias, coberturas) mandan el
+ * texto de pared y el servidor lo interpreta en hora de Colombia; aquí no se
+ * cambió para no alterar vigencias ya guardadas.
+ */
 function fechaAMs(valor: string): number {
   const [a, m, d] = valor.split("-").map(Number);
   return new Date(a ?? 1970, (m ?? 1) - 1, d ?? 1).getTime();

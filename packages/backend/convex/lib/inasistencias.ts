@@ -46,6 +46,14 @@ export const TIPOS_CON_MOTIVO_OBLIGATORIO: readonly TipoInasistencia[] = [
 
 export const MAX_MOTIVO = 500;
 
+/**
+ * El motivo es texto libre que leen la compañía y quien gestiona el conjunto.
+ * En una incapacidad sigue siendo opcional (el tipo ya lo explica) y nunca
+ * debe llevar datos de salud: el formulario lo advierte con este texto.
+ */
+export const AVISO_MOTIVO_SENSIBLE =
+  "No incluyas diagnósticos, historias clínicas ni información médica sensible.";
+
 export function exigeMotivo(tipo: TipoInasistencia): boolean {
   return TIPOS_CON_MOTIVO_OBLIGATORIO.includes(tipo);
 }

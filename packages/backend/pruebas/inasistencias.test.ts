@@ -1,4 +1,4 @@
-import { test, expect, describe, beforeEach } from "vitest";
+import { test, expect, describe, beforeEach, afterEach, vi } from "vitest";
 import { convexTest } from "convex-test";
 import betterAuthTest from "@convex-dev/better-auth/test";
 import schema from "../convex/schema";
@@ -22,6 +22,17 @@ const modules = import.meta.glob("../convex/**/*.ts");
 
 const DIA = 24 * 60 * 60 * 1000;
 const HORA = 60 * 60 * 1000;
+
+/* Reloj fijo: miercoles 7 de octubre de 2026, 10:00 en Colombia. Las ventanas
+ * de estas pruebas son fechas fijas (el 8 y el 9 de octubre) mezcladas con
+ * turnos y asignaciones relativos a ahora: con el reloj real, a partir del 8
+ * las fechas fijas pasan a ser pasado y las pruebas dejan de mirar una
+ * inasistencia futura sin que nada avise. */
+const AHORA = Date.parse("2026-10-07T15:00:00Z");
+beforeEach(() => {
+  vi.setSystemTime(AHORA);
+});
+afterEach(() => vi.useRealTimers());
 
 const CHECKLIST = [
   { item: "Radio", obligatorio: true, cantidadEsperada: 1, cantidadEncontrada: 1, estadoOk: true },

@@ -2,6 +2,7 @@ import type { MutationCtx, QueryCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import { displayNameFromUser } from "./displayName";
 import { lectorDeCoberturasHistoricas, type CoberturaDeOperacion } from "./cobertura";
+import { viasEnConjunto } from "./vias";
 
 /**
  * DÓNDE ESTÁ CADA ELEMENTO.
@@ -267,6 +268,38 @@ export async function custodiasGuardaDeCondominio(
   return { porItem, incompleto: abiertas.length > tope };
 }
 
+/**
+ * Por qué alguien tiene material de un conjunto en el que hoy no opera.
+ *
+ *   ya_no_asignado          → ya no tiene vía de guarda aquí: su asignación
+ *                             terminó, o su contrato, o se le dio de baja;
+ *   cubriendo_otro_conjunto → sigue asignado aquí, pero hoy una cobertura lo
+ *                             tiene operando en otro conjunto (o su contexto
+ *                             está bloqueado por dos coberturas a la vez);
+ *   cobertura_terminada     → recibió el material porque cubría este
+ *                             conjunto, y esa cobertura ya no le da vía.
+ *
+ * Lo decide el servidor con las mismas vías que lo dejan operar
+ * (`model/vias.ts`) y el sello de la custodia: la pantalla solo lo traduce.
+ */
+export type CausaPendiente = "ya_no_asignado" | "cubriendo_otro_conjunto" | "cobertura_terminada";
+
+async function causaDePendiente(
+  ctx: Ctx,
+  c: Doc<"inventarioCustodiaGuardas">,
+): Promise<CausaPendiente> {
+  /* ¿Conserva aquí su asignación de guarda de esta compañía? Entonces, si hoy
+   * no opera aquí, es porque una cobertura lo tiene en otro sitio. */
+  const { vias } = await viasEnConjunto(ctx, c.guardaUserId, c.condominioId);
+  const sigueAsignado = vias.some(
+    (v) => v.tipo === "asignacion" && v.rol === "guardia" && v.companiaId === c.companiaId,
+  );
+  if (sigueAsignado) return "cubriendo_otro_conjunto";
+  /* Lo recibió cubriendo (sello de la custodia) y esa vía ya no existe. */
+  if (c.coberturaId) return "cobertura_terminada";
+  return "ya_no_asignado";
+}
+
 /** La custodia de guarda tal como la consume la pantalla. */
 export type VistaCustodiaGuarda = {
   _id: Id<"inventarioCustodiaGuardas">;
@@ -294,6 +327,8 @@ export type VistaCustodiaGuarda = {
    * `null` cuando no se ha comprobado (historial cerrado: no aplica).
    */
   pendiente: boolean | null;
+  /** Por qué está pendiente. Solo cuando `pendiente` es true. */
+  causaPendiente?: CausaPendiente;
   /**
    * La cobertura por la que el guarda operaba en el conjunto cuando lo
    * recibió, si lo recibió cubriendo. Sale del sello de la custodia, nunca
@@ -318,6 +353,8 @@ export async function aVistaCustodiaGuarda(
     c.devueltaPorUserId ? usuario(c.devueltaPorUserId) : Promise.resolve(null),
   ]);
   const activa = c.devueltaEn == null;
+  const pendiente =
+    activa && guardasVigentes ? !guardasVigentes.has(c.guardaUserId) : null;
   return {
     _id: c._id,
     guardaUserId: c.guardaUserId,
@@ -329,8 +366,9 @@ export async function aVistaCustodiaGuarda(
     devueltaPorNombre: quienRecibio ? displayNameFromUser(quienRecibio) : null,
     observacionDevolucion: c.observacionDevolucion ?? null,
     activa,
-    pendiente:
-      activa && guardasVigentes ? !guardasVigentes.has(c.guardaUserId) : null,
+    pendiente,
+    /* Solo en las pendientes: el resto sale exactamente como antes. */
+    ...(pendiente ? { causaPendiente: await causaDePendiente(ctx, c) } : {}),
     ...(await contexto(c)),
   };
 }

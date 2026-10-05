@@ -2,7 +2,7 @@
 
 ## Auditoría previa y decisiones
 
-El monorepo usa Convex para datos y autorización, Next.js para web y Expo para móvil. La identidad del guarda vive en `users`, su pertenencia empresarial en `companiaMiembros` y su alcance operativo en `asignaciones`, vinculadas a `companiaContratos`. El dashboard sigue esos ejes; no crea un directorio de guardas ni tablas de estadísticas.
+El monorepo usa Convex para datos y autorización, Next.js para web y Expo para móvil. La identidad del guarda vive en `users`, su pertenencia empresarial en `companiaMiembros` y su alcance operativo permanente en `asignaciones`, vinculadas a `companiaContratos`. Durante una cobertura temporal aceptada y vigente (`coberturas`), el guarda opera en el conjunto que cubre en lugar de sus conjuntos de siempre. El dashboard sigue esos ejes; no crea un directorio de guardas ni tablas de estadísticas.
 
 - `guardiaTurnos`: apertura, titular, secundario opcional, cierre y estado. Un turno compartido es una jornada única con dos participantes.
 - `guardiaRondas`: recorridos con estado y fechas opcionales para compatibilidad histórica. `estadoDeRonda` interpreta los antiguos como finalizados. No consta el autor de algunas rondas antiguas; el titular del turno no demuestra quién hizo el recorrido.
@@ -14,7 +14,7 @@ El monorepo usa Convex para datos y autorización, Next.js para web y Expo para 
 
 ### Limitaciones documentadas antes de implementar
 
-Las asignaciones son vigencias de acceso, no programación de jornadas. No hay horarios esperados, calendario de turnos, frecuencia obligatoria de rondas ni metas por zona. No es posible calcular faltantes, retrasos o porcentajes de cumplimiento. El estado de finalización de una ronda tampoco demuestra cumplimiento de una meta inexistente.
+Las asignaciones son vigencias de acceso, no programación de jornadas. Existen horarios permanentes de los guardas (`horariosGuarda`), pero son informativos: alimentan la disponibilidad para coberturas y este panel no los usa. No hay calendario de turnos, frecuencia obligatoria de rondas ni metas por zona. No es posible calcular faltantes, retrasos o porcentajes de cumplimiento. El estado de finalización de una ronda tampoco demuestra cumplimiento de una meta inexistente.
 
 No existe categoría temática normalizada en el reporte de novedad: título y descripción son libres. Se distribuyen prioridades y tipos reales, sin inferir categorías a partir del texto. Los registros sin identificador de autor no permiten probar pertenencia a la compañía y se muestran explícitamente sin atribución individual. No se amplió el modelo de negocio para resolver estas limitaciones.
 
@@ -24,7 +24,7 @@ Ruta inicial: `/vigilancia/inicio`. Se conserva `/vigilancia` para conjuntos, `/
 
 Consulta: `companias.operacion`, implementada en `model/operacionCompania.ts`. Exige usuario activo, miembro activo con `admin_compania`, compañía activa y los helpers existentes de acceso empresarial y `porteria.ver`. La compañía deriva de la sesión; no es un argumento del cliente. Los conjuntos de portería requieren contrato vigente hoy, igual que `miEquipo`. Un contrato finalizado deja de habilitar consulta; esto difiere de los incidentes empresariales, que tienen su propia autorización histórica.
 
-Para autoría conocida, cada registro exige asignación de guarda de esa empresa válida en el instante del registro y acotada a su contrato, usando `acotado` y `estaVigente`. Las asignaciones terminadas y personas dadas de baja conservan su actividad histórica durante sus vigencias. Los registros sin autor se incluyen en compañía/conjunto durante una vigencia contractual, separados de toda estadística individual; no se presume un autor a partir del turno. Actores conocidos sin asignación empresarial válida quedan excluidos.
+Para autoría conocida, cada registro exige una de dos cosas: asignación de guarda de esa empresa válida en el instante del registro y acotada a su contrato, usando `acotado` y `estaVigente`; o, si se registró durante una cobertura temporal, la cobertura sellada en el propio registro (`coberturaId`), de esa empresa y ese conjunto. El sello se pone al crear el registro y no se recalcula: una cobertura inhabilitada después sigue amparando lo hecho antes. Los registros anteriores a que existiera el sello no se atribuyen a coberturas. Las asignaciones terminadas y personas dadas de baja conservan su actividad histórica durante sus vigencias. Los registros sin autor se incluyen en compañía/conjunto durante una vigencia contractual, separados de toda estadística individual; no se presume un autor a partir del turno. Actores conocidos sin asignación empresarial válida ni cobertura sellada quedan excluidos. Quien cubrió un conjunto en el periodo aparece en la lista de guardas de ese conjunto, y los turnos abiertos y las filas por guarda indican cuándo hubo cobertura.
 
 | Métrica | Fuente y criterio |
 | --- | --- |

@@ -3294,9 +3294,10 @@ export default defineSchema({
   // ventana." Un registro propio, NO una asignación: la pertenencia
   // permanente del guarda queda intacta.
   //
-  // En esta fase una cobertura aceptada es un compromiso confirmado, no un
-  // acceso: no cambia `resolverAcceso`, `requireCondominioRole`, las vías ni
-  // la sesión del guarda.
+  // Una cobertura aceptada es un compromiso confirmado. Cuando empieza su
+  // ventana, y mientras su cadena siga en pie, el guarda opera temporalmente
+  // en el conjunto destino: lo deriva `model/vias.ts` al leer, sin cambiar
+  // ninguna fila de esta tabla ni de las asignaciones.
   //
   // Ciclo de vida en `lib/coberturas.ts`. "Activa" no se guarda: se deriva
   // (aceptada y ahora dentro de la ventana). La fila lleva los sellos de cada

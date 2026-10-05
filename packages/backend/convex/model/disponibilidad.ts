@@ -14,9 +14,10 @@ type Ctx = QueryCtx | MutationCtx;
 /**
  * Cargar lo de un guarda y evaluarlo, en un solo sitio.
  *
- * Lo usan la consulta de disponibilidad y las mutaciones de cobertura —al
- * solicitar y otra vez al aceptar—, para que "disponible" signifique lo mismo
- * en la pantalla y en la validación. La regla está en `lib/disponibilidad.ts`.
+ * Lo usan las dos consultas de disponibilidad —la de un guarda y la lista de
+ * todos— y las mutaciones de cobertura —al solicitar y otra vez al aceptar—,
+ * para que "disponible" signifique lo mismo en la lista, en el detalle y en la
+ * validación. La regla está en `lib/disponibilidad.ts`.
  */
 
 /**
@@ -29,7 +30,7 @@ export const CAPACIDADES_DISPONIBILIDAD = [
   "seguridad.inasistencias",
 ] as const;
 
-export function horarioEvaluable(h: Doc<"horariosGuarda">): HorarioEvaluable {
+function horarioEvaluable(h: Doc<"horariosGuarda">): HorarioEvaluable {
   return {
     id: h._id,
     condominioId: h.condominioId ?? null,
@@ -40,12 +41,12 @@ export function horarioEvaluable(h: Doc<"horariosGuarda">): HorarioEvaluable {
   };
 }
 
-export function inasistenciaEvaluable(i: Doc<"inasistencias">): InasistenciaEvaluable {
+function inasistenciaEvaluable(i: Doc<"inasistencias">): InasistenciaEvaluable {
   return { id: i._id, tipo: i.tipo, inicio: i.inicio, fin: i.fin, estado: i.estado };
 }
 
 /** El último día civil que toca la ventana: los horarios que empiezan después no cuentan. */
-export function ultimoDiaDe(ventana: { inicio: number; fin: number }): string {
+function ultimoDiaDe(ventana: { inicio: number; fin: number }): string {
   return diaColombia(ventana.fin - 1);
 }
 
@@ -78,7 +79,7 @@ export async function evaluarDisponibilidadDe(
         q.eq("companiaId", companiaId).eq("userId", userId).lt("inicio", ventana.fin),
       )
       .collect(),
-    coberturasQueOcupan(ctx, userId, ventana.fin),
+    coberturasQueOcupan(ctx, userId, ventana),
   ]);
 
   const resultado = evaluarDisponibilidadGuarda({

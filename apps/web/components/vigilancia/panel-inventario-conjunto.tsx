@@ -44,10 +44,26 @@ import {
  * administrador de la empresa.
  *
  * Los "pendientes" son la razón de que esta pantalla exista y no sea una
- * lista más: un elemento en manos de alguien que ya no cubre el conjunto no
- * se cierra solo —la relación laboral y la custodia física son cosas
- * distintas— y esconderlo es exactamente como se pierde inventario.
+ * lista más: un elemento en manos de alguien que hoy no opera en el conjunto
+ * —ya no está asignado, cubre otro conjunto o terminó la cobertura con la que
+ * lo recibió— no se cierra solo, y esconderlo es exactamente como se pierde
+ * inventario.
  */
+
+/**
+ * Lo que se lee para cada causa de un pendiente. La causa la decide el
+ * servidor (`causaPendiente`); aquí solo se traduce. Sin causa —no debería
+ * pasar en una fila pendiente— se dice lo mínimo cierto.
+ */
+const TEXTO_PENDIENTE = {
+  ya_no_asignado: "Ya no está asignado",
+  cubriendo_otro_conjunto: "Cubriendo otro conjunto",
+  cobertura_terminada: "Su cobertura terminó",
+} as const;
+
+function textoPendiente(causa: keyof typeof TEXTO_PENDIENTE | undefined): string {
+  return causa ? TEXTO_PENDIENTE[causa] : "Hoy no opera aquí";
+}
 
 function fechaHora(ms: number): string {
   return new Date(ms).toLocaleString("es-CO", {
@@ -110,7 +126,7 @@ export function PanelInventarioConjunto({
               resolver.
             </strong>{" "}
             {datos.pendientes === 1 ? "Está" : "Están"} en manos de alguien que
-            ya no cubre este conjunto. Regístrale la devolución cuando
+            hoy no opera en este conjunto. Regístrale la devolución cuando
             {datos.pendientes === 1 ? " lo" : " los"} entregue.
           </p>
         </div>
@@ -163,7 +179,7 @@ export function PanelInventarioConjunto({
                         </Badge>
                         <EtiquetaCobertura cobertura={i.custodia.cobertura} compacta />
                         {i.custodia.pendiente && (
-                          <Badge tone="warning">Ya no está asignado</Badge>
+                          <Badge tone="warning">{textoPendiente(i.custodia.causaPendiente)}</Badge>
                         )}
                       </div>
                       <p className="text-[11.5px] text-muted-foreground">
@@ -624,7 +640,9 @@ function HistorialDialog({
                 </span>
                 <EtiquetaCobertura cobertura={c.cobertura} />
                 {c.activa && <Badge tone="info">Lo tiene ahora</Badge>}
-                {c.pendiente && <Badge tone="warning">Ya no está asignado</Badge>}
+                {c.pendiente && (
+                  <Badge tone="warning">{textoPendiente(c.causaPendiente)}</Badge>
+                )}
               </div>
               <p className="mt-1 text-muted-foreground">
                 Entregado el {fechaHora(c.entregadaEn)}

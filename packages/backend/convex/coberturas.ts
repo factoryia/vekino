@@ -32,10 +32,12 @@ import {
 /**
  * Coberturas temporales: solicitar, responder, cancelar, inhabilitar.
  *
- * Una cobertura aceptada es un COMPROMISO CONFIRMADO, no un acceso. Nada de
- * aquí toca asignaciones, membresías, contratos, turnos, `model/vias.ts`,
- * `resolverAcceso` ni `requireCondominioRole`: el guarda sigue operando con
- * sus vías de siempre. El acceso temporal es la fase siguiente.
+ * Una cobertura aceptada es un COMPROMISO CONFIRMADO. Mientras no empiece
+ * no cambia nada; cuando empieza su ventana, y mientras su cadena siga en pie,
+ * es el contexto operativo del guarda: opera como guarda en el conjunto
+ * destino y no en los suyos de siempre. Eso no se decide aquí sino al leer,
+ * en `model/vias.ts` (`coberturaActivaDeGuardia`), que es la única autoridad
+ * de acceso. Nada de aquí toca asignaciones, membresías, contratos ni turnos.
  *
  * Quién puede, sin una autorización nueva:
  *   - solicitar y cancelar: quien puede asignar personal al conjunto destino
@@ -421,7 +423,11 @@ export const deCompania = query({
 
 /**
  * Las coberturas activas de un guarda: aceptadas y con ahora dentro de su
- * ventana. Preparada para la fase de acceso; HOY no da acceso a nada.
+ * ventana, SIN mirar su cadena (contrato, compañía, guarda, conjunto).
+ *
+ * API interna sin consumidores en los clientes. No es autorización y no debe
+ * usarse para decidir acceso: esa decisión es solo de
+ * `coberturaActivaDeGuardia` (`model/cobertura.ts`), que sí mira la cadena.
  *
  * El propio guarda ve las suyas; quien gestiona, las de los conjuntos a su
  * alcance.

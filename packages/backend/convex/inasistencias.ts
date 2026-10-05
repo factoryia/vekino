@@ -10,6 +10,7 @@ import {
   guardasElegibles as elegibles,
   lectorDeNombres,
 } from "./model/alcanceGuarda";
+import { coberturaAceptadaQueSolapa } from "./model/cobertura";
 import { entradaVentanaValidator, tipoInasistenciaValidator } from "./model/roles";
 import {
   pisaAlguna,
@@ -105,6 +106,14 @@ async function hidratar(
  * dos registros superpuestos no dicen nada que uno no diga, y decidir cuál
  * manda sería inventar una regla. Es el mismo criterio de las asignaciones y
  * las reservas. Si hay que cambiar una ventana, se anula y se registra otra.
+ *
+ * Y rechaza cruzarse con una cobertura ACEPTADA del guarda, en cualquier
+ * conjunto o compañía: una cobertura aceptada es un compromiso confirmado, y
+ * una inasistencia en la misma ventana lo contradiría. No se toca la
+ * cobertura: si el guarda se incapacita en mitad de una, el administrador la
+ * inhabilita primero (queda quién, cuándo y por qué) y después registra la
+ * inasistencia. Así quedan dos hechos explícitos en vez de uno que borra al
+ * otro. La pantalla puede avisar antes; quien decide es esta mutación.
  */
 export const crear = mutation({
   args: {
@@ -129,6 +138,11 @@ export const crear = mutation({
     if (pisaAlguna(ventana, activas)) {
       throw new Error(
         "Ese guarda ya tiene una inasistencia activa que se cruza con esas fechas. Anúlala o ajusta la ventana.",
+      );
+    }
+    if (await coberturaAceptadaQueSolapa(ctx, args.userId, ventana)) {
+      throw new Error(
+        "El guarda tiene una cobertura aceptada que se solapa con este periodo. Inhabilita primero la cobertura o registra la inasistencia para otro periodo.",
       );
     }
 
