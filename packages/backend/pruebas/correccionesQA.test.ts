@@ -29,6 +29,10 @@ const SOLAPE =
 const SIN_HORARIO =
   "No hay horario registrado del guarda para toda la ventana: sin esa información no se puede pedir la cobertura.";
 const YA_CUBRE = "El guarda ya tiene una cobertura aceptada que se cruza con esa ventana.";
+/* Fase 15 (QA-001 F): si la cobertura es de otra compañía, no se le pide a
+ * quien registra que la inhabilite —no puede—. */
+const SOLAPE_OTRA =
+  "El guarda tiene una cobertura aceptada con otra compañía que se solapa con este periodo. Esa compañía debe inhabilitarla antes; mientras tanto, registra la inasistencia para otro periodo.";
 
 /** Hora de pared de Colombia → instante. */
 const instante = (local: string) => Date.parse(`${local}:00-05:00`);
@@ -310,7 +314,7 @@ describe("Integración", () => {
     await expect(
       e.como("alicia").mutation(api.coberturas.crear, { contratoId: e.kBosque, userId: e.jason, ventana: NOCHE }),
     ).rejects.toThrow(YA_CUBRE);
-    await expect(inasistencia(e.jason, NOCHE)).rejects.toThrow(SOLAPE);
+    await expect(inasistencia(e.jason, NOCHE)).rejects.toThrow(SOLAPE_OTRA);
   });
 
   describe("E. por qué está pendiente una custodia", () => {

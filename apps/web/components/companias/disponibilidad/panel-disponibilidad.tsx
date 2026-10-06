@@ -31,7 +31,7 @@ import { Input, Select } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableCard, TBody, TD, TH, THead, TR } from "@/components/ui/table";
-import { cn } from "@/lib/utils";
+import { cn, mensajeErrorUsuario } from "@/lib/utils";
 
 /**
  * Disponibilidad de los guardas para una ventana, y desde aquí la solicitud
@@ -123,7 +123,7 @@ export function PanelDisponibilidad({
     try {
       ventanaDeConsulta(ventana);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Revisa la ventana.");
+      setError(mensajeErrorUsuario(err, "Revisa la ventana."));
       return;
     }
     setConsulta(ventana);
@@ -384,7 +384,7 @@ function SolicitarCoberturaDialog({
                 await crear({ contratoId: destino.contratoId, userId: guarda.userId, ventana });
                 onEnviada();
               } catch (e) {
-                setError(e instanceof Error ? e.message : "No se pudo enviar la solicitud.");
+                setError(mensajeErrorUsuario(e, "No se pudo enviar la solicitud."));
               } finally {
                 setBusy(false);
               }

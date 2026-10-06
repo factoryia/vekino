@@ -33,7 +33,7 @@ import { Modal } from "@/components/ui/modal";
 import { Input, Select } from "@/components/ui/input";
 import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorBoundary, ErrorMessage } from "@/components/ui/error-boundary";
-import { cn } from "@/lib/utils";
+import { cn, mensajeErrorUsuario } from "@/lib/utils";
 import { EstadoBadge, Campo } from "../page";
 import { EditarPersonaDialog } from "@/components/companias/editar-persona-dialog";
 import { PanelInventario } from "@/components/companias/inventario/panel-inventario";
@@ -41,6 +41,9 @@ import { PanelInasistencias } from "@/components/companias/inasistencias/panel-i
 import { PanelHorarios } from "@/components/companias/horarios/panel-horarios";
 import { PanelDisponibilidad } from "@/components/companias/disponibilidad/panel-disponibilidad";
 import { PanelCoberturas } from "@/components/companias/coberturas/panel-coberturas";
+import { SolicitudesCobertura } from "@/components/guardia/solicitudes-cobertura";
+import { AvisoTurnoPendiente } from "@/components/guardia/aviso-turno-pendiente";
+import { puedeVerDetalleCompania } from "@/lib/role-routing";
 
 type Estado = "activa" | "suspendida" | "inactiva";
 type RolCompania = "admin_compania" | "supervisor" | "guardia";
@@ -102,8 +105,13 @@ function CompaniaDetalleContent() {
   const router = useRouter();
   const search = useSearchParams();
   const companiaId = params.id as Id<"companiasSeguridad">;
-  const data = useQuery(api.companias.detail, { companiaId });
   const me = useQuery(api.users.me);
+  /* El detalle solo se pide a quien el servidor se lo va a dar (QA-002):
+   * pedírselo a un guarda o a alguien de otra compañía devolvía una
+   * denegación que tumbaba la página entera. `companias.detail` sigue
+   * decidiendo; esto solo evita preguntar lo que va a negar. */
+  const puedeVer = !!me && puedeVerDetalleCompania(me, companiaId);
+  const data = useQuery(api.companias.detail, puedeVer ? { companiaId } : "skip");
   const requestedTab = search.get("tab");
   const tab =
     requestedTab === "contratos" ||
@@ -151,14 +159,17 @@ function CompaniaDetalleContent() {
     me?.compania?.roles?.includes("admin_compania") === true ||
     me?.compania?.roles?.includes("supervisor") === true;
 
-  if (data === undefined) {
+  if (me === undefined || (puedeVer && data === undefined)) {
     return (
       <PageContainer>
         <p className="text-sm text-muted-foreground">Cargando…</p>
       </PageContainer>
     );
   }
-  if (data === null) {
+  if (!puedeVer) {
+    return <SinAccesoCompania esDeEsta={me?.compania?.companiaId === companiaId} />;
+  }
+  if (!data) {
     return (
       <PageContainer>
         <p className="text-sm text-muted-foreground">
@@ -294,7 +305,7 @@ function CompaniaDetalleContent() {
           <ErrorBoundary
             resetKey={companiaId}
             fallback={(e) => (
-              <ErrorMessage title="No se puede ver el inventario" detail={e.message} />
+              <ErrorMessage title="No se puede ver el inventario" detail={mensajeErrorUsuario(e)} />
             )}
           >
             <PanelInventario companiaId={companiaId} />
@@ -306,7 +317,7 @@ function CompaniaDetalleContent() {
           <ErrorBoundary
             resetKey={companiaId}
             fallback={(e) => (
-              <ErrorMessage title="No se pueden ver las inasistencias" detail={e.message} />
+              <ErrorMessage title="No se pueden ver las inasistencias" detail={mensajeErrorUsuario(e)} />
             )}
           >
             <PanelInasistencias companiaId={companiaId} />
@@ -316,7 +327,7 @@ function CompaniaDetalleContent() {
           <ErrorBoundary
             resetKey={companiaId}
             fallback={(e) => (
-              <ErrorMessage title="No se pueden ver los horarios" detail={e.message} />
+              <ErrorMessage title="No se pueden ver los horarios" detail={mensajeErrorUsuario(e)} />
             )}
           >
             <PanelHorarios companiaId={companiaId} conjuntos={conjuntosPlanificables} />
@@ -326,7 +337,7 @@ function CompaniaDetalleContent() {
           <ErrorBoundary
             resetKey={companiaId}
             fallback={(e) => (
-              <ErrorMessage title="No se puede ver la disponibilidad" detail={e.message} />
+              <ErrorMessage title="No se puede ver la disponibilidad" detail={mensajeErrorUsuario(e)} />
             )}
           >
             <PanelDisponibilidad companiaId={companiaId} contratos={contratosParaCubrir} />
@@ -336,7 +347,7 @@ function CompaniaDetalleContent() {
           <ErrorBoundary
             resetKey={companiaId}
             fallback={(e) => (
-              <ErrorMessage title="No se pueden ver las coberturas" detail={e.message} />
+              <ErrorMessage title="No se pueden ver las coberturas" detail={mensajeErrorUsuario(e)} />
             )}
           >
             <PanelCoberturas
@@ -417,6 +428,41 @@ function Tab({
         {n}
       </span>
     </button>
+  );
+}
+
+/**
+ * Lo que ve quien llega al detalle de una compañía que no administra ni
+ * supervisa (QA-002): un guarda de la propia compañía, alguien de otra o un
+ * residente que siguió un enlace. En vez de una pantalla rota, lo que sí es
+ * suyo —sus solicitudes de cobertura y el turno que tenga pendiente— y el
+ * camino de vuelta a su inicio.
+ */
+function SinAccesoCompania({ esDeEsta }: { esDeEsta: boolean }) {
+  return (
+    <PageContainer>
+      <div className="mx-auto max-w-xl space-y-4">
+        <Card className="space-y-2 p-5">
+          <h1 className="text-base font-semibold text-foreground">
+            No tienes acceso a la gestión de esta compañía
+          </h1>
+          <p className="text-[13px] text-muted-foreground">
+            {esDeEsta
+              ? "La gestión de la compañía es de su administrador y de sus supervisores. Tu trabajo como guarda está en tu inicio."
+              : "Esta página es del personal de mando de la compañía. Si llegaste por un enlace, vuelve a tu inicio."}
+          </p>
+          <Link
+            href="/dashboard"
+            className="inline-flex items-center gap-1.5 text-[13px] font-medium text-foreground underline-offset-2 hover:underline"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" aria-hidden />
+            Ir a mi inicio
+          </Link>
+        </Card>
+        <SolicitudesCobertura className="" />
+        <AvisoTurnoPendiente className="" />
+      </div>
+    </PageContainer>
   );
 }
 
@@ -762,7 +808,7 @@ function FilaPersona({ p }: { p: Persona }) {
                  * rol, que ya no está aquí. Darlo de baja puede fallar
                  * —perfil sin correo, permisos— y hasta ahora ese fallo se
                  * perdía en silencio. */
-                setError(e instanceof Error ? e.message : "No se pudo dar de baja.");
+                setError(mensajeErrorUsuario(e, "No se pudo dar de baja."));
               } finally {
                 setBusy(false);
               }
@@ -807,6 +853,7 @@ function AgregarPersonaDialog({
   const [rol, setRol] = useState<RolCompania>("guardia");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [yaTenia, setYaTenia] = useState<string | null>(null);
 
   function cerrar() {
     setNombre("");
@@ -816,6 +863,7 @@ function AgregarPersonaDialog({
     setCargo("");
     setRol("guardia");
     setError(null);
+    setYaTenia(null);
     onClose();
   }
 
@@ -824,7 +872,7 @@ function AgregarPersonaDialog({
     setError(null);
     setBusy(true);
     try {
-      await crear({
+      const r = await crear({
         companiaId,
         name: nombre,
         email,
@@ -833,9 +881,15 @@ function AgregarPersonaDialog({
         cargo: cargo || undefined,
         roles: [rol],
       });
+      /* Si ya tenía cuenta, el servidor no tocó su contraseña ni su perfil
+       * (QA-003): se dice, para que nadie le entregue una clave que no es. */
+      if (r.existed) {
+        setYaTenia(email);
+        return;
+      }
       cerrar();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo agregar.");
+      setError(mensajeErrorUsuario(err, "No se pudo agregar."));
     } finally {
       setBusy(false);
     }
@@ -868,7 +922,7 @@ function AgregarPersonaDialog({
         <Campo
           label="Contraseña"
           requerido
-          ayuda="Mínimo 8 caracteres. Es con la que entrará a la app."
+          ayuda="Mínimo 8 caracteres. Solo se usa si la cuenta es nueva: quien ya tiene cuenta en Vekino conserva la suya."
         >
           <Input
             type="text"
@@ -909,14 +963,20 @@ function AgregarPersonaDialog({
         </Campo>
 
         {error && <p className="text-sm text-destructive">{error}</p>}
+        {yaTenia && (
+          <p className="rounded-md border border-border bg-muted/40 p-2.5 text-[13px] text-foreground">
+            {yaTenia} ya tenía cuenta en Vekino: se añadió el vínculo con la
+            compañía y conserva su contraseña. No le entregues la que escribiste aquí.
+          </p>
+        )}
 
         <div className="flex justify-end gap-2 pt-1">
           <Button type="button" variant="secondary" onClick={cerrar}>
-            Cancelar
+            {yaTenia ? "Cerrar" : "Cancelar"}
           </Button>
           <Button
             type="submit"
-            disabled={busy || password.length < 8}
+            disabled={busy || password.length < 8 || yaTenia !== null}
           >
             {busy ? "Agregando…" : "Agregar"}
           </Button>
@@ -1341,7 +1401,7 @@ function FilaAsignacion({
               await terminar({ asignacionId: a._id });
             } catch (err) {
               setError(
-                err instanceof Error ? err.message : "No se pudo terminar.",
+                mensajeErrorUsuario(err, "No se pudo terminar."),
               );
             } finally {
               setBusy(false);
@@ -1395,7 +1455,7 @@ function AsignarDialog({
       setError(null);
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo asignar.");
+      setError(mensajeErrorUsuario(err, "No se pudo asignar."));
     } finally {
       setBusy(false);
     }
@@ -1513,7 +1573,7 @@ function NuevoContratoDialog({
       setNotas("");
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo contratar.");
+      setError(mensajeErrorUsuario(err, "No se pudo contratar."));
     } finally {
       setBusy(false);
     }

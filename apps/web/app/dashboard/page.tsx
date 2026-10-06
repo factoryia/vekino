@@ -38,6 +38,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { DonutChart } from "@/components/charts/donut-chart";
 import { CHART } from "@/components/charts/chart-colors";
 import { cn } from "@/lib/utils";
+import { SolicitudesCobertura } from "@/components/guardia/solicitudes-cobertura";
+import { AvisoTurnoPendiente } from "@/components/guardia/aviso-turno-pendiente";
 
 export default function DashboardHome() {
   const me = useMeOperativo();
@@ -431,6 +433,10 @@ function UserHome({
     <PageContainer>
       <div className="space-y-6">
         <PageHeader title={`Hola, ${me.name}`} description={me.email} />
+        {/* Las solicitudes de cobertura y el turno pendiente del guarda, tenga
+            o no portería que abrir (QA-006, QA-008). */}
+        <SolicitudesCobertura className="" />
+        <AvisoTurnoPendiente className="" />
         {contexto.cobertura && (
           <Card className="border-brand/30">
             <CardHeader className="mb-0">

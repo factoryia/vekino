@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Input, Select } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { ResumenSemanal } from "./resumen-semanal";
+import { mensajeErrorUsuario } from "@/lib/utils";
 
 /**
  * Registrar un horario.
@@ -111,7 +112,7 @@ export function CrearHorarioDialog({
       validarVigencia(fechaInicio, fechaFin || undefined);
       validarBloques(limpios);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Revisa los datos.");
+      setError(mensajeErrorUsuario(err, "Revisa los datos."));
       return;
     }
     setBusy(true);
@@ -126,7 +127,7 @@ export function CrearHorarioDialog({
       });
       cerrar();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo registrar.");
+      setError(mensajeErrorUsuario(err, "No se pudo registrar."));
     } finally {
       setBusy(false);
     }

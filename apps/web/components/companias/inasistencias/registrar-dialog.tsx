@@ -19,7 +19,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input, Select, Textarea } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
-import { cn } from "@/lib/utils";
+import { cn, mensajeErrorUsuario } from "@/lib/utils";
 import { ventanaDe } from "./ventana";
 
 /**
@@ -91,7 +91,7 @@ export function RegistrarInasistenciaDialog({
       ventanaInasistencia(ventana);
       validarMotivo(tipo, motivo);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Revisa los datos.");
+      setError(mensajeErrorUsuario(err, "Revisa los datos."));
       return;
     }
     setBusy(true);
@@ -105,7 +105,7 @@ export function RegistrarInasistenciaDialog({
       });
       cerrar();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo registrar.");
+      setError(mensajeErrorUsuario(err, "No se pudo registrar."));
     } finally {
       setBusy(false);
     }

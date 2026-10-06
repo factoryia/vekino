@@ -6,6 +6,7 @@ import {
   mutation,
   action,
   internalMutation,
+  internalQuery,
 } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
 import { api, internal } from "./_generated/api";
@@ -29,12 +30,13 @@ import {
   exigirRolUnicoCompania,
   rolPrincipalDeCompania,
   tipoDocumentoValidator,
+  ROLES_DE_MANDO_EN_CONJUNTO,
 } from "./model/roles";
 import { estadoVigencia, haySolape, estaVigente } from "./lib/vigilancia";
 import { normalizarTelefonoE164 } from "./lib/telefono";
 import { evaluarPassword } from "./lib/passwordFuerte";
 import { displayNameFromUser } from "./model/displayName";
-import { fijarPasswordDeCuenta } from "./model/credencial";
+import { credencialDeAlta, fijarPasswordDeCuenta } from "./model/credencial";
 
 /**
  * Compañías de vigilancia: la empresa, su personal y sus contratos.
@@ -676,17 +678,18 @@ export const upsertMiembroProfile = mutation({
     let userId: Id<"users">;
     let existed = false;
     if (existing) {
+      /* Una cuenta de plataforma no es personal de nadie: darla de alta la
+       * dejaría colgando de una compañía que luego intentaría gestionarla. */
+      if (existing.platformRole) {
+        throw new Error(
+          "Esa cuenta es de la plataforma. No puede darse de alta como personal de una compañía.",
+        );
+      }
+      /* La cuenta existente es de su dueño: el alta solo crea o reactiva el
+       * vínculo de abajo. No se le cambia el teléfono, ni el estado, ni nada
+       * más, ni aunque el formulario los traiga (QA-003). */
       userId = existing._id;
       existed = true;
-      /* Patch condicional: en Convex, patch con undefined BORRA el campo. Un
-       * residente al que se da de alta como guarda no debe perder su
-       * teléfono porque el formulario venga vacío. */
-      const patch: Record<string, unknown> = { active: true, updatedAt: now };
-      if (args.telefono !== undefined) {
-        patch.telefono = telefono;
-        patch.telefonoE164 = telefonoE164;
-      }
-      await ctx.db.patch(existing._id, patch);
     } else {
       userId = await ctx.db.insert("users", {
         name,
@@ -749,6 +752,7 @@ export const upsertMiembroProfile = mutation({
         roles: args.roles,
         cargo: args.cargo?.trim() || undefined,
         isActive: true,
+        cuentaCreadaEnAlta: !existed,
         createdAt: now,
         updatedAt: now,
       });
@@ -764,7 +768,9 @@ export const upsertMiembroProfile = mutation({
  * Calcada de `users.createCondoMember`, que es el camino que el proyecto ya
  * usa para dar de alta gente con contraseña. Si la persona ya tenía cuenta
  * —un residente que además trabaja de guarda— se le respeta y solo se le
- * añade el vínculo con la compañía.
+ * añade el vínculo con la compañía: no se le toca la clave, ni el nombre, ni
+ * nada de su cuenta (QA-003). La contraseña del formulario solo se usa cuando
+ * la cuenta es nueva. Una cuenta de plataforma no se da de alta como personal.
  */
 export const crearMiembro = action({
   args: {
@@ -785,21 +791,24 @@ export const crearMiembro = action({
     miembroId: Id<"companiaMiembros">;
     existed: boolean;
   }> => {
-    const password = args.password.trim();
-    /* La política completa la aplica `fijarPasswordDeCuenta` más abajo, pero
-     * el perfil se crea ANTES que la credencial: sin este corte temprano, una
-     * clave rechazada dejaría a la persona dada de alta y sin poder entrar. */
-    const fuerza = evaluarPassword(password, {
-      email: args.email,
-      nombre: args.name,
-    });
-    if (!fuerza.ok) throw new Error(fuerza.problemas[0]!);
-
-    /* El rol, por la misma razón que la clave: `upsertMiembroProfile` lo
-     * vuelve a comprobar —es la puerta de verdad— pero rechazarlo aquí evita
-     * gastar una escritura y una llamada a Better Auth en un alta que iba a
-     * fallar de todos modos. */
+    /* El rol: `upsertMiembroProfile` lo vuelve a comprobar —es la puerta de
+     * verdad— pero rechazarlo aquí evita gastar una escritura y una llamada a
+     * Better Auth en un alta que iba a fallar de todos modos. */
     exigirRolUnicoCompania(args.roles);
+
+    /* La clave solo cuenta si la cuenta es nueva. Entonces se valida ANTES de
+     * crear el perfil: sin este corte, una clave rechazada dejaría a la persona
+     * dada de alta y sin poder entrar. A quien ya tiene cuenta no se le pide
+     * nada sobre una clave que no se va a usar. */
+    const email = args.email.trim().toLowerCase();
+    const perfilPrevio: boolean = await ctx.runQuery(internal.users.emailEnUso, { email });
+    if (!perfilPrevio) {
+      const fuerza = evaluarPassword(args.password.trim(), {
+        email,
+        nombre: args.name,
+      });
+      if (!fuerza.ok) throw new Error(fuerza.problemas[0]!);
+    }
 
     const perfil: {
       userId: Id<"users">;
@@ -816,23 +825,21 @@ export const crearMiembro = action({
       cargo: args.cargo,
     });
 
-    /* La credencial la escribe el helper compartido: la misma secuencia que
-     * usa el restablecimiento, en un solo sitio. */
-    await fijarPasswordDeCuenta(ctx, {
-      email: perfil.email,
-      name: perfil.name,
-      password,
-    });
-
-    const ia = (await createAuth(ctx).$context).internalAdapter;
-    const found = await ia.findUserByEmail(perfil.email);
-    if (!found) throw new Error("No se pudo crear la cuenta de acceso.");
-    const authUserId = found.user.id;
-
-    await ctx.runMutation(internal.users.linkAuthId, {
-      userId: perfil.userId,
-      authId: authUserId,
-    });
+    /* Solo una identidad nueva recibe credencial, y solo una nueva se enlaza:
+     * la cuenta que ya existía conserva su clave y su enlace tal como estaban.
+     * Si el correo ya tenía acceso en Better Auth sin perfil, `credencialDeAlta`
+     * devuelve ese acceso sin tocarlo y aquí solo se enlaza. */
+    if (!perfil.existed) {
+      const { authUserId } = await credencialDeAlta(ctx, {
+        email: perfil.email,
+        name: perfil.name,
+        password: args.password,
+      });
+      await ctx.runMutation(internal.users.linkAuthId, {
+        userId: perfil.userId,
+        authId: authUserId,
+      });
+    }
 
     return {
       ok: true as const,
@@ -1114,13 +1121,6 @@ export const terminarContrato = mutation({
 // todas las semanas. Sin esto había que darla de baja y volverla a crear.
 // ─────────────────────────────────────────────────────────────
 
-/** Roles de conjunto cuya cuenta NO puede tomar el administrador de una compañía. */
-const ROLES_DE_MANDO_EN_CONJUNTO = [
-  "administrador",
-  "contadora",
-  "junta_directiva",
-] as const;
-
 /**
  * Autoriza tocar a una persona de una compañía, y devuelve lo justo.
  *
@@ -1151,7 +1151,86 @@ const ROLES_DE_MANDO_EN_CONJUNTO = [
 export const assertPuedeEditarMiembro = query({
   args: { miembroId: v.id("companiaMiembros") },
   handler: async (ctx, args) => {
-    const miembro = await ctx.db.get(args.miembroId);
+    const { miembro, user } = await autorizarEdicionDeMiembro(ctx, args.miembroId);
+    return {
+      userId: miembro.userId,
+      companiaId: miembro.companiaId,
+      email: user.email!,
+      name: user.name,
+    };
+  },
+});
+
+/**
+ * Autoriza cambiar la CONTRASEÑA o el CORREO de alguien de la compañía.
+ *
+ * Más estricto que editar sus datos, porque con cualquiera de los dos se entra
+ * a la cuenta (el correo, vía el restablecimiento). Además de las dos puertas
+ * de `assertPuedeEditarMiembro`, tres más (QA-003):
+ *
+ *  3. Sigue de alta en ESTA compañía. La que lo dio de baja ya no gestiona su
+ *     acceso, y menos cuando ya trabaja para otra.
+ *
+ *  4. No pertenece a ningún conjunto, con ningún rol. Un residente que además
+ *     es guarda tiene en su cuenta su unidad, sus pagos y sus facturas; esa
+ *     cuenta no se la cambia la empresa que lo contrató.
+ *
+ *  5. La cuenta nació con el alta de esta compañía. Si ya existía cuando la
+ *     dieron de alta —era de otra persona, de otro conjunto, de otra
+ *     empresa—, la compañía se la apuntó, pero no es suya.
+ */
+export const assertPuedeGestionarCredencial = internalQuery({
+  args: { miembroId: v.id("companiaMiembros") },
+  handler: async (ctx, args) => {
+    const { miembro, user, membresias } = await autorizarEdicionDeMiembro(
+      ctx,
+      args.miembroId,
+    );
+    if (!miembro.isActive) {
+      throw new Error("Esa persona ya no es personal activo de la compañía.");
+    }
+    if (membresias.some((m) => m.isActive)) {
+      throw new Error(
+        "Esa persona también pertenece a un conjunto. Su contraseña y su correo no se gestionan desde la compañía.",
+      );
+    }
+    if (!cuentaNacioConEstaAlta(user, miembro)) {
+      throw new Error(
+        "Esa persona ya tenía su cuenta en Vekino. Su contraseña y su correo solo los cambia ella.",
+      );
+    }
+    return {
+      userId: miembro.userId,
+      companiaId: miembro.companiaId,
+      email: user.email!,
+      name: user.name,
+    };
+  },
+});
+
+/**
+ * ¿La cuenta la creó el alta de esta compañía?
+ *
+ * Lo dice el propio vínculo (`cuentaCreadaEnAlta`). Darla de baja y volver a
+ * darla de alta reutiliza el mismo vínculo, así que la cuenta sigue siendo de
+ * la compañía que la creó. Los vínculos anteriores al campo se juzgan como se
+ * creaban entonces: `upsertMiembroProfile` insertaba el perfil y el vínculo en
+ * la misma mutación, con el mismo instante; una cuenta que ya existía es
+ * anterior a su vínculo.
+ */
+function cuentaNacioConEstaAlta(
+  user: Doc<"users">,
+  miembro: Doc<"companiaMiembros">,
+): boolean {
+  return miembro.cuentaCreadaEnAlta ?? user.createdAt === miembro.createdAt;
+}
+
+/** Las dos puertas de toda edición de una persona de la compañía. */
+async function autorizarEdicionDeMiembro(
+  ctx: QueryCtx,
+  miembroId: Id<"companiaMiembros">,
+) {
+    const miembro = await ctx.db.get(miembroId);
     if (!miembro) throw new Error("Miembro no encontrado.");
 
     await exigirAccesoCompania(ctx, miembro.companiaId, "seguridad.personal");
@@ -1183,14 +1262,8 @@ export const assertPuedeEditarMiembro = query({
       );
     }
 
-    return {
-      userId: miembro.userId,
-      companiaId: miembro.companiaId,
-      email: user.email,
-      name: user.name,
-    };
-  },
-});
+    return { miembro, user, membresias };
+}
 
 /**
  * Corrige los datos personales de alguien de la compañía.
@@ -1288,7 +1361,7 @@ export const setPasswordMiembro = action({
       companiaId: Id<"companiasSeguridad">;
       email: string;
       name: string;
-    } = await ctx.runQuery(api.companias.assertPuedeEditarMiembro, {
+    } = await ctx.runQuery(internal.companias.assertPuedeGestionarCredencial, {
       miembroId: args.miembroId,
     });
 
@@ -1348,7 +1421,7 @@ export const setEmailMiembro = action({
       companiaId: Id<"companiasSeguridad">;
       email: string;
       name: string;
-    } = await ctx.runQuery(api.companias.assertPuedeEditarMiembro, {
+    } = await ctx.runQuery(internal.companias.assertPuedeGestionarCredencial, {
       miembroId: args.miembroId,
     });
 

@@ -430,3 +430,15 @@ export type TipoNovedadItem =
   | "ITEM_ASSIGNED_TO_GUARD"
   | "ITEM_RETURNED_BY_GUARD"
   | "ITEM_NOTE";
+
+/**
+ * Los roles de un conjunto que mandan en él. Quien tiene alguno no ve su
+ * contraseña ni su correo cambiados desde otro sitio: ni desde una compañía
+ * (`companias.assertPuedeEditarMiembro`) ni desde otro conjunto
+ * (`users.assertCanEditMember`).
+ */
+export const ROLES_DE_MANDO_EN_CONJUNTO = [
+  "administrador",
+  "contadora",
+  "junta_directiva",
+] as const;

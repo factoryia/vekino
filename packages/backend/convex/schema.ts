@@ -2591,6 +2591,18 @@ export default defineSchema({
     passwordFijadaPorUserId: v.optional(v.id("users")),
 
     /**
+     * Si la cuenta de la persona la creó el alta de esta compañía (QA-003).
+     *
+     * Solo entonces la compañía puede cambiarle la contraseña o el correo: una
+     * cuenta que ya existía —de un residente, de otra empresa— se apunta como
+     * personal, pero sigue siendo de su dueño. `true` cuando el alta insertó
+     * el perfil; `false` cuando lo encontró. Las filas anteriores a este campo
+     * no lo tienen y se juzgan como entonces se creaban: perfil y vínculo
+     * nacían en la misma mutación, con el mismo `createdAt`.
+     */
+    cuentaCreadaEnAlta: v.optional(v.boolean()),
+
+    /**
      * El último cambio de rol: cuál era, cuándo se cambió y quién lo ordenó.
      *
      * Mismo mecanismo que las tres líneas de arriba y por el mismo motivo: el

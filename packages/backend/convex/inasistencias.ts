@@ -140,9 +140,14 @@ export const crear = mutation({
         "Ese guarda ya tiene una inasistencia activa que se cruza con esas fechas. Anúlala o ajusta la ventana.",
       );
     }
-    if (await coberturaAceptadaQueSolapa(ctx, args.userId, ventana)) {
+    const cobertura = await coberturaAceptadaQueSolapa(ctx, args.userId, ventana);
+    if (cobertura) {
+      /* Solo se le pide inhabilitarla a la compañía que puede hacerlo: la
+       * dueña de la cobertura (QA-001). */
       throw new Error(
-        "El guarda tiene una cobertura aceptada que se solapa con este periodo. Inhabilita primero la cobertura o registra la inasistencia para otro periodo.",
+        cobertura.companiaId === args.companiaId
+          ? "El guarda tiene una cobertura aceptada que se solapa con este periodo. Inhabilita primero la cobertura o registra la inasistencia para otro periodo."
+          : "El guarda tiene una cobertura aceptada con otra compañía que se solapa con este periodo. Esa compañía debe inhabilitarla antes; mientras tanto, registra la inasistencia para otro periodo.",
       );
     }
 

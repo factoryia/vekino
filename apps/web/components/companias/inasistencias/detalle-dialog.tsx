@@ -14,6 +14,7 @@ import { ErrorBoundary, ErrorMessage } from "@/components/ui/error-boundary";
 import { Modal } from "@/components/ui/modal";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ventanaDe } from "./ventana";
+import { mensajeErrorUsuario } from "@/lib/utils";
 
 /**
  * Ficha de una inasistencia, el historial de su guarda y la anulación.
@@ -40,7 +41,7 @@ export function DetalleInasistenciaDialog({
       <ErrorBoundary
         resetKey={inasistenciaId}
         fallback={(e) => (
-          <ErrorMessage title="No se puede ver esta inasistencia" detail={e.message} />
+          <ErrorMessage title="No se puede ver esta inasistencia" detail={mensajeErrorUsuario(e)} />
         )}
       >
         <Contenido inasistenciaId={inasistenciaId} />
@@ -122,7 +123,7 @@ function Contenido({ inasistenciaId }: { inasistenciaId: Id<"inasistencias"> }) 
                       await anular({ inasistenciaId: d._id });
                       setConfirmando(false);
                     } catch (e) {
-                      setError(e instanceof Error ? e.message : "No se pudo anular.");
+                      setError(mensajeErrorUsuario(e, "No se pudo anular."));
                     } finally {
                       setBusy(false);
                     }

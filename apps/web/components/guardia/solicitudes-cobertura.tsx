@@ -7,6 +7,7 @@ import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { etiquetaInstante } from "@vekino/backend/inasistencias";
 import { Button } from "@/components/ui/button";
+import { mensajeErrorUsuario } from "@/lib/utils";
 
 /**
  * Las solicitudes de cobertura que el guarda tiene que responder.
@@ -15,15 +16,24 @@ import { Button } from "@/components/ui/button";
  * Nada de su disponibilidad ni de sus inasistencias. No sale si no hay nada
  * pendiente. Aceptar es un compromiso: cuando empiece la ventana, el guarda
  * operará temporalmente en ese conjunto (el shell lo lleva allí solo).
+ *
+ * La solicitud es del guarda, no de una portería (QA-006): se monta también
+ * en su inicio, en el portal de residente y en la página de su compañía, para
+ * el guarda que no tiene portería que abrir. `className` es solo el margen
+ * de cada sitio.
  */
-export function SolicitudesCobertura() {
+export function SolicitudesCobertura({
+  className = "mx-4 mt-4 lg:mx-6",
+}: {
+  className?: string;
+} = {}) {
   const pendientes = useQuery(api.coberturas.pendientesDeGuarda, {});
   if (!pendientes || pendientes.length === 0) return null;
 
   return (
     <section
       aria-label="Solicitudes de cobertura"
-      className="mx-4 mt-4 space-y-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 lg:mx-6"
+      className={`${className} space-y-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3`}
     >
       <p className="flex items-center gap-2 text-[13px] font-medium text-foreground">
         <ArrowLeftRight className="h-4 w-4" aria-hidden />
@@ -68,7 +78,7 @@ function Solicitud({
     try {
       await accion({ coberturaId });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "No se pudo responder.");
+      setError(mensajeErrorUsuario(e, "No se pudo responder."));
     } finally {
       setBusy(false);
     }

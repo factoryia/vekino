@@ -89,7 +89,19 @@ export function hexToBrandForeground(hex: string): string {
 
 /**
  * Extrae el mensaje humano de un error de Convex/JS.
- * Evita mostrar `[CONVEX M(...)] Server Error Uncaught Error: …`.
+ *
+ * El cliente de Convex entrega el error con todo su andamiaje alrededor del
+ * mensaje de negocio:
+ *
+ *   [CONVEX M(inasistencias:crear)] [Request ID: 3f88…] Server Error
+ *   Uncaught Error: El guarda tiene una cobertura aceptada…
+ *       at handler (../convex/inasistencias.ts:144:8)
+ *     Called by client
+ *
+ * Lo que va a la pantalla es solo la frase de en medio (QA-007): ni el
+ * identificador de la petición, ni el archivo y la línea, ni nada de Convex.
+ * Si no hay frase de negocio —un fallo interno, una validación de
+ * argumentos— queda el texto de respaldo de quien llama.
  */
 export function mensajeErrorUsuario(
   e: unknown,
@@ -101,22 +113,29 @@ export function mensajeErrorUsuario(
       : typeof e === "string"
         ? e
         : fallback;
-  const sinPrefijo = raw
-    .replace(/^\[CONVEX[^\]]*\]\s*/i, "")
-    .replace(/^Server Error\s*/i, "")
-    .replace(/^Uncaught Error:\s*/i, "")
-    .trim();
-  const primera = sinPrefijo.split("\n")[0]?.trim() ?? "";
 
-  if (/connection lost|while action was in flight/i.test(sinPrefijo)) {
+  if (/connection lost|while action was in flight/i.test(raw)) {
     return "Se perdió la conexión al guardar. Espera un momento e intenta de nuevo; si ya quedó creado, no lo vuelvas a crear.";
   }
+
+  /* La frase de negocio va tras "Uncaught Error:", en la misma línea o en la
+   * siguiente según el cliente (React o HTTP). */
+  const tras = raw.match(/Uncaught (?:Convex)?Error:\s*([\s\S]*)/i);
+  const texto = (tras ? tras[1]! : raw)
+    .replace(/\[CONVEX[^\]]*\]\s*/gi, "")
+    .replace(/\[Request ID:[^\]]*\]\s*/gi, "")
+    .replace(/^\s*Server Error\b\s*/i, "")
+    /* Y se corta en el primer rastro técnico. */
+    .split(/\n|\s+at (?:async )?\S+ \(|\s+Called by client/i)[0]!
+    .trim();
+
   if (
-    !primera ||
-    primera.startsWith("at ") ||
-    /called by client/i.test(primera)
+    !texto ||
+    texto.startsWith("at ") ||
+    /called by client/i.test(texto) ||
+    /^(Argument|Returns)ValidationError\b/.test(texto)
   ) {
     return fallback;
   }
-  return primera;
+  return texto;
 }

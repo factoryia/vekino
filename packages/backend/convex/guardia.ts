@@ -12,7 +12,12 @@ import {
   hasPlatformRole,
   vigentes,
 } from "./model/authz";
-import { exigirAcceso, resolverAcceso } from "./model/acceso";
+import {
+  exigirAcceso,
+  exigirAccesoCompania,
+  exigirAccesoContrato,
+  resolverAcceso,
+} from "./model/acceso";
 import { viasDeAsignacionDe } from "./model/asignacion";
 import { coberturaQueAmpara, lectorDeCoberturasHistoricas } from "./model/cobertura";
 import {
@@ -102,12 +107,18 @@ export const generateUploadUrl = mutation({
  * servidor, con su reloj.
  */
 export const home = query({
-  args: { condominioId: v.id("condominios"), refresco: v.optional(v.number()) },
+  /* El id llega de la URL (`/guardia/<id>`), así que se acepta como texto y
+   * se valida aquí: un id mal escrito, de otra tabla o de un conjunto borrado
+   * responde "no entra" —y el shell redirige— en vez de reventar la página
+   * con un error de validación (QA-005). */
+  args: { condominioId: v.string(), refresco: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const user = await getCurrentAppUser(ctx);
     if (!user) return { allowed: false as const };
 
-    const condominio = await ctx.db.get(args.condominioId);
+    const condominioId = ctx.db.normalizeId("condominios", args.condominioId);
+    if (!condominioId) return { allowed: false as const };
+    const condominio = await ctx.db.get(condominioId);
     if (!condominio) return { allowed: false as const };
 
     /* La puerta del turno se pregunta por CAPACIDAD y no por rol: así entra
@@ -116,7 +127,7 @@ export const home = query({
      * `porteria.operar` es exactamente lo que da GUARD_ROLES —administrador,
      * junta_directiva y guardia— más el guarda asignado; el supervisor NO la
      * tiene, y es correcto: supervisa, no releva. */
-    const acceso = await resolverAcceso(ctx, args.condominioId);
+    const acceso = await resolverAcceso(ctx, condominioId);
     if (!acceso || !acceso.capacidades.has("porteria.operar")) {
       return { allowed: false as const };
     }
@@ -223,6 +234,17 @@ export const iniciarTurno = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireCondominioRole(ctx, args.condominioId, [...GUARD_ROLES]);
+
+    /* El turno que dejó abierto en el conjunto que cubría se cierra primero
+     * (QA-008): abrir otro aquí lo dejaría olvidado, y a esa portería sin
+     * poder abrir turno. */
+    const huerfano = await turnoHuerfanoDe(ctx, user._id);
+    if (huerfano) {
+      const donde = (await ctx.db.get(huerfano.condominioId))?.name ?? "otro conjunto";
+      throw new Error(
+        `Tienes un turno pendiente de cierre en ${donde}. Ciérralo antes de iniciar otro.`,
+      );
+    }
 
     const abierto = await turnoAbierto(ctx, args.condominioId);
     if (abierto) {
@@ -344,10 +366,82 @@ async function puedeCerrarloPorCobertura(
 }
 
 /**
- * Quién puede cerrar un turno: quien opera la portería, o el guarda del turno
- * por la excepción de la cobertura. Lo comparten el cierre y la lista de
- * relevos que se le ofrece, para que el formulario no ofrezca lo que el
- * servidor rechaza.
+ * EL TURNO QUE QUEDÓ ABIERTO EN EL CONJUNTO CUBIERTO (QA-008).
+ *
+ * La otra cara de la excepción de arriba. El guarda que cubre B abre turno en
+ * B; la cobertura termina, o la inhabilitan, antes de que lo cierre. Su
+ * contexto vuelve a su conjunto de siempre y B ya no le abre: el turno quedaba
+ * abierto, nadie de su compañía podía cerrarlo y la portería no podía abrir
+ * otro.
+ *
+ * Un turno es huérfano cuando todo esto es cierto a la vez:
+ *   - sigue abierto y se abrió amparado por una cobertura (`coberturaId`, el
+ *     sello de la Fase 11, que es del titular);
+ *   - esa cobertura es del titular y de ese mismo conjunto;
+ *   - y hoy el titular NO opera como guarda en ese conjunto. Si opera —otra
+ *     cobertura, una asignación nueva— lo cierra por la vía de siempre.
+ *
+ * Cerrarlo no reactiva nada: no devuelve el conjunto, no crea una vía y no
+ * toca el sello; el turno conserva su conjunto y su `coberturaId`.
+ */
+async function esTurnoHuerfano(
+  ctx: QueryCtx | MutationCtx,
+  turno: Doc<"guardiaTurnos">,
+): Promise<boolean> {
+  if (turno.estado !== "abierto" || !turno.coberturaId) return false;
+  const cobertura = await ctx.db.get(turno.coberturaId);
+  if (
+    !cobertura ||
+    cobertura.userId !== turno.guardiaUserId ||
+    cobertura.condominioId !== turno.condominioId
+  ) {
+    return false;
+  }
+  const { vias } = await viasOperativasEnConjunto(
+    ctx,
+    turno.guardiaUserId,
+    turno.condominioId,
+  );
+  return !vias.some(esViaDeGuarda);
+}
+
+/**
+ * El turno huérfano del guarda, si tiene uno.
+ *
+ * Solo puede estar en un conjunto donde tuvo una cobertura, así que se busca
+ * por sus coberturas aceptadas o inhabilitadas: pocas filas y por índice.
+ */
+async function turnoHuerfanoDe(
+  ctx: QueryCtx | MutationCtx,
+  userId: Id<"users">,
+): Promise<Doc<"guardiaTurnos"> | null> {
+  const coberturas = (
+    await Promise.all(
+      (["aceptada", "inhabilitada"] as const).map((estado) =>
+        ctx.db
+          .query("coberturas")
+          .withIndex("by_user_estado_fin", (q) =>
+            q.eq("userId", userId).eq("estado", estado),
+          )
+          .collect(),
+      ),
+    )
+  ).flat();
+  const conjuntos = new Set(coberturas.map((c) => c.condominioId));
+  for (const condominioId of conjuntos) {
+    const turno = await turnoAbierto(ctx, condominioId);
+    if (turno && turno.guardiaUserId === userId && (await esTurnoHuerfano(ctx, turno))) {
+      return turno;
+    }
+  }
+  return null;
+}
+
+/**
+ * Quién puede cerrar un turno: quien opera la portería, el guarda del turno
+ * por la excepción de la cobertura, o el titular de un turno huérfano. Lo
+ * comparten el cierre y la lista de relevos que se le ofrece, para que el
+ * formulario no ofrezca lo que el servidor rechaza.
  */
 async function autorizarCierre(
   ctx: QueryCtx | MutationCtx,
@@ -355,7 +449,10 @@ async function autorizarCierre(
 ): Promise<{ user: Doc<"users">; membership: Doc<"memberships"> | null }> {
   const user = await requireAppUser(ctx);
   const contexto = await resolverContextoOperativoGuardia(ctx, user._id);
-  if (await puedeCerrarloPorCobertura(ctx, user._id, turno, contexto)) {
+  if (
+    (await puedeCerrarloPorCobertura(ctx, user._id, turno, contexto)) ||
+    (turno.guardiaUserId === user._id && (await esTurnoHuerfano(ctx, turno)))
+  ) {
     return { user, membership: await getMembership(ctx, user._id, turno.condominioId) };
   }
   return await requireCondominioRole(ctx, turno.condominioId, [...GUARD_ROLES]);
@@ -379,37 +476,58 @@ export const turnoPendienteDeCierre = query({
     const user = await getCurrentAppUser(ctx);
     if (!user || !user.active) return null;
     const contexto = await resolverContextoOperativoGuardia(ctx, user._id);
-    if (contexto.tipo !== "cobertura") return null;
-
-    const [membresias, asignaciones] = await Promise.all([
-      viasDeMembershipDe(ctx, user._id),
-      viasDeAsignacionDe(ctx, user._id),
-    ]);
-    const conjuntos = new Set<Id<"condominios">>(
-      [...membresias, ...asignaciones]
-        .filter(esViaDeGuarda)
-        .map((via) => via.condominioId),
-    );
-    for (const condominioId of conjuntos) {
-      const turno = await turnoAbierto(ctx, condominioId);
-      if (!turno || !(await puedeCerrarloPorCobertura(ctx, user._id, turno, contexto))) {
-        continue;
-      }
-      const [condominio, rondas] = await Promise.all([
-        ctx.db.get(condominioId),
-        ctx.db
-          .query("guardiaRondas")
-          .withIndex("by_turno", (q) => q.eq("turnoId", turno._id))
-          .collect(),
-      ]);
-      return {
-        turno: { ...turno, rondasCount: rondas.length },
-        condominioNombre: condominio?.name ?? "",
-      };
+    if (contexto.tipo === "cobertura") {
+      const permanente = await turnoPermanentePendiente(ctx, user._id, contexto);
+      if (permanente) return permanente;
     }
-    return null;
+
+    /* Y el que quedó en el conjunto que cubría, sea cual sea el contexto de
+     * hoy (QA-008): sin esto el guarda volvía a su portería sin saber que
+     * tenía un turno abierto en la otra. */
+    const huerfano = await turnoHuerfanoDe(ctx, user._id);
+    return huerfano ? await conDatosDeCierre(ctx, huerfano) : null;
   },
 });
+
+/** El turno con lo que necesita el formulario de cierre. */
+async function conDatosDeCierre(ctx: QueryCtx, turno: Doc<"guardiaTurnos">) {
+  const [condominio, rondas] = await Promise.all([
+    ctx.db.get(turno.condominioId),
+    ctx.db
+      .query("guardiaRondas")
+      .withIndex("by_turno", (q) => q.eq("turnoId", turno._id))
+      .collect(),
+  ]);
+  return {
+    turno: { ...turno, rondasCount: rondas.length },
+    condominioNombre: condominio?.name ?? "",
+  };
+}
+
+/** El turno de su conjunto de siempre que cierra por la excepción de la cobertura. */
+async function turnoPermanentePendiente(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+  contexto: ContextoOperativoGuardia,
+) {
+  const [membresias, asignaciones] = await Promise.all([
+    viasDeMembershipDe(ctx, userId),
+    viasDeAsignacionDe(ctx, userId),
+  ]);
+  const conjuntos = new Set<Id<"condominios">>(
+    [...membresias, ...asignaciones]
+      .filter(esViaDeGuarda)
+      .map((via) => via.condominioId),
+  );
+  for (const condominioId of conjuntos) {
+    const turno = await turnoAbierto(ctx, condominioId);
+    if (!turno || !(await puedeCerrarloPorCobertura(ctx, userId, turno, contexto))) {
+      continue;
+    }
+    return await conDatosDeCierre(ctx, turno);
+  }
+  return null;
+}
 
 /**
  * Los guardas a los que se puede entregar un turno: los de su portería, menos
@@ -525,6 +643,122 @@ export const cerrarTurno = mutation({
       actorNombre: user.name,
       turnoId: args.turnoId,
     });
+  },
+});
+
+/**
+ * LA RECUPERACIÓN DE UN TURNO HUÉRFANO, por la administración de la compañía.
+ *
+ * El titular puede cerrar su turno huérfano él mismo (`esTurnoHuerfano`). Si
+ * no lo hace —se fue, no tiene la app a mano—, la portería se quedaba sin
+ * poder abrir turno hasta que llegara alguien de la plataforma o del conjunto
+ * (QA-008). Esta es la vía explícita para la compañía que mandó la cobertura.
+ *
+ * Solo el administrador, como al inhabilitar una cobertura: el supervisor no
+ * gana aquí un poder que no tenía. Y solo sobre un turno que de verdad es
+ * huérfano: mientras el guarda puede cerrarlo, lo cierra él.
+ *
+ * El cierre queda como lo que es: lo cerró la administración, con su motivo,
+ * en la minuta de esa portería. El turno conserva su conjunto y su
+ * `coberturaId`; no se reactiva nada ni se crea ninguna vía.
+ */
+export const cerrarTurnoHuerfano = mutation({
+  args: {
+    turnoId: v.id("guardiaTurnos"),
+    motivo: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const turno = await ctx.db.get(args.turnoId);
+    if (!turno) throw new Error("Turno no encontrado.");
+    if (turno.estado !== "abierto") throw new Error("El turno ya está cerrado.");
+    if (!turno.coberturaId) {
+      throw new Error("Ese turno no se abrió en una cobertura: se cierra desde su portería.");
+    }
+    const cobertura = await ctx.db.get(turno.coberturaId);
+    const contrato = cobertura ? await ctx.db.get(cobertura.contratoId) : null;
+    if (!cobertura || !contrato) throw new Error("No se encontró la cobertura del turno.");
+
+    const acceso = await exigirAccesoContrato(ctx, contrato, "seguridad.asignar");
+    if (acceso.comoSupervisor) {
+      throw new Error("Solo el administrador de la compañía puede cerrar un turno huérfano.");
+    }
+    if (!(await esTurnoHuerfano(ctx, turno))) {
+      throw new Error("Ese turno no está huérfano: su guarda todavía puede cerrarlo.");
+    }
+
+    const motivo = args.motivo.trim();
+    if (motivo.length < 5) throw new Error("Escribe el motivo del cierre.");
+    if (motivo.length > 500) throw new Error("El motivo admite hasta 500 caracteres.");
+
+    const quien = displayNameFromUser(acceso.user);
+    const now = Date.now();
+    await ctx.db.patch(turno._id, {
+      estado: "cerrado",
+      recibe: "Cierre administrativo",
+      observacionesCierre: `Cierre administrativo: ${motivo}`,
+      cerradoPorUserId: acceso.user._id,
+      fechaCierre: now,
+      updatedAt: now,
+    });
+    await logMinuta(ctx, {
+      condominioId: turno.condominioId,
+      modulo: "minuta",
+      tipo: "Cierre de Turno",
+      unidad: "Portería",
+      resumen:
+        `Turno de ${turno.guardiaNombre} cerrado por la administración de la compañía (${quien}): ` +
+        `la cobertura terminó sin que se cerrara. Motivo: ${motivo}`,
+      estado: "cerrado",
+      actorUserId: acceso.user._id,
+      actorNombre: quien,
+      turnoId: turno._id,
+    });
+    return { ok: true as const };
+  },
+});
+
+/**
+ * Los turnos huérfanos de los guardas de una compañía, para recuperarlos.
+ *
+ * Solo para el administrador (o la plataforma). Se buscan por las coberturas
+ * de la compañía que terminaron en los últimos 60 días: un turno huérfano solo
+ * puede estar en un conjunto que se cubrió, y más atrás no queda ninguno que
+ * no se haya visto ya.
+ */
+export const turnosHuerfanosDeCompania = query({
+  args: { companiaId: v.id("companiasSeguridad") },
+  handler: async (ctx, args) => {
+    const acceso = await exigirAccesoCompania(ctx, args.companiaId, "seguridad.asignar");
+    if (!acceso.esPlataforma && !acceso.miembro?.roles.includes("admin_compania")) {
+      throw new Error("Solo el administrador de la compañía puede ver los turnos huérfanos.");
+    }
+    const desde = Date.now() - 60 * 24 * 60 * 60 * 1000;
+    const coberturas = await ctx.db
+      .query("coberturas")
+      .withIndex("by_compania_fin", (q) => q.eq("companiaId", args.companiaId).gt("fin", desde))
+      .collect();
+    const conjuntos = new Set(
+      coberturas
+        .filter((c) => c.estado === "aceptada" || c.estado === "inhabilitada")
+        .map((c) => c.condominioId),
+    );
+    const filas = [];
+    for (const condominioId of conjuntos) {
+      const turno = await turnoAbierto(ctx, condominioId);
+      if (!turno?.coberturaId) continue;
+      const cobertura = await ctx.db.get(turno.coberturaId);
+      if (cobertura?.companiaId !== args.companiaId) continue;
+      if (!(await esTurnoHuerfano(ctx, turno))) continue;
+      const condominio = await ctx.db.get(condominioId);
+      filas.push({
+        turnoId: turno._id,
+        coberturaId: turno.coberturaId,
+        guardaNombre: turno.guardiaNombre,
+        condominioNombre: condominio?.name ?? "",
+        desde: turno.fechaInicio,
+      });
+    }
+    return filas.sort((a, b) => a.desde - b.desde);
   },
 });
 

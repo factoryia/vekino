@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ResumenSemanal } from "./resumen-semanal";
+import { mensajeErrorUsuario } from "@/lib/utils";
 
 /**
  * Ficha de un horario, el historial de su guarda y la finalización.
@@ -59,7 +60,7 @@ export function DetalleHorarioDialog({
     >
       <ErrorBoundary
         resetKey={horarioId}
-        fallback={(e) => <ErrorMessage title="No se puede ver este horario" detail={e.message} />}
+        fallback={(e) => <ErrorMessage title="No se puede ver este horario" detail={mensajeErrorUsuario(e)} />}
       >
         <Contenido horarioId={horarioId} />
       </ErrorBoundary>
@@ -152,7 +153,7 @@ function Contenido({ horarioId }: { horarioId: Id<"horariosGuarda"> }) {
                       await finalizar({ horarioId: h._id, ultimoDia });
                       setConfirmando(false);
                     } catch (e) {
-                      setError(e instanceof Error ? e.message : "No se pudo finalizar.");
+                      setError(mensajeErrorUsuario(e, "No se pudo finalizar."));
                     } finally {
                       setBusy(false);
                     }

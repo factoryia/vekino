@@ -6,7 +6,7 @@ import {
   ventanaQueOcupa,
 } from "../lib/coberturas";
 import type { CoberturaQueOcupa } from "../lib/disponibilidad";
-import { estaVigente } from "../lib/vigilancia";
+import { estaVigente, finDe } from "../lib/vigilancia";
 import { cacheDeCadena, type CacheDeCadena } from "./asignacion";
 import { rolPrincipalDeCompania } from "./roles";
 
@@ -62,6 +62,11 @@ async function aceptadasSinTerminar(
  *
  * Solo lee las que no habían terminado al empezar la ventana (por `fin`), así
  * que no recorre el histórico del guarda.
+ *
+ * Una aceptada cuenta solo si su cadena sigue en pie (`cadenaEnPie`): si el
+ * guarda ya no es de esa compañía, o le terminaron el contrato, esa cobertura
+ * no lo va a llevar a ninguna parte y no debe tenerlo "ocupado" para siempre
+ * (QA-001). Una inhabilitada ocupó lo que ocupó hasta su corte, como antes.
  */
 export async function coberturasQueOcupan(
   ctx: Ctx,
@@ -72,7 +77,13 @@ export async function coberturasQueOcupan(
     sinTerminar(ctx, userId, "aceptada", ventana.inicio),
     sinTerminar(ctx, userId, "inhabilitada", ventana.inicio),
   ]);
-  return [...aceptadas, ...inhabilitadas].flatMap((c) => {
+  const ahora = Date.now();
+  const cache = cacheDeCadena(ctx);
+  const vigentes = [];
+  for (const c of aceptadas) {
+    if (await cadenaEnPie(ctx, c, ahora, cache)) vigentes.push(c);
+  }
+  return [...vigentes, ...inhabilitadas].flatMap((c) => {
     const ocupa = ventanaQueOcupa(c);
     return ocupa && ocupa.inicio < ventana.fin && ocupa.fin > ventana.inicio
       ? [{ id: c._id, condominioId: c.condominioId, ...ocupa }]
@@ -90,6 +101,11 @@ export async function coberturasQueOcupan(
  * el camino para registrar una incapacidad en mitad de una cobertura
  * (inhabilitarla primero). Intervalos semiabiertos: tocarse en un borde no es
  * cruzarse.
+ *
+ * Y solo las que siguen siendo una vía posible (`cadenaEnPie`). Una cobertura
+ * de otra compañía de la que el guarda ya se fue no compromete a nadie, y
+ * nadie con acceso a esta compañía podía inhabilitarla: bloqueaba la
+ * inasistencia sin salida (QA-001). La fila se conserva como histórico.
  */
 export async function coberturaAceptadaQueSolapa(
   ctx: Ctx,
@@ -97,7 +113,12 @@ export async function coberturaAceptadaQueSolapa(
   ventana: { inicio: number; fin: number },
 ): Promise<Doc<"coberturas"> | null> {
   const vivas = await sinTerminar(ctx, userId, "aceptada", ventana.inicio);
-  return vivas.find((c) => c.inicio < ventana.fin) ?? null;
+  const ahora = Date.now();
+  const cache = cacheDeCadena(ctx);
+  for (const c of vivas) {
+    if (c.inicio < ventana.fin && (await cadenaEnPie(ctx, c, ahora, cache))) return c;
+  }
+  return null;
 }
 
 /**
@@ -170,6 +191,37 @@ async function guardaDeAlta(
  * El contrato, la compañía y el conjunto se leen con los lectores de la
  * cadena de asignación, para compartir el caché cuando se juzgan varias.
  */
+/**
+ * Los eslabones 2 a 5 sin mirar el reloj de la ventana: si la cobertura,
+ * llegado su momento, todavía podría ser una vía. Contrato del mismo par y sin
+ * terminar, compañía activa, guarda de alta en ella y conjunto activo.
+ *
+ * Es el "operativamente válida" de la planificación (QA-001): lo usan la
+ * disponibilidad y la regla de la inasistencia, nunca el acceso, que sigue
+ * siendo solo de `coberturaActivaDeGuardia`.
+ */
+async function cadenaEnPie(
+  ctx: Ctx,
+  c: Doc<"coberturas">,
+  ahora: number,
+  cache: CacheDeCadena,
+): Promise<boolean> {
+  const contrato = await cache.contrato(c.contratoId);
+  if (
+    !contrato ||
+    contrato.companiaId !== c.companiaId ||
+    contrato.condominioId !== c.condominioId ||
+    finDe(contrato) <= ahora
+  ) {
+    return false;
+  }
+  const compania = await cache.compania(c.companiaId);
+  if (!compania || compania.estado !== "activa") return false;
+  if (!(await guardaDeAlta(ctx, c.companiaId, c.userId))) return false;
+  const condominio = await cache.condominio(c.condominioId);
+  return !!condominio && condominio.isActive;
+}
+
 async function viaDeCobertura(
   ctx: Ctx,
   c: Doc<"coberturas">,

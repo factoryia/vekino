@@ -20,6 +20,7 @@ import { Modal } from "@/components/ui/modal";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CellStack, Table, TableCard, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import type { ContratoDestino } from "../disponibilidad/panel-disponibilidad";
+import { mensajeErrorUsuario } from "@/lib/utils";
 
 /**
  * Las coberturas de la compañía: ver su estado y su rastro, cancelar e
@@ -86,6 +87,8 @@ export function PanelCoberturas({
 
   return (
     <div className="space-y-4">
+      {puedeInhabilitar && <TurnosHuerfanos companiaId={companiaId} />}
+
       <p className="max-w-2xl text-sm text-muted-foreground">
         Las coberturas temporales entre conjuntos. Se solicitan desde
         Disponibilidad a un guarda disponible, y el guarda las acepta o las
@@ -212,7 +215,7 @@ function DetalleCobertura({
       await accion();
       setInhabilitando(false);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "No se pudo completar.");
+      setError(mensajeErrorUsuario(e, "No se pudo completar."));
     } finally {
       setBusy(false);
     }
@@ -324,6 +327,105 @@ function DetalleCobertura({
         </div>
       )}
     </Modal>
+  );
+}
+
+/**
+ * Los turnos que un guarda abrió en el conjunto que cubría y que ya no puede
+ * cerrar él mismo (QA-008). Casi nunca hay ninguno: el guarda los cierra
+ * desde su inicio. Cuando sí —se fue sin cerrarlo, perdió la app—, el
+ * administrador los cierra aquí con un motivo, que queda en la minuta.
+ * Cerrarlo no le devuelve el acceso a ese conjunto. El servidor decide qué es
+ * huérfano y quién puede (`guardia.turnosHuerfanosDeCompania`,
+ * `guardia.cerrarTurnoHuerfano`); el supervisor no.
+ */
+function TurnosHuerfanos({ companiaId }: { companiaId: Id<"companiasSeguridad"> }) {
+  const lista = useQuery(api.guardia.turnosHuerfanosDeCompania, { companiaId });
+  const cerrar = useMutation(api.guardia.cerrarTurnoHuerfano);
+  const [abierto, setAbierto] = useState<Id<"guardiaTurnos"> | null>(null);
+  const [motivo, setMotivo] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  if (!lista || lista.length === 0) return null;
+  const elegido = lista.find((t) => t.turnoId === abierto) ?? null;
+
+  function salir() {
+    setAbierto(null);
+    setMotivo("");
+    setError(null);
+  }
+
+  async function confirmar() {
+    if (!elegido) return;
+    setError(null);
+    setBusy(true);
+    try {
+      await cerrar({ turnoId: elegido.turnoId, motivo });
+      salir();
+    } catch (e) {
+      setError(mensajeErrorUsuario(e, "No se pudo cerrar el turno."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section
+      aria-label="Turnos que quedaron abiertos"
+      className="space-y-2 rounded-xl border border-destructive/30 bg-destructive/5 p-3"
+    >
+      <p className="text-[13px] font-medium text-foreground">Turnos que quedaron abiertos</p>
+      <p className="text-xs text-muted-foreground">
+        Los abrió un guarda en el conjunto que cubría y la cobertura ya terminó.
+        Lo normal es que él los cierre desde su inicio; si no puede, ciérralos aquí.
+      </p>
+      <ul className="space-y-1.5">
+        {lista.map((t) => (
+          <li key={t.turnoId} className="flex flex-wrap items-center justify-between gap-2 text-sm">
+            <span className="text-foreground">
+              {t.guardaNombre} · {t.condominioNombre} · abierto el{" "}
+              <span className="tabular-nums">{etiquetaInstante(t.desde)}</span>
+            </span>
+            <Button size="sm" variant="destructive" onClick={() => setAbierto(t.turnoId)}>
+              Cerrar turno
+            </Button>
+          </li>
+        ))}
+      </ul>
+
+      {elegido && (
+        <Modal open onClose={busy ? () => {} : salir} title="Cerrar turno abierto" className="max-w-lg">
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Turno de {elegido.guardaNombre} en {elegido.condominioNombre}, abierto el{" "}
+              <span className="tabular-nums">{etiquetaInstante(elegido.desde)}</span>. Queda como
+              cierre administrativo en la minuta del conjunto, con tu nombre y el motivo.
+            </p>
+            <label className="block space-y-1.5">
+              <span className="text-[13px] font-medium text-foreground">
+                Motivo <span className="text-destructive">*</span>
+              </span>
+              <Textarea value={motivo} onChange={(e) => setMotivo(e.target.value)} maxLength={500} rows={2} />
+            </label>
+            {error && <p className="text-[13px] text-destructive">{error}</p>}
+            <div className="flex justify-end gap-2">
+              <Button size="sm" variant="secondary" disabled={busy} onClick={salir}>
+                Volver
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={busy || motivo.trim().length < 5}
+                onClick={confirmar}
+              >
+                Cerrar turno
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </section>
   );
 }
 

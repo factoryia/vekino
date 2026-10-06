@@ -27,6 +27,7 @@ import { CambiarClaveTemporalModal } from "@/components/cambiar-clave-temporal-m
 import { RecordatorioCierreTurno } from "@/components/guardia/recordatorio-cierre";
 import { SolicitudesCobertura } from "@/components/guardia/solicitudes-cobertura";
 import { AvisoCobertura } from "@/components/guardia/aviso-cobertura";
+import { AvisoTurnoPendiente } from "@/components/guardia/aviso-turno-pendiente";
 import { WhatsappFab } from "@/components/whatsapp-fab";
 import { hexToHslChannels, hexToBrandForeground, cn, initials } from "@/lib/utils";
 import { BrandThemeProvider } from "@/lib/brand-theme";
@@ -205,6 +206,10 @@ function Guard({ children }: { children: React.ReactNode }) {
               {/* Hasta cuándo cubre este conjunto, y el turno que dejó abierto
                   en el suyo, si lo hay. Solo sale en la portería que cubre. */}
               <AvisoCobertura condominioId={condominioId} cobertura={cobertura} />
+              {/* El turno que dejó abierto en el conjunto que cubría, cuando la
+                  cobertura ya terminó. En la que cubre lo muestra el aviso de
+                  arriba. */}
+              {!cubreAqui && <AvisoTurnoPendiente condominioId={condominioId} />}
               {children}
             </div>
             <MobileBottomNav

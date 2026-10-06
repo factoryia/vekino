@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input, Select, Textarea } from "@/components/ui/input";
+import { mensajeErrorUsuario } from "@/lib/utils";
 
 /*
  * El cierre formal del turno, aparte de la página de la portería porque se
@@ -80,7 +81,7 @@ export function CerrarTurnoModal({
       });
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "No se pudo cerrar el turno.");
+      setError(mensajeErrorUsuario(e, "No se pudo cerrar el turno."));
       setBusy(false);
     }
   }

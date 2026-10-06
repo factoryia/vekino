@@ -162,7 +162,11 @@ describe("Fase 11: el sello sigue el contexto real de cada operación", () => {
         resumen: "Tarde.",
       }),
     ).rejects.toThrow();
-    // Y lo que haga de nuevo en A, ya de vuelta, va sin sello.
+    // Y lo que haga de nuevo en A, ya de vuelta, va sin sello. Antes cierra el
+    // turno que dejó abierto en B: con él pendiente no se abre otro en A
+    // (Fase 15, QA-008 E). Cerrarlo no cambia su sello.
+    await e.como("jason").mutation(api.guardia.cerrarTurno, { turnoId: enB.turnoId, ...CIERRE });
+    expect(await sello("guardiaTurnos", enB.turnoId)).toBe(x);
     await e.jornada("jason", e.alamos);
     expect(new Set(todos(await sellosDe(e.jason, e.alamos)))).toEqual(new Set([null]));
   });

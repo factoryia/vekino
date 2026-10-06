@@ -16,6 +16,7 @@ import { api } from "@vekino/backend/api";
 import { authClient } from "@/lib/auth-client";
 import { cn } from "@/lib/utils";
 import {
+  esPaginaDeSuCompania,
   homeHrefForRoles,
   homeHrefForAsignacion,
   homeHrefForCompania,
@@ -149,7 +150,10 @@ function Shell({ children }: { children: React.ReactNode }) {
     /* El supervisor primero: su panel es transversal a todos sus conjuntos,
      * así que cubre también al que supervisa varios. */
     const supervisa = hoy.asignaciones.find((a) => a.rol === "supervisor");
-    if (supervisa) {
+    /* Salvo en la página de su compañía, donde planifica lo que el servidor
+     * le autoriza: sin esta excepción la planificación del supervisor era
+     * inalcanzable desde la web (QA-004). */
+    if (supervisa && !esPaginaDeSuCompania(me, pathname)) {
       return (
         <Redirect
           to={homeHrefForAsignacion(supervisa.condominioId, "supervisor")}
@@ -182,8 +186,7 @@ function Shell({ children }: { children: React.ReactNode }) {
       me.compania.roles[0],
       me.compania.companiaId,
     );
-    const gestionCompania = me.compania.roles.includes("admin_compania") && pathname === `/dashboard/companias/${me.compania.companiaId}`;
-    if (destino && !pathname.startsWith(destino) && !gestionCompania) {
+    if (destino && !pathname.startsWith(destino) && !esPaginaDeSuCompania(me, pathname)) {
       return <Redirect to={destino} />;
     }
   }
@@ -266,10 +269,28 @@ function UserMultiCondoShell({
   children: React.ReactNode;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
 
   async function signOut() {
     await authClient.signOut();
     router.replace("/login");
+  }
+
+  /* El supervisor en la página de su compañía: la misma navegación que en
+   * `/vigilancia`, sin la sección "Compañía" del administrador. */
+  if (
+    me.compania &&
+    !me.compania.roles.includes("admin_compania") &&
+    esPaginaDeSuCompania(me, pathname)
+  ) {
+    return (
+      <>
+        <CompanyNavigationShell company={{ id: me.compania.companiaId, name: me.compania.nombre, logo: me.compania.logo, isAdmin: false, userName: me.name }}>
+          {children}
+        </CompanyNavigationShell>
+        <CambiarClaveTemporalModal />
+      </>
+    );
   }
 
   if (me.compania?.roles.includes("admin_compania")) {

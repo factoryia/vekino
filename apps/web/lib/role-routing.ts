@@ -95,6 +95,47 @@ export function homeHrefForCompania(
   return null;
 }
 
+/** Lo justo de la sesión para decidir sobre la página de una compañía. */
+type SesionDeCompania = {
+  platformRole?: string | null;
+  compania?: { companiaId: string; roles: string[] } | null;
+};
+
+/**
+ * Si quien llega puede ver el detalle de esa compañía. Es el mismo criterio de
+ * `companias.detail`: la plataforma, y de la propia compañía el administrador
+ * y el supervisor. El guarda no.
+ *
+ * La página lo mira ANTES de pedir el detalle (QA-002): pedírselo a quien no
+ * puede verlo devolvía una denegación válida que tumbaba la pantalla entera.
+ * El servidor sigue decidiendo; esto solo evita preguntar lo que va a negar.
+ */
+export function puedeVerDetalleCompania(
+  me: SesionDeCompania,
+  companiaId: string,
+): boolean {
+  if (me.platformRole === "superadmin" || me.platformRole === "admin") return true;
+  if (!me.compania || me.compania.companiaId !== companiaId) return false;
+  return me.compania.roles.includes("admin_compania") || me.compania.roles.includes("supervisor");
+}
+
+/**
+ * Si la ruta es la página de SU compañía y puede abrirla (QA-004).
+ *
+ * El shell manda al personal de compañía a su inicio, salvo aquí: el
+ * administrador gestiona desde esta página y el supervisor planifica en ella
+ * (inasistencias, horarios, disponibilidad, coberturas). Sin esta excepción
+ * el supervisor volvía siempre a `/vigilancia` aunque el servidor le
+ * autorizara esas secciones.
+ */
+export function esPaginaDeSuCompania(me: SesionDeCompania, pathname: string): boolean {
+  if (!me.compania) return false;
+  return (
+    pathname === `/dashboard/companias/${me.compania.companiaId}` &&
+    puedeVerDetalleCompania(me, me.compania.companiaId)
+  );
+}
+
 /**
  * La sesión tal como se OPERA hoy, según el contexto que resolvió el servidor
  * (`users.me` → `contextoOperativoGuardia`).

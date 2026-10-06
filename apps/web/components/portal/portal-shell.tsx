@@ -19,6 +19,8 @@ import { WhatsappFab } from "@/components/whatsapp-fab";
 import { useRegistrarUso } from "@/hooks/use-registrar-uso";
 import { hexToHslChannels, hexToBrandForeground } from "@/lib/utils";
 import { BrandThemeProvider } from "@/lib/brand-theme";
+import { SolicitudesCobertura } from "@/components/guardia/solicitudes-cobertura";
+import { AvisoTurnoPendiente } from "@/components/guardia/aviso-turno-pendiente";
 
 export function PortalShell({ children }: { children: React.ReactNode }) {
   return (
@@ -153,6 +155,12 @@ function Guard({ children }: { children: React.ReactNode }) {
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-background">
               <div className="w-full px-4 py-5 sm:px-6 sm:py-6 lg:px-8">
+                {/* Quien además es guarda de una compañía ve aquí sus
+                    solicitudes de cobertura y el turno que tenga pendiente:
+                    son suyas, no de una portería (QA-006, QA-008). Para el
+                    resto de residentes no sale nada. */}
+                <SolicitudesCobertura className="mb-4" />
+                <AvisoTurnoPendiente className="mb-4" />
                 {children}
               </div>
             </div>

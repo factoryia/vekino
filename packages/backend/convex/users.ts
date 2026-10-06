@@ -15,12 +15,13 @@ import {
   getCurrentAppUser,
   requireAppUser,
   requirePlatformStaff,
+  requireSuperadmin,
   requireCondominioRole,
   getMembership,
 } from "./model/authz";
-import { tipoDocumentoValidator } from "./model/roles";
+import { ROLES_DE_MANDO_EN_CONJUNTO, tipoDocumentoValidator } from "./model/roles";
 import { evaluarPassword } from "./lib/passwordFuerte";
-import { fijarPasswordDeCuenta } from "./model/credencial";
+import { credencialDeAlta, fijarPasswordDeCuenta } from "./model/credencial";
 import { resolveUserImage } from "./model/userImage";
 import { misAsignacionesDesde, viasDeAsignacionDe } from "./model/asignacion";
 import {
@@ -585,6 +586,41 @@ export const assertCanEditMember = query({
       );
     }
 
+    /* Ni una cuenta que vive en otro sitio (QA-003). Dar de alta como
+     * residente a alguien que ya existe solo añade la membresía; sin esto,
+     * acto seguido se le podía cambiar la clave y quedarse con su cuenta:
+     *   - personal activo de una compañía de vigilancia (lo gestiona la
+     *     compañía, si la cuenta es suya, o él mismo);
+     *   - quien administra OTRO conjunto (es el mismo salto entre conjuntos
+     *     que la compañía ya tenía cerrado en el otro sentido). */
+    const enCompania = (
+      await ctx.db
+        .query("companiaMiembros")
+        .withIndex("by_user", (q) => q.eq("userId", args.userId))
+        .collect()
+    ).some((m) => m.isActive);
+    if (enCompania) {
+      throw new Error(
+        "Esa persona es personal de una compañía de vigilancia. Su contraseña y su correo no se gestionan desde el conjunto.",
+      );
+    }
+    const mandaEnOtro = (
+      await ctx.db
+        .query("memberships")
+        .withIndex("by_user", (q) => q.eq("userId", args.userId))
+        .collect()
+    ).some(
+      (m) =>
+        m.isActive &&
+        m.condominioId !== args.condominioId &&
+        m.roles.some((r) => (ROLES_DE_MANDO_EN_CONJUNTO as readonly string[]).includes(r)),
+    );
+    if (mandaEnOtro) {
+      throw new Error(
+        "Esa persona administra otro conjunto. Su contraseña y su correo no se gestionan desde aquí.",
+      );
+    }
+
     return { email: user.email, name: user.name };
   },
 });
@@ -713,7 +749,10 @@ export const upsertPlatformAdminProfile = mutation({
     platformRole: v.union(v.literal("admin"), v.literal("superadmin")),
   },
   handler: async (ctx, args) => {
-    await requirePlatformStaff(ctx);
+    /* Solo el superadmin reparte poderes de plataforma, como en
+     * `memberships.setPlatformRole`: con `requirePlatformStaff` un `admin`
+     * podía darse `superadmin` a sí mismo, o dárselo a cualquiera. */
+    await requireSuperadmin(ctx);
     const email = args.email.trim().toLowerCase();
     const name = args.name.trim();
     if (!email || !name) throw new Error("Nombre y correo son obligatorios.");
@@ -806,47 +845,19 @@ export const createPlatformAdmin = action({
       platformRole: args.platformRole,
     });
 
-    const auth = createAuth(ctx);
-    const authCtx = await auth.$context;
-    const ia = authCtx.internalAdapter;
-    const hashed = await authCtx.password.hash(password);
-
-    const found = await ia.findUserByEmail(profile.email);
-    let authUserId: string;
-
-    if (!found) {
-      const created = await ia.createUser({
+    /* Solo una identidad nueva recibe credencial (QA-003): si la cuenta ya
+     * existía conserva su clave y su enlace. Ver `credencialDeAlta`. */
+    if (!profile.existed) {
+      const { authUserId } = await credencialDeAlta(ctx, {
         email: profile.email,
         name: profile.name,
-        emailVerified: false,
+        password,
       });
-      authUserId = created.id;
-      await ia.createAccount({
-        userId: created.id,
-        providerId: "credential",
-        accountId: created.id,
-        password: hashed,
+      await ctx.runMutation(internal.users.linkAuthId, {
+        userId: profile.userId,
+        authId: authUserId,
       });
-    } else {
-      authUserId = found.user.id;
-      const accounts = await ia.findAccounts(found.user.id);
-      const credential = accounts.find((a) => a.providerId === "credential");
-      if (!credential) {
-        await ia.createAccount({
-          userId: found.user.id,
-          providerId: "credential",
-          accountId: found.user.id,
-          password: hashed,
-        });
-      } else {
-        await ia.updatePassword(found.user.id, hashed);
-      }
     }
-
-    await ctx.runMutation(internal.users.linkAuthId, {
-      userId: profile.userId,
-      authId: authUserId,
-    });
 
     return { ok: true as const, userId: profile.userId, existed: profile.existed };
   },
@@ -901,47 +912,19 @@ export const createCondoMember = action({
       unidadIds: args.unidadIds,
     });
 
-    const auth = createAuth(ctx);
-    const authCtx = await auth.$context;
-    const ia = authCtx.internalAdapter;
-    const hashed = await authCtx.password.hash(password);
-
-    const found = await ia.findUserByEmail(profile.email);
-    let authUserId: string;
-
-    if (!found) {
-      const created = await ia.createUser({
+    /* Solo una identidad nueva recibe credencial (QA-003): si la cuenta ya
+     * existía conserva su clave y su enlace. Ver `credencialDeAlta`. */
+    if (!profile.existed) {
+      const { authUserId } = await credencialDeAlta(ctx, {
         email: profile.email,
         name: profile.name,
-        emailVerified: false,
+        password,
       });
-      authUserId = created.id;
-      await ia.createAccount({
-        userId: created.id,
-        providerId: "credential",
-        accountId: created.id,
-        password: hashed,
+      await ctx.runMutation(internal.users.linkAuthId, {
+        userId: profile.userId,
+        authId: authUserId,
       });
-    } else {
-      authUserId = found.user.id;
-      const accounts = await ia.findAccounts(found.user.id);
-      const credential = accounts.find((a) => a.providerId === "credential");
-      if (!credential) {
-        await ia.createAccount({
-          userId: found.user.id,
-          providerId: "credential",
-          accountId: found.user.id,
-          password: hashed,
-        });
-      } else {
-        await ia.updatePassword(found.user.id, hashed);
-      }
     }
-
-    await ctx.runMutation(internal.users.linkAuthId, {
-      userId: profile.userId,
-      authId: authUserId,
-    });
 
     return {
       ok: true as const,

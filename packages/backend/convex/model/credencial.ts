@@ -22,6 +22,9 @@ import { evaluarPassword } from "../lib/passwordFuerte";
  * No devuelve nada de la credencial. Ni el hash, ni si había una antes con
  * otro valor, ni la clave que entró. Lo único que sale es si hubo que crear
  * la cuenta, que es información de la operación y no del secreto.
+ *
+ * Y NO es para las altas: un alta solo crea identidades nuevas
+ * (`credencialDeAlta`, más abajo).
  */
 
 export type ResultadoCredencial = {
@@ -96,4 +99,50 @@ export async function fijarPasswordDeCuenta(
   }
 
   return { ok: true, cuentaCreada: false };
+}
+
+/**
+ * LA CREDENCIAL DE UN ALTA. Solo para identidades nuevas.
+ *
+ * Las altas con contraseña —personal de una compañía, miembro de un conjunto,
+ * staff de plataforma— escribían la clave con `fijarPasswordDeCuenta` aunque
+ * la cuenta ya existiera. Bastaba con dar de alta el correo de otra persona,
+ * incluido el de un superadministrador, para dejarle una clave que conocía
+ * quien hacía el alta (QA-003). Un alta añade un vínculo; no se apropia de una
+ * identidad.
+ *
+ * Así que esto solo crea. Si Better Auth ya conoce el correo devuelve su id y
+ * no toca nada: ni la credencial, ni el proveedor social. La clave de una
+ * cuenta existente la cambia su dueño (`cambiarMiPassword`, el
+ * restablecimiento por correo) o quien la gestiona por una ruta con su propia
+ * autorización (`setPasswordMiembro`, `setMemberPassword`).
+ *
+ * Quien llama tampoco debe usarlo cuando el perfil de aplicación ya existía,
+ * aunque no tenga cuenta de acceso todavía: también es una identidad de otra
+ * persona, y crearle la primera clave sería quedarse con ella.
+ */
+export async function credencialDeAlta(
+  ctx: GenericCtx<DataModel>,
+  datos: { email: string; name: string; password: string },
+): Promise<{ authUserId: string; cuentaCreada: boolean }> {
+  const authCtx = await createAuth(ctx).$context;
+  const ia = authCtx.internalAdapter;
+  const found = await ia.findUserByEmail(datos.email);
+  if (found) return { authUserId: found.user.id, cuentaCreada: false };
+
+  /* La fuerza de la clave la valida cada alta con su propia regla, igual que
+   * antes: esto no cambia qué clave se acepta, solo a quién se le pone. */
+  const hashed = await authCtx.password.hash(datos.password.trim());
+  const created = await ia.createUser({
+    email: datos.email,
+    name: datos.name,
+    emailVerified: false,
+  });
+  await ia.createAccount({
+    userId: created.id,
+    providerId: "credential",
+    accountId: created.id,
+    password: hashed,
+  });
+  return { authUserId: created.id, cuentaCreada: true };
 }
