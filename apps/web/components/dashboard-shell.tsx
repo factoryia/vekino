@@ -105,10 +105,21 @@ function Shell({ children }: { children: React.ReactNode }) {
   const isPlatform =
     me.platformRole === "superadmin" || me.platformRole === "admin";
 
+  /* La página de SU compañía no se redirige: el administrador la gestiona y
+   * el supervisor planifica en ella (QA-004). Va antes que todas las reglas
+   * de inicio de abajo porque cualquiera de ellas —la del administrador, la
+   * del supervisor, la de la asignación única— lo sacaría de aquí, y una
+   * excepción repetida en cada regla siempre dejaba alguna sin cubrir. Solo
+   * evita el desvío: lo que se ve lo siguen decidiendo la página y el
+   * servidor. */
+  if (!isPlatform && esPaginaDeSuCompania(me, pathname)) {
+    return <UserMultiCondoShell me={me}>{children}</UserMultiCondoShell>;
+  }
+
   const administraCompania = !isPlatform && me.compania?.roles.includes("admin_compania") === true;
   // El administrador aterriza en operación aunque también tenga membresías.
-  // Su gestión de personal/contratos conserva la ruta existente.
-  if (administraCompania && me.compania && pathname !== `/dashboard/companias/${me.compania.companiaId}`) {
+  // Su gestión de personal/contratos conserva la ruta existente (arriba).
+  if (administraCompania && me.compania) {
     return <Redirect to={homeHrefForCompania("admin_compania", me.compania.companiaId)!} />;
   }
 
@@ -150,10 +161,7 @@ function Shell({ children }: { children: React.ReactNode }) {
     /* El supervisor primero: su panel es transversal a todos sus conjuntos,
      * así que cubre también al que supervisa varios. */
     const supervisa = hoy.asignaciones.find((a) => a.rol === "supervisor");
-    /* Salvo en la página de su compañía, donde planifica lo que el servidor
-     * le autoriza: sin esta excepción la planificación del supervisor era
-     * inalcanzable desde la web (QA-004). */
-    if (supervisa && !esPaginaDeSuCompania(me, pathname)) {
+    if (supervisa) {
       return (
         <Redirect
           to={homeHrefForAsignacion(supervisa.condominioId, "supervisor")}
@@ -186,7 +194,7 @@ function Shell({ children }: { children: React.ReactNode }) {
       me.compania.roles[0],
       me.compania.companiaId,
     );
-    if (destino && !pathname.startsWith(destino) && !esPaginaDeSuCompania(me, pathname)) {
+    if (destino && !pathname.startsWith(destino)) {
       return <Redirect to={destino} />;
     }
   }

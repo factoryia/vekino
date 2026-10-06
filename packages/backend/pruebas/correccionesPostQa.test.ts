@@ -25,7 +25,6 @@ import fuenteDialogoInasistencias from "../../../apps/web/components/companias/i
 import fuenteInicioUsuario from "../../../apps/web/app/dashboard/page.tsx?raw";
 import fuentePortal from "../../../apps/web/components/portal/portal-shell.tsx?raw";
 import fuentePaginaCompania from "../../../apps/web/app/dashboard/companias/[id]/page.tsx?raw";
-import fuenteShell from "../../../apps/web/components/dashboard-shell.tsx?raw";
 
 /**
  * CORRECCIONES POSTERIORES AL QA MANUAL (Fase 15).
@@ -672,8 +671,9 @@ describe("QA-004 · el supervisor usa lo que el backend ya le autoriza", () => {
     expect(esPaginaDeSuCompania(yo(["supervisor"], "k_otra"), ruta)).toBe(false);
     expect(esPaginaDeSuCompania(yo(["guardia"]), ruta)).toBe(false);
     expect(esPaginaDeSuCompania(yo(["supervisor"]), "/dashboard/companias/k_andina/otra")).toBe(false);
-    /* El shell la usa en sus dos ramas de personal de compania. */
-    expect(fuenteShell.match(/esPaginaDeSuCompania\(/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+    /* Que el shell de verdad deje al supervisor en esa pagina —con una o con
+     * varias asignaciones— lo prueba el recorrido de navegacion en
+     * `apps/web/pruebas/navegacionCompania.test.mjs`. */
   });
 });
 
