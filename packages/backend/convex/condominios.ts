@@ -369,6 +369,19 @@ export const setAvalPortalUrl = internalMutation({
   },
 });
 
+/**
+ * Helper interno para fijar el Nura de Aval de un condominio (convenio con
+ * que paga por API). Uso puntual desde CLI/soporte. Sin `nura`, lo quita.
+ */
+export const setAvalNura = internalMutation({
+  args: { condominioId: v.id("condominios"), nura: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const avalNura = normalizarNura(args.nura) ?? undefined;
+    await ctx.db.patch(args.condominioId, { avalNura, updatedAt: Date.now() });
+    return { avalNura: avalNura ?? null };
+  },
+});
+
 /** Activar / desactivar un condominio (control maestro). */
 export const setActive = mutation({
   args: { condominioId: v.id("condominios"), isActive: v.boolean() },

@@ -45,6 +45,7 @@ import type * as inventario from "../inventario.js";
 import type * as inventarioAsignaciones from "../inventarioAsignaciones.js";
 import type * as inventarioGuardas from "../inventarioGuardas.js";
 import type * as lib_aporte from "../lib/aporte.js";
+import type * as lib_avalConvenio from "../lib/avalConvenio.js";
 import type * as lib_avalProduccion from "../lib/avalProduccion.js";
 import type * as lib_brevo from "../lib/brevo.js";
 import type * as lib_buscarCasa from "../lib/buscarCasa.js";
@@ -193,6 +194,7 @@ declare const fullApi: ApiFromModules<{
   inventarioAsignaciones: typeof inventarioAsignaciones;
   inventarioGuardas: typeof inventarioGuardas;
   "lib/aporte": typeof lib_aporte;
+  "lib/avalConvenio": typeof lib_avalConvenio;
   "lib/avalProduccion": typeof lib_avalProduccion;
   "lib/brevo": typeof lib_brevo;
   "lib/buscarCasa": typeof lib_buscarCasa;
