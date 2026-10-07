@@ -15,6 +15,7 @@ import { resolverAcceso } from "./model/acceso";
 import { subscriptionPlanValidator } from "./model/roles";
 import { displayNameFromUser } from "./model/displayName";
 import { resolveUserImage } from "./model/userImage";
+import { normalizarNura } from "./lib/avalConvenio";
 
 /** Admins operativos únicos de un condominio (sin duplicados por userId). */
 async function listCondoAdmins(
@@ -277,6 +278,8 @@ export const update = mutation({
       unitLimit: v.optional(v.number()),
       activeModules: v.optional(v.array(v.string())),
       avalPortalUrl: v.optional(v.string()),
+      /** Nura de Aval ("30830" o "00030830"). String vacía = quitarlo. */
+      avalNura: v.optional(v.string()),
     }),
   },
   handler: async (ctx, args) => {
@@ -312,6 +315,9 @@ export const update = mutation({
         : {}),
       ...(p.avalPortalUrl !== undefined
         ? { avalPortalUrl: p.avalPortalUrl.trim() || undefined }
+        : {}),
+      ...(p.avalNura !== undefined
+        ? { avalNura: normalizarNura(p.avalNura) ?? undefined }
         : {}),
       updatedAt: Date.now(),
     };

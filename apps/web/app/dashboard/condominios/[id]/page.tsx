@@ -348,6 +348,7 @@ export default function CondominioDetailPage() {
               | undefined,
             unitLimit: c.unitLimit,
             avalPortalUrl: c.avalPortalUrl,
+            avalNura: c.avalNura,
             activeModules: c.activeModules,
           }}
           onClose={() => setEditing(false)}

@@ -29,6 +29,8 @@ export const QA_SECRET_PASSWORD = "usuario1951";
 export type ConfigRevisable = {
   endpoint: string;
   authBasic: string;
+  /** Nura del convenio; vacio si el condominio no tiene (lib/avalConvenio.ts). */
+  agrmId: string;
   xAuthorization: string;
   secretUser: string;
   secretPassword: string;
@@ -55,11 +57,22 @@ export function faltantesParaProduccion(cfg: ConfigRevisable): string[] {
   if (cfg.authBasic === QA_AUTH_BASIC) {
     faltan.push("AVAL_AUTH_BASIC es la del manual de QA");
   }
-  if (cfg.xAuthorization === QA_X_AUTHORIZATION) {
-    faltan.push("AVAL_X_AUTHORIZATION es la de ejemplo del manual");
+  /* Las llaves del convenio llevan el Nura de sufijo (lib/avalConvenio.ts):
+   * el mensaje nombra la variable exacta que hay que crear. */
+  const suf = cfg.agrmId ? `_${cfg.agrmId}` : "_<NURA>";
+  if (!cfg.agrmId) {
+    faltan.push("el condominio no tiene Nura de Aval: sin el no se sabe a que convenio cobrar");
   }
-  if (cfg.secretUser === QA_SECRET_USER || cfg.secretPassword === QA_SECRET_PASSWORD) {
-    faltan.push("AVAL_SECRET_USER / AVAL_SECRET_PASSWORD son las de QA");
+  if (!cfg.xAuthorization || cfg.xAuthorization === QA_X_AUTHORIZATION) {
+    faltan.push(`AVAL_X_AUTHORIZATION${suf} falta o es la de ejemplo del manual`);
+  }
+  if (
+    !cfg.secretUser ||
+    !cfg.secretPassword ||
+    cfg.secretUser === QA_SECRET_USER ||
+    cfg.secretPassword === QA_SECRET_PASSWORD
+  ) {
+    faltan.push(`AVAL_SECRET_USER${suf} / AVAL_SECRET_PASSWORD${suf} faltan o son las de QA`);
   }
   if (cfg.insecureTls) {
     faltan.push("AVAL_INSECURE_TLS=1: en un canal de pagos el TLS no se relaja");

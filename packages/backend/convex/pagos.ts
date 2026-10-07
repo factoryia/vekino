@@ -15,10 +15,8 @@ import {
   faltantesParaProduccion,
   QA_AUTH_BASIC,
   QA_ENDPOINT,
-  QA_SECRET_PASSWORD,
-  QA_SECRET_USER,
-  QA_X_AUTHORIZATION,
 } from "./lib/avalProduccion";
+import { credencialesConvenio } from "./lib/avalConvenio";
 
 // ─────────────────────────────────────────────────────────────
 // Integración con la Pasarela de Pagos Aval (AV Villas / Grupo Aval)
@@ -34,13 +32,18 @@ import {
 //   el flujo funciona en desarrollo sin configurar nada. Para PRODUCCIÓN se
 //   sobreescriben por variables de entorno en el dashboard de Convex; NINGUNA
 //   credencial de producción vive en el repositorio.
+//   De Vekino ante Aval (una sola para todos los conjuntos):
 //     AVAL_ENDPOINT          ej https://<dns-prod>
 //     AVAL_AUTH_BASIC        Authorization Basic del servicio oauth2 (prod)
-//     AVAL_X_AUTHORIZATION   Llave del convenio (X-Authorization) — SECRET
-//     AVAL_AGRM_ID           Código NURA del convenio (ej 00030713)
-//     AVAL_SECRET_USER / AVAL_SECRET_PASSWORD  SecretList del convenio
 //     AVAL_TRN_SRC           Banco recaudador (2 = AV Villas)
 //     AVAL_AMBIENTE          "qa" | "prod"
+//   De cada convenio, con el Nura de sufijo (lib/avalConvenio.ts). El Nura lo
+//   guarda el condominio en `avalNura`:
+//     AVAL_X_AUTHORIZATION_<NURA>   Llave del convenio (X-Authorization) — SECRET
+//     AVAL_SECRET_USER_<NURA> / AVAL_SECRET_PASSWORD_<NURA>  SecretList — SECRET
+//     AVAL_CHANNEL_<NURA>           X-Channel que asigna el banco al convenio
+//   En QA, sin sufijo valen las globales (AVAL_X_AUTHORIZATION, AVAL_AGRM_ID…)
+//   y luego los ejemplos del manual. En producción no hay respaldo.
 //   Web de retorno:  WEB_APP_URL  (ej https://app.vekino.co  — dev: localhost:3000)
 // ─────────────────────────────────────────────────────────────
 
@@ -59,31 +62,30 @@ interface AvalConfig {
 }
 
 /**
- * Config de la pasarela. Por defecto QA (valores del manual, no sensibles).
- * En producción se pasan por env en el dashboard de Convex.
+ * Config de la pasarela para un convenio. Por defecto QA (valores del manual,
+ * no sensibles). En producción se pasan por env en el dashboard de Convex.
+ *
+ * `nura` es el convenio que cobra: el `avalNura` del condominio al crear el
+ * pago, y el `agrmId` guardado en el pago al consultarlo, para que la consulta
+ * use la misma llave con que se creó aunque el condominio cambie después.
+ *
+ * El canal tambien es del convenio. El manual dice "valor constante: 16" y
+ * NO lo es: con 16 la pasarela responde 105 —"No es posible realizar la
+ * transaccion"— sin decir por que. Ciudad del Campo (00030713) usa 1,
+ * comprobado contra QA. De cada convenio nuevo, es lo primero que hay que
+ * preguntarle al banco.
  */
-function avalConfig(): AvalConfig {
+function avalConfig(nura?: string | null): AvalConfig {
+  const ambiente = process.env.AVAL_AMBIENTE ?? "qa";
   const cfg: AvalConfig = {
     endpoint: process.env.AVAL_ENDPOINT ?? QA_ENDPOINT,
     // Basic del servicio oauth2 — QA del manual (sección 4.3). Prod por env.
     authBasic: process.env.AVAL_AUTH_BASIC ?? QA_AUTH_BASIC,
-    // Llave del convenio (X-Authorization) — QA de ejemplo. Prod por env.
-    xAuthorization: process.env.AVAL_X_AUTHORIZATION ?? QA_X_AUTHORIZATION,
-    agrmId: process.env.AVAL_AGRM_ID ?? "00002336",
+    // Nura, X-Authorization, SecretList y canal: los del convenio.
+    ...credencialesConvenio(process.env, nura, ambiente),
     companyId: process.env.AVAL_COMPANY_ID ?? "00089898",
-    /* El manual dice "valor constante: 16" y NO lo es: el canal se asigna
-     * por convenio. Con 16 la pasarela responde 105 —"No es posible realizar
-     * la transaccion"— sin decir por que, y se pierde media tarde buscando el
-     * error en el cuerpo del mensaje, que esta bien.
-     *
-     * Ciudad del Campo (00030713) usa 1. Comprobado contra QA: con 16 da 105,
-     * con 1 devuelve PmtAuthId y la URL de la pasarela. Si entra otro
-     * convenio, este es el primer valor que hay que preguntarle al banco. */
-    channel: process.env.AVAL_CHANNEL ?? "1",
     trnSrc: process.env.AVAL_TRN_SRC ?? "2", // 2 = Banco AvVillas
-    secretUser: process.env.AVAL_SECRET_USER ?? QA_SECRET_USER,
-    secretPassword: process.env.AVAL_SECRET_PASSWORD ?? QA_SECRET_PASSWORD,
-    ambiente: process.env.AVAL_AMBIENTE ?? "qa",
+    ambiente,
     // TLS: en QA el endpoint no envía la cadena de CA completa, así que se
     // relaja la verificación. En producción SIEMPRE estricta (salvo opt-in
     // explícito con AVAL_INSECURE_TLS=1, no recomendado).
@@ -337,6 +339,7 @@ async function armarDatosTrn(
     },
     monto: Math.round(monto),
     condominioNombre: condominio.name,
+    avalNura: condominio.avalNura ?? null,
     logoUrl: condominio.logo ?? "",
     user: {
       _id: user._id,
@@ -378,9 +381,11 @@ export const crearTrnCertificacion = internalAction({
     nombre: v.optional(v.string()),
     email: v.optional(v.string()),
     referencia: v.optional(v.string()),
+    /** Convenio con que se certifica (ej "30830"). Sin él, el de QA global. */
+    nura: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const cfg = avalConfig();
+    const cfg = avalConfig(args.nura);
     if (cfg.ambiente === "prod") {
       throw new Error(
         "crearTrnCertificacion no se ejecuta en producción: crearía un cobro real sin dueño.",
@@ -478,6 +483,7 @@ export const crearTrnCertificacion = internalAction({
 
     return {
       pmtAuthId: estado.PmtAuthId as string,
+      agrmId: cfg.agrmId,
       referencia,
       monto: args.monto,
       tipoPersona: args.tipoPersona,
@@ -497,9 +503,13 @@ export const crearTrnCertificacion = internalAction({
  * nuestra copia, que es justamente lo que ellos quieren comprobar.
  */
 export const evidenciaCertificacion = internalAction({
-  args: { pmtAuthId: v.string() },
+  args: {
+    pmtAuthId: v.string(),
+    /** El mismo `nura` con que se creó en crearTrnCertificacion. */
+    nura: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
-    const cfg = avalConfig();
+    const cfg = avalConfig(args.nura);
     const token = await obtenerToken(ctx, cfg);
     const headers = avalHeaders(
       cfg,
@@ -578,6 +588,8 @@ export const registrarPago = internalMutation({
     rqUID: v.string(),
     pmtAuthId: v.optional(v.string()),
     invoiceNum: v.string(),
+    /** Nura del convenio con que se creó: la consulta usa el mismo. */
+    agrmId: v.optional(v.string()),
     monto: v.number(),
     estado: v.union(
       v.literal("iniciada"),
@@ -599,6 +611,7 @@ export const registrarPago = internalMutation({
       rqUID: args.rqUID,
       pmtAuthId: args.pmtAuthId,
       invoiceNum: args.invoiceNum,
+      agrmId: args.agrmId,
       monto: args.monto,
       moneda: "COP",
       estado: args.estado,
@@ -736,7 +749,7 @@ async function crearTrnYRegistrar(
   datos: Awaited<ReturnType<typeof armarDatosTrn>>,
   ipAddr: string,
 ): Promise<{ pagoId: Id<"pagos">; redirectUrl: string }> {
-  const cfg = avalConfig();
+  const cfg = avalConfig(datos.avalNura);
 
   const rqUID = generarRqUID();
   /* La referencia que vera el banco: casa + periodo, legible de un vistazo.
@@ -840,6 +853,7 @@ async function crearTrnYRegistrar(
         userId: datos.user._id,
         rqUID,
         invoiceNum,
+        agrmId: cfg.agrmId,
         monto: datos.monto,
         estado: "error",
         ambiente: cfg.ambiente,
@@ -858,6 +872,7 @@ async function crearTrnYRegistrar(
       rqUID,
       pmtAuthId: String(pmtAuthId),
       invoiceNum,
+      agrmId: cfg.agrmId,
       monto: datos.monto,
       estado: "iniciada",
       redirectUrl: urlRef,
@@ -886,6 +901,7 @@ async function crearTrnYRegistrar(
       userId: datos.user._id,
       rqUID,
       invoiceNum,
+      agrmId: cfg.agrmId,
       monto: datos.monto,
       estado: "error",
       ambiente: cfg.ambiente,
@@ -945,11 +961,13 @@ export const crearPagoFacturaBot = internalAction({
 export const consultarEstado = internalAction({
   args: { pagoId: v.id("pagos") },
   handler: async (ctx, args): Promise<Doc<"pagos">["estado"] | null> => {
-    const cfg = avalConfig();
     const pago = await ctx.runQuery(internal.pagos.getPagoInterno, {
       pagoId: args.pagoId,
     });
     if (!pago || !pago.pmtAuthId) return null;
+    /* BasicData se consulta con la llave del convenio que creó la
+     * transacción. Los pagos de antes de guardar el convenio son de QA. */
+    const cfg = avalConfig(pago.agrmId);
 
     // Ya está en estado final: nada que hacer.
     if (["aprobada", "rechazada", "fallida", "expirada", "no_autorizada"].includes(pago.estado)) {

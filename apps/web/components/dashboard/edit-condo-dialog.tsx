@@ -28,6 +28,8 @@ export type CondoEditValues = {
   subscriptionPlan?: Plan | null;
   unitLimit?: number | null;
   avalPortalUrl?: string | null;
+  /** Nura del convenio Aval para pagar por API (ej "00030713"). */
+  avalNura?: string | null;
   /** Módulos habilitados del condominio (p.ej. "whatsapp"). */
   activeModules?: string[] | null;
 };
@@ -71,6 +73,7 @@ export function EditCondoDialog({
   const [avalPortalUrl, setAvalPortalUrl] = useState(
     initial.avalPortalUrl ?? "",
   );
+  const [avalNura, setAvalNura] = useState(initial.avalNura ?? "");
   const [whatsappActivo, setWhatsappActivo] = useState(
     (initial.activeModules ?? []).includes("whatsapp"),
   );
@@ -221,6 +224,7 @@ export function EditCondoDialog({
           subscriptionPlan: plan,
           unitLimit: limit,
           avalPortalUrl: avalPortalUrl.trim(),
+          avalNura: avalNura.trim(),
           /* Se reconstruye la lista quitando los que gobierna este diálogo y
            * volviendo a añadir los encendidos, para no pisar módulos que se
            * activen desde otro sitio. */
@@ -507,6 +511,14 @@ export function EditCondoDialog({
             value={avalPortalUrl}
             onChange={setAvalPortalUrl}
             placeholder="https://… (opcional)"
+          />
+
+          <Field
+            label="Nura del convenio Aval (pago por API)"
+            value={avalNura}
+            onChange={setAvalNura}
+            placeholder="Ej. 00030713 (opcional)"
+            inputMode="numeric"
           />
 
           <div>
