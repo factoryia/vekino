@@ -11,6 +11,7 @@ import { ErrorBoundary, ErrorMessage } from "@/components/ui/error-boundary";
 import { Input, Select } from "@/components/ui/input";
 import { Modal } from "@/components/ui/modal";
 import { Skeleton } from "@/components/ui/skeleton";
+import { mensajeErrorUsuario } from "@/lib/utils";
 
 /**
  * Editar a una persona de la compañía.
@@ -158,7 +159,7 @@ function DatosPersonales({
         setOk("Datos actualizados.");
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo guardar.");
+      setError(mensajeErrorUsuario(err, "No se pudo guardar."));
     } finally {
       setBusy(false);
     }
@@ -396,7 +397,7 @@ function Credencial({
       setConfirmar("");
       setOk(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo establecer.");
+      setError(mensajeErrorUsuario(err, "No se pudo establecer."));
     } finally {
       setBusy(false);
     }

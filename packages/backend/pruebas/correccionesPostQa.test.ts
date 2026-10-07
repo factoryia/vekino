@@ -25,6 +25,8 @@ import fuenteDialogoInasistencias from "../../../apps/web/components/companias/i
 import fuenteInicioUsuario from "../../../apps/web/app/dashboard/page.tsx?raw";
 import fuentePortal from "../../../apps/web/components/portal/portal-shell.tsx?raw";
 import fuentePaginaCompania from "../../../apps/web/app/dashboard/companias/[id]/page.tsx?raw";
+import fuenteEditarPersona from "../../../apps/web/components/companias/editar-persona-dialog.tsx?raw";
+import fuentePorteria from "../../../apps/web/app/guardia/[id]/page.tsx?raw";
 
 /**
  * CORRECCIONES POSTERIORES AL QA MANUAL (Fase 15).
@@ -816,5 +818,47 @@ describe("QA-007 · los errores tecnicos no llegan a la interfaz", () => {
   test("el dialogo de inasistencias usa el normalizador compartido", () => {
     expect(fuenteDialogoInasistencias).toMatch(/mensajeErrorUsuario\(/);
     expect(fuenteDialogoInasistencias).not.toMatch(/err instanceof Error \? err\.message/);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+describe("QA-NEW-001 · los rechazos de la Fase 15 tampoco llegan en crudo", () => {
+  const PROHIBIDOS = ["Request ID", "Server Error", "CONVEX", "Uncaught", "at handler", ".ts:", "Called by client"];
+  const limpio = (crudo: string) => {
+    const r = mensajeErrorUsuario(new Error(crudo));
+    for (const p of PROHIBIDOS) expect(r).not.toContain(p);
+    return r;
+  };
+
+  test("iniciar turno con un turno huerfano: solo la frase funcional", () => {
+    const MENSAJE = "Tienes un turno pendiente de cierre en Conjunto Bosque. Ciérralo antes de iniciar otro.";
+    const crudo = `[CONVEX M(guardia:iniciarTurno)] [Request ID: 7c1d0e2fa4b5] Server Error\nUncaught Error: ${MENSAJE}\n    at handler (../convex/guardia.ts:244:8)\n\n  Called by client`;
+    expect(limpio(crudo)).toBe(MENSAJE);
+  });
+
+  /* La puerta de la credencial es una query que la action llama con
+   * `runQuery`: Convex vuelve a envolver el error ya formateado, con su
+   * "Uncaught Error:" y su traza, y llega con el prefijo dos veces. */
+  test("cambiar clave o correo rechazado desde la puerta de la credencial", () => {
+    for (const [fn, MENSAJE] of [
+      ["setPasswordMiembro", "Esa persona también pertenece a un conjunto. Su contraseña y su correo no se gestionan desde la compañía."],
+      ["setEmailMiembro", "Esa persona ya tenía su cuenta en Vekino. Su contraseña y su correo solo los cambia ella."],
+    ] as const) {
+      const crudo = `[CONVEX A(companias:${fn})] [Request ID: 9f0e1d2c3b4a] Server Error\nUncaught Error: Uncaught Error: ${MENSAJE}\n    at handler (../convex/companias.ts:1193:12)\n\n    at async handler (../convex/companias.ts:1364:22)\n\n  Called by client`;
+      expect(limpio(crudo)).toBe(MENSAJE);
+    }
+  });
+
+  test("y el rechazo que lanza la propia action, con un solo prefijo", () => {
+    const MENSAJE = "Ese correo ya está en uso por otra cuenta.";
+    const crudo = `[CONVEX A(companias:setEmailMiembro)] [Request ID: 1a2b] Server Error\nUncaught Error: ${MENSAJE}\n    at handler (../convex/companias.ts:1438:20)\n\n  Called by client`;
+    expect(limpio(crudo)).toBe(MENSAJE);
+  });
+
+  test("editar persona e iniciar turno usan el normalizador compartido", () => {
+    expect(fuenteEditarPersona).toMatch(/mensajeErrorUsuario\(err, "No se pudo guardar\."\)/);
+    expect(fuenteEditarPersona).toMatch(/mensajeErrorUsuario\(err, "No se pudo establecer\."\)/);
+    expect(fuentePorteria).toMatch(/mensajeErrorUsuario\(e, "No se pudo iniciar el turno\."\)/);
+    expect(fuentePorteria).not.toMatch(/e instanceof Error \? e\.message : "No se pudo iniciar el turno\."/);
   });
 });

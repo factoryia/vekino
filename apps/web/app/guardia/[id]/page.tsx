@@ -19,7 +19,7 @@ import { Input, Select, Textarea } from "@/components/ui/input";
 import { PageContainer } from "@/components/layout/page-container";
 import { PageHeader } from "@/components/layout/page-header";
 import { StatCard } from "@/components/layout/stat-card";
-import { cn } from "@/lib/utils";
+import { cn, mensajeErrorUsuario } from "@/lib/utils";
 import { EtiquetaRonda } from "@/components/guardia/etiqueta-ronda";
 import { CerrarTurnoModal } from "@/components/guardia/cerrar-turno-modal";
 import { useUploadToS3 } from "@/hooks/use-upload-s3";
@@ -321,7 +321,7 @@ function IniciarTurnoModal({ condominioId, onClose }: { condominioId: Id<"condom
       });
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "No se pudo iniciar el turno.");
+      setError(mensajeErrorUsuario(e, "No se pudo iniciar el turno."));
       setBusy(false);
     }
   }

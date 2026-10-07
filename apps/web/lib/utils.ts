@@ -119,8 +119,10 @@ export function mensajeErrorUsuario(
   }
 
   /* La frase de negocio va tras "Uncaught Error:", en la misma línea o en la
-   * siguiente según el cliente (React o HTTP). */
-  const tras = raw.match(/Uncaught (?:Convex)?Error:\s*([\s\S]*)/i);
+   * siguiente según el cliente (React o HTTP). Puede venir repetido: si la
+   * action lo recibe de un `runQuery`/`runMutation`, Convex vuelve a envolver
+   * el error ya formateado (QA-NEW-001). */
+  const tras = raw.match(/(?:Uncaught (?:Convex)?Error:\s*)+([\s\S]*)/i);
   const texto = (tras ? tras[1]! : raw)
     .replace(/\[CONVEX[^\]]*\]\s*/gi, "")
     .replace(/\[Request ID:[^\]]*\]\s*/gi, "")
