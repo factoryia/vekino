@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id, Doc } from "@vekino/backend/dataModel";
+import { CAMPOS_PEDIDOS_INICIO } from "@vekino/backend/inicioTurno";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -265,6 +266,11 @@ type ChecklistRow = {
   cantidadEncontrada: number; estadoOk: boolean; observacion: string;
 };
 
+/* Lo que el inicio pide hoy. Lo que no se pide no se pinta ni se manda, pero
+ * su código se queda: se vuelve a pedir desde `CAMPOS_PEDIDOS_INICIO`. Quién
+ * toma el turno lo dice la sesión. */
+const pideInicio = CAMPOS_PEDIDOS_INICIO;
+
 function IniciarTurnoModal({ condominioId, onClose }: { condominioId: Id<"condominios">; onClose: () => void }) {
   const template = useQuery(api.guardia.listChecklistTemplate, { condominioId });
   const iniciar = useMutation(api.guardia.iniciarTurno);
@@ -300,7 +306,7 @@ function IniciarTurnoModal({ condominioId, onClose }: { condominioId: Id<"condom
 
   async function confirmar() {
     if (!rows || rows.length === 0) return;
-    if (!quienTurno.trim()) {
+    if (pideInicio.guardiaNombre && !quienTurno.trim()) {
       setError("Escribe el nombre de quien toma el turno.");
       return;
     }
@@ -315,8 +321,8 @@ function IniciarTurnoModal({ condominioId, onClose }: { condominioId: Id<"condom
             cantidadEncontrada: r.cantidadEncontrada, estadoOk: r.estadoOk,
             observacion: r.observacion || undefined,
           })),
-        observacionesInicio: observaciones || undefined,
-        guardiaNombre: quienTurno.trim(),
+        ...(pideInicio.observacionesInicio ? { observacionesInicio: observaciones || undefined } : {}),
+        ...(pideInicio.guardiaNombre ? { guardiaNombre: quienTurno.trim() } : {}),
         guardiaSecundarioNombre: companero.trim() || undefined,
       });
       onClose();
@@ -338,7 +344,7 @@ function IniciarTurnoModal({ condominioId, onClose }: { condominioId: Id<"condom
           <Button
             size="sm"
             onClick={confirmar}
-            disabled={busy || !rows || rows.length === 0 || !quienTurno.trim()}
+            disabled={busy || !rows || rows.length === 0 || (pideInicio.guardiaNombre && !quienTurno.trim())}
           >
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ClipboardCheck className="h-4 w-4" />}
             Iniciar turno
@@ -347,20 +353,22 @@ function IniciarTurnoModal({ condominioId, onClose }: { condominioId: Id<"condom
       }
     >
       <div className="space-y-4">
-        <div className="space-y-1.5">
-          <label className="flex items-center gap-1.5 text-xs font-medium text-foreground">
-            <Users className="h-3.5 w-3.5" /> Quién toma el turno
-          </label>
-          <Input
-            value={quienTurno}
-            onChange={(e) => setQuienTurno(e.target.value)}
-            placeholder="Tu nombre completo"
-            autoFocus
-          />
-          <p className="text-[11px] text-muted-foreground">
-            La cuenta es compartida: escribe tu nombre para la minuta.
-          </p>
-        </div>
+        {pideInicio.guardiaNombre && (
+          <div className="space-y-1.5">
+            <label className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+              <Users className="h-3.5 w-3.5" /> Quién toma el turno
+            </label>
+            <Input
+              value={quienTurno}
+              onChange={(e) => setQuienTurno(e.target.value)}
+              placeholder="Tu nombre completo"
+              autoFocus
+            />
+            <p className="text-[11px] text-muted-foreground">
+              La cuenta es compartida: escribe tu nombre para la minuta.
+            </p>
+          </div>
+        )}
 
         <div className="space-y-2">
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Checklist de dotación</p>
@@ -434,10 +442,12 @@ function IniciarTurnoModal({ condominioId, onClose }: { condominioId: Id<"condom
           />
         </div>
 
-        <div className="space-y-1.5">
-          <label className="block text-xs font-medium text-foreground">Observaciones iniciales (opcional)</label>
-          <Textarea value={observaciones} onChange={(e) => setObservaciones(e.target.value)} rows={2} placeholder="Cómo recibes la portería…" />
-        </div>
+        {pideInicio.observacionesInicio && (
+          <div className="space-y-1.5">
+            <label className="block text-xs font-medium text-foreground">Observaciones iniciales (opcional)</label>
+            <Textarea value={observaciones} onChange={(e) => setObservaciones(e.target.value)} rows={2} placeholder="Cómo recibes la portería…" />
+          </div>
+        )}
         {error && <p className="text-sm text-destructive">{error}</p>}
       </div>
     </Modal>

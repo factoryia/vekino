@@ -5,7 +5,7 @@ import { useMutation, useQuery } from "convex/react";
 import { Loader2, Lock, StopCircle, Users } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Doc, Id } from "@vekino/backend/dataModel";
-import { erroresCierreTurno } from "@vekino/backend/cierreTurno";
+import { CAMPOS_PEDIDOS_CIERRE, erroresCierreTurno } from "@vekino/backend/cierreTurno";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -22,6 +22,10 @@ import { mensajeErrorUsuario } from "@/lib/utils";
 /** Valor del selector de relevo para escribir el nombre a mano. */
 const RELEVO_OTRO = "__otro__";
 
+/* Lo que el cierre pide hoy. Lo que no se pide no se pinta ni se manda, pero
+ * su código se queda: se vuelve a pedir desde `CAMPOS_PEDIDOS_CIERRE`. */
+const pide = CAMPOS_PEDIDOS_CIERRE;
+
 export function CerrarTurnoModal({
   turno, stats, condominioNombre, onClose,
 }: {
@@ -35,7 +39,10 @@ export function CerrarTurnoModal({
   const cerrar = useMutation(api.guardia.cerrarTurno);
   /* Los relevos salen de la MISMA autorización que el cierre: así también
    * los recibe el guarda que cierra su turno desde la portería que cubre. */
-  const equipo = useQuery(api.guardia.relevosDelTurno, { turnoId: turno._id });
+  const equipo = useQuery(
+    api.guardia.relevosDelTurno,
+    pide.recibe ? { turnoId: turno._id } : "skip",
+  );
   const [hayNovedades, setHayNovedades] = useState(false);
   const [detalleNovedades, setDetalleNovedades] = useState("");
   const [relevo, setRelevo] = useState("");
@@ -60,7 +67,7 @@ export function CerrarTurnoModal({
     consignas,
     recibe: recibeNombre,
     observacionesCierre: obs,
-    novedadesElementos: hayNovedades,
+    novedadesElementos: pide.elementos ? hayNovedades : undefined,
     novedadesElementosDetalle: detalleNovedades,
     elementosAsignados: elementos.length,
   });
@@ -73,11 +80,18 @@ export function CerrarTurnoModal({
     try {
       await cerrar({
         turnoId: turno._id,
-        ...(manual ? { recibe: relevoManual } : { recibeUserId: relevo as Id<"users"> }),
-        consignas,
-        observacionesCierre: obs,
-        novedadesElementos: hayNovedades,
-        novedadesElementosDetalle: hayNovedades ? detalleNovedades : undefined,
+        ...(pide.recibe
+          ? manual ? { recibe: relevoManual } : { recibeUserId: relevo as Id<"users"> }
+          : {}),
+        ...(pide.consignas ? { consignas } : {}),
+        ...(pide.observacionesCierre ? { observacionesCierre: obs } : {}),
+        /* Sin la pregunta no se manda un "no": no preguntar no es "sin novedad". */
+        ...(pide.elementos
+          ? {
+              novedadesElementos: hayNovedades,
+              novedadesElementosDetalle: hayNovedades ? detalleNovedades : undefined,
+            }
+          : {}),
       });
       onClose();
     } catch (e) {
@@ -90,7 +104,11 @@ export function CerrarTurnoModal({
     <Modal
       open onClose={onClose}
       title={condominioNombre ? `Cierre de turno en ${condominioNombre}` : "Cierre formal de turno"}
-      description="Entrega la portería, sus elementos y las consignas al relevo"
+      description={
+        pide.elementos || pide.consignas
+          ? "Entrega la portería, sus elementos y las consignas al relevo"
+          : "Confirma que entregas la portería y cierras el turno"
+      }
       className="max-w-2xl"
       footer={
         <>
@@ -118,117 +136,127 @@ export function CerrarTurnoModal({
           <Input value={turno.guardiaNombre} disabled className="bg-muted/40" />
         </div>
 
-        {/* Los elementos son los que se firmaron al iniciar: aquí solo se leen. */}
-        <div className="space-y-2">
-          <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            <Lock className="h-3.5 w-3.5" /> Elementos asignados
-          </p>
-          {elementos.length === 0 ? (
-            <p className="rounded-lg bg-muted/40 p-3 text-sm text-muted-foreground">
-              Este turno no registró elementos al iniciar.
-            </p>
-          ) : (
-            <ul className="divide-y divide-border rounded-xl border border-border">
-              {elementos.map((c, i) => (
-                <li key={i} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
-                  <span className="min-w-0 text-foreground">{c.item}</span>
-                  <span className="flex shrink-0 items-center gap-2">
-                    <span className="tabular-nums text-muted-foreground">{c.cantidadEncontrada}/{c.cantidadEsperada}</span>
-                    {!c.estadoOk && (
-                      <span className="max-w-48 truncate rounded bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-medium text-amber-700" title={c.observacion}>
-                        Al recibir: {c.observacion || "con novedad"}
+        {pide.elementos && (
+          <>
+            {/* Los elementos son los que se firmaron al iniciar: aquí solo se leen. */}
+            <div className="space-y-2">
+              <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                <Lock className="h-3.5 w-3.5" /> Elementos asignados
+              </p>
+              {elementos.length === 0 ? (
+                <p className="rounded-lg bg-muted/40 p-3 text-sm text-muted-foreground">
+                  Este turno no registró elementos al iniciar.
+                </p>
+              ) : (
+                <ul className="divide-y divide-border rounded-xl border border-border">
+                  {elementos.map((c, i) => (
+                    <li key={i} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+                      <span className="min-w-0 text-foreground">{c.item}</span>
+                      <span className="flex shrink-0 items-center gap-2">
+                        <span className="tabular-nums text-muted-foreground">{c.cantidadEncontrada}/{c.cantidadEsperada}</span>
+                        {!c.estadoOk && (
+                          <span className="max-w-48 truncate rounded bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-medium text-amber-700" title={c.observacion}>
+                            Al recibir: {c.observacion || "con novedad"}
+                          </span>
+                        )}
                       </span>
-                    )}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-          <p className="text-[11px] text-muted-foreground">
-            Registrados al iniciar el turno. No se modifican al cerrarlo.
-          </p>
-        </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="text-[11px] text-muted-foreground">
+                Registrados al iniciar el turno. No se modifican al cerrarlo.
+              </p>
+            </div>
 
-        {elementos.length > 0 && (
-          <div className="space-y-2">
-            <label className="flex items-center gap-2 text-sm font-medium text-foreground">
-              <input
-                type="checkbox"
-                checked={hayNovedades}
-                onChange={(e) => setHayNovedades(e.target.checked)}
-                className="h-4 w-4 rounded border-border accent-brand"
-              />
-              ¿Existen novedades con los elementos asignados?
-            </label>
-            {hayNovedades && (
-              <div className="space-y-1.5">
-                <label className="block text-xs font-medium text-foreground">Detalle de la novedad *</label>
-                <Textarea
-                  value={detalleNovedades}
-                  onChange={(e) => setDetalleNovedades(e.target.value)}
-                  rows={3}
-                  placeholder="Ej. La linterna presenta daño en el interruptor y el radio tiene la batería descargada."
-                  aria-invalid={!!mostrar("novedadesElementosDetalle")}
-                  autoFocus
-                />
-                <CampoError mensaje={mostrar("novedadesElementosDetalle")} />
+            {elementos.length > 0 && (
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 text-sm font-medium text-foreground">
+                  <input
+                    type="checkbox"
+                    checked={hayNovedades}
+                    onChange={(e) => setHayNovedades(e.target.checked)}
+                    className="h-4 w-4 rounded border-border accent-brand"
+                  />
+                  ¿Existen novedades con los elementos asignados?
+                </label>
+                {hayNovedades && (
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-medium text-foreground">Detalle de la novedad *</label>
+                    <Textarea
+                      value={detalleNovedades}
+                      onChange={(e) => setDetalleNovedades(e.target.value)}
+                      rows={3}
+                      placeholder="Ej. La linterna presenta daño en el interruptor y el radio tiene la batería descargada."
+                      aria-invalid={!!mostrar("novedadesElementosDetalle")}
+                      autoFocus
+                    />
+                    <CampoError mensaje={mostrar("novedadesElementosDetalle")} />
+                  </div>
+                )}
+                <CampoError mensaje={mostrar("novedadesElementos")} />
               </div>
             )}
-            <CampoError mensaje={mostrar("novedadesElementos")} />
+          </>
+        )}
+
+        {pide.recibe && (
+          <div className="space-y-1.5">
+            <label className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+              <Users className="h-3.5 w-3.5" /> Guarda que recibe el turno *
+            </label>
+            {equipo === undefined ? (
+              <Skeleton className="h-10 rounded-lg" />
+            ) : opciones.length > 0 ? (
+              <Select value={relevo} onChange={(e) => setRelevo(e.target.value)} aria-invalid={!!mostrar("recibe") && !manual}>
+                <option value="">Selecciona el guarda…</option>
+                {opciones.map((g) => <option key={g.userId} value={g.userId}>{g.nombre}</option>)}
+                <option value={RELEVO_OTRO}>Otro guarda (escribir nombre)</option>
+              </Select>
+            ) : (
+              <p className="text-[11px] text-muted-foreground">
+                No hay otros guardas registrados en esta portería: escribe el nombre del relevo.
+              </p>
+            )}
+            {manual && (
+              <Input
+                value={relevoManual}
+                onChange={(e) => setRelevoManual(e.target.value)}
+                placeholder="Nombre de quien recibe el turno"
+                aria-invalid={!!mostrar("recibe")}
+              />
+            )}
+            <CampoError mensaje={mostrar("recibe")} />
           </div>
         )}
 
-        <div className="space-y-1.5">
-          <label className="flex items-center gap-1.5 text-xs font-medium text-foreground">
-            <Users className="h-3.5 w-3.5" /> Guarda que recibe el turno *
-          </label>
-          {equipo === undefined ? (
-            <Skeleton className="h-10 rounded-lg" />
-          ) : opciones.length > 0 ? (
-            <Select value={relevo} onChange={(e) => setRelevo(e.target.value)} aria-invalid={!!mostrar("recibe") && !manual}>
-              <option value="">Selecciona el guarda…</option>
-              {opciones.map((g) => <option key={g.userId} value={g.userId}>{g.nombre}</option>)}
-              <option value={RELEVO_OTRO}>Otro guarda (escribir nombre)</option>
-            </Select>
-          ) : (
-            <p className="text-[11px] text-muted-foreground">
-              No hay otros guardas registrados en esta portería: escribe el nombre del relevo.
-            </p>
-          )}
-          {manual && (
-            <Input
-              value={relevoManual}
-              onChange={(e) => setRelevoManual(e.target.value)}
-              placeholder="Nombre de quien recibe el turno"
-              aria-invalid={!!mostrar("recibe")}
+        {pide.consignas && (
+          <div className="space-y-1.5">
+            <label className="block text-xs font-medium text-foreground">Consignas / pendientes para el relevo *</label>
+            <Textarea
+              value={consignas}
+              onChange={(e) => setConsignas(e.target.value)}
+              rows={3}
+              placeholder="Qué queda pendiente, llaves, paquetes por entregar…"
+              aria-invalid={!!mostrar("consignas")}
             />
-          )}
-          <CampoError mensaje={mostrar("recibe")} />
-        </div>
+            <CampoError mensaje={mostrar("consignas")} />
+          </div>
+        )}
 
-        <div className="space-y-1.5">
-          <label className="block text-xs font-medium text-foreground">Consignas / pendientes para el relevo *</label>
-          <Textarea
-            value={consignas}
-            onChange={(e) => setConsignas(e.target.value)}
-            rows={3}
-            placeholder="Qué queda pendiente, llaves, paquetes por entregar…"
-            aria-invalid={!!mostrar("consignas")}
-          />
-          <CampoError mensaje={mostrar("consignas")} />
-        </div>
-
-        <div className="space-y-1.5">
-          <label className="block text-xs font-medium text-foreground">Observaciones generales del cierre *</label>
-          <Textarea
-            value={obs}
-            onChange={(e) => setObs(e.target.value)}
-            rows={3}
-            placeholder="Ej. Turno finalizado sin novedades adicionales. Se entrega puesto, documentación y elementos al guarda de relevo."
-            aria-invalid={!!mostrar("observacionesCierre")}
-          />
-          <CampoError mensaje={mostrar("observacionesCierre")} />
-        </div>
+        {pide.observacionesCierre && (
+          <div className="space-y-1.5">
+            <label className="block text-xs font-medium text-foreground">Observaciones generales del cierre *</label>
+            <Textarea
+              value={obs}
+              onChange={(e) => setObs(e.target.value)}
+              rows={3}
+              placeholder="Ej. Turno finalizado sin novedades adicionales. Se entrega puesto, documentación y elementos al guarda de relevo."
+              aria-invalid={!!mostrar("observacionesCierre")}
+            />
+            <CampoError mensaje={mostrar("observacionesCierre")} />
+          </div>
+        )}
         {error && <p className="text-sm text-destructive">{error}</p>}
       </div>
     </Modal>

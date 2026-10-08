@@ -40,6 +40,7 @@ import { displayNameFromUser } from "./model/displayName";
 import { resolveMediaUrl, resolveMediaUrlList } from "./model/files";
 import { calcularCosto } from "./lib/costoReserva";
 import { validarCierreTurno } from "./lib/cierreTurno";
+import { nombreDeQuienInicia } from "./lib/inicioTurno";
 import { normalizarPlaca } from "./lib/placa";
 import { buscarCasas, ordenVinculo, type Ocupante } from "./lib/buscarCasa";
 import {
@@ -218,15 +219,17 @@ export const equipo = query({
 /**
  * Inicia turno con checklist de dotación.
  * Reglas: un solo turno abierto por condominio; checklist con al
- * menos 1 ítem. Nombre del guardia (y compañero) en texto libre —
- * suele haber una sola cuenta compartida en portería.
+ * menos 1 ítem. Quién lo toma sale de la sesión (`lib/inicioTurno.ts`);
+ * el compañero, en texto libre.
  */
 export const iniciarTurno = mutation({
   args: {
     condominioId: v.id("condominios"),
     checklist: v.array(checklistItemValidator),
+    /** Oculto en los formularios; si llega, se guarda (`CAMPOS_PEDIDOS_INICIO`). */
     observacionesInicio: v.optional(v.string()),
-    /** Nombre de quien toma el turno (cuenta compartida). */
+    /** Nombre de quien toma el turno (cuenta compartida). Hoy no se pide y,
+     * mientras no se pida, se descarta: ver `nombreDeQuienInicia`. */
     guardiaNombre: v.optional(v.string()),
     /** Legado: userId de segundo guardia (preferir nombre libre). */
     guardiaSecundarioUserId: v.optional(v.id("users")),
@@ -256,8 +259,12 @@ export const iniciarTurno = mutation({
       throw new Error("El checklist de inicio necesita al menos un ítem.");
     }
 
-    const guardiaNombre =
-      args.guardiaNombre?.trim() || displayNameFromUser(user);
+    /* El turno es de `user` —`guardiaUserId`— y su nombre lo dice la misma
+     * sesión, no lo que se escriba: así no pueden ser dos personas. */
+    const guardiaNombre = nombreDeQuienInicia(
+      args.guardiaNombre,
+      displayNameFromUser(user),
+    );
 
     let secundarioNombre = args.guardiaSecundarioNombre?.trim() || undefined;
     let secundarioUserId = args.guardiaSecundarioUserId;
@@ -558,15 +565,18 @@ export const relevosDelTurno = query({
  * el turno y no se tocan. El cierre solo dice si volvieron con novedad; no
  * hay argumento por el que colar una lista distinta.
  *
- * `novedadesElementos` y `observacionesCierre` son opcionales en el validador
- * y obligatorios en el handler a propósito: una app móvil sin actualizar que
- * no los manda recibe "escribe las observaciones generales", no un error de
- * validación de argumentos que el guarda no puede entender.
+ * Todos los datos del cierre son opcionales en el validador a propósito: lo
+ * que es obligatorio lo decide `validarCierreTurno` según lo que el cierre
+ * pide hoy (`CAMPOS_PEDIDOS_CIERRE`). Así, cuando se vuelva a pedir un campo,
+ * una app móvil sin actualizar que no lo manda recibe "escribe las
+ * observaciones generales", no un error de validación de argumentos que el
+ * guarda no puede entender. Hoy el cierre simplificado no pide ninguno: el
+ * guarda cierra con solo `turnoId`.
  */
 export const cerrarTurno = mutation({
   args: {
     turnoId: v.id("guardiaTurnos"),
-    consignas: v.string(),
+    consignas: v.optional(v.string()),
     /** Relevo elegido del catálogo (`equipo`). Si viene, manda sobre `recibe`. */
     recibeUserId: v.optional(v.id("users")),
     /** Nombre del relevo escrito a mano (cuenta compartida, relevo sin usuario). */
@@ -633,11 +643,16 @@ export const cerrarTurno = mutation({
       modulo: "minuta",
       tipo: "Cierre de Turno",
       unidad: "Portería",
+      /* Solo lo que se dijo: sin relevo no hay "Recibe", y si no se preguntó
+       * por los elementos no se afirma que volvieron sin novedad. */
       resumen:
-        `Turno de ${turno.guardiaNombre} cerrado por ${user.name}. Recibe: ${cierre.recibe}. ` +
-        (cierre.novedadesElementos
-          ? `Novedades en elementos: ${cierre.novedadesElementosDetalle}`
-          : "Elementos sin novedad."),
+        `Turno de ${turno.guardiaNombre} cerrado por ${user.name}.` +
+        (cierre.recibe ? ` Recibe: ${cierre.recibe}.` : "") +
+        (cierre.novedadesElementos === true
+          ? ` Novedades en elementos: ${cierre.novedadesElementosDetalle}`
+          : cierre.novedadesElementos === false
+            ? " Elementos sin novedad."
+            : ""),
       estado: "cerrado",
       actorUserId: user._id,
       actorNombre: user.name,

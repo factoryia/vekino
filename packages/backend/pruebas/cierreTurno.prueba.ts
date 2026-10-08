@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  CAMPOS_PEDIDOS_CIERRE,
+  CIERRE_COMPLETO,
   erroresCierreTurno,
   validarCierreTurno,
   type EntradaCierreTurno,
@@ -65,9 +67,20 @@ test("sin novedades, un detalle escrito y luego desmarcado no se guarda", () => 
 
 test("no contestar la pregunta de novedades no equivale a 'no'", () => {
   for (const respuesta of [undefined, null]) {
+    // Cuando se pide, se exige.
     assert.throws(
-      () => validarCierreTurno({ ...base, novedadesElementos: respuesta }),
+      () =>
+        validarCierreTurno(
+          { ...base, novedadesElementos: respuesta },
+          CIERRE_COMPLETO,
+        ),
       /indica si hay novedades/i,
+    );
+    // Cuando no se pide, queda sin contestar: ni "sí" ni "no".
+    assert.equal(
+      validarCierreTurno({ ...base, novedadesElementos: respuesta })
+        .novedadesElementos,
+      undefined,
     );
   }
 });
@@ -89,29 +102,29 @@ test("no se reportan novedades de un turno sin elementos asignados", () => {
   );
 });
 
-test("observaciones generales vacías o de solo espacios: se rechazan", () => {
+test("cierre completo: observaciones generales vacías o de solo espacios se rechazan", () => {
   for (const obs of [undefined, null, "", "    ", "\n\t"]) {
     const entrada = { ...base, observacionesCierre: obs };
-    assert.ok(erroresCierreTurno(entrada).observacionesCierre);
+    assert.ok(erroresCierreTurno(entrada, CIERRE_COMPLETO).observacionesCierre);
     assert.throws(
-      () => validarCierreTurno(entrada),
+      () => validarCierreTurno(entrada, CIERRE_COMPLETO),
       /observaciones generales/i,
     );
   }
 });
 
-test("relevo ausente o de solo espacios: se rechaza", () => {
+test("cierre completo: relevo ausente o de solo espacios se rechaza", () => {
   for (const recibe of [undefined, null, "", "   "]) {
     assert.throws(
-      () => validarCierreTurno({ ...base, recibe }),
+      () => validarCierreTurno({ ...base, recibe }, CIERRE_COMPLETO),
       /guarda que recibe/i,
     );
   }
 });
 
-test("consignas vacías: siguen siendo obligatorias", () => {
+test("cierre completo: consignas vacías se rechazan", () => {
   assert.throws(
-    () => validarCierreTurno({ ...base, consignas: "  " }),
+    () => validarCierreTurno({ ...base, consignas: "  " }, CIERRE_COMPLETO),
     /consignas/i,
   );
 });
@@ -128,7 +141,7 @@ test("recorta los textos que guarda", () => {
   assert.equal(r.observacionesCierre, "Todo en orden");
 });
 
-test("reporta todos los campos que faltan, y lanza el primero del formulario", () => {
+test("cierre completo: reporta todos los campos que faltan, y lanza el primero del formulario", () => {
   const vacio: EntradaCierreTurno = {
     consignas: "",
     recibe: "",
@@ -137,11 +150,80 @@ test("reporta todos los campos que faltan, y lanza el primero del formulario", (
     novedadesElementosDetalle: "",
     elementosAsignados: 2,
   };
-  assert.deepEqual(Object.keys(erroresCierreTurno(vacio)).sort(), [
+  assert.deepEqual(Object.keys(erroresCierreTurno(vacio, CIERRE_COMPLETO)).sort(), [
     "consignas",
     "novedadesElementosDetalle",
     "observacionesCierre",
     "recibe",
   ]);
-  assert.throws(() => validarCierreTurno(vacio), /describe la novedad/i);
+  assert.throws(
+    () => validarCierreTurno(vacio, CIERRE_COMPLETO),
+    /describe la novedad/i,
+  );
+});
+
+// ── El cierre simplificado: lo que hoy pide el formulario ──────────────
+
+/** Lo que manda hoy el formulario: nada más que el turno. */
+const simplificado: EntradaCierreTurno = {
+  consignas: undefined,
+  recibe: undefined,
+  observacionesCierre: undefined,
+  novedadesElementos: undefined,
+  novedadesElementosDetalle: undefined,
+  elementosAsignados: 4,
+};
+
+test("hoy el cierre no pide ninguno de los campos ocultos", () => {
+  assert.deepEqual(CAMPOS_PEDIDOS_CIERRE, {
+    elementos: false,
+    recibe: false,
+    consignas: false,
+    observacionesCierre: false,
+  });
+});
+
+test("cierre simplificado: sin ningún dato pasa y no guarda nada", () => {
+  assert.deepEqual(erroresCierreTurno(simplificado), {});
+  assert.deepEqual(validarCierreTurno(simplificado), {
+    consignas: undefined,
+    recibe: undefined,
+    observacionesCierre: undefined,
+    novedadesElementos: undefined,
+    novedadesElementosDetalle: undefined,
+  });
+  // Tampoco en un turno antiguo sin elementos.
+  assert.doesNotThrow(() =>
+    validarCierreTurno({ ...simplificado, elementosAsignados: 0 }),
+  );
+});
+
+test("cierre simplificado: los textos vacíos no se guardan como texto", () => {
+  const r = validarCierreTurno({
+    ...simplificado,
+    consignas: "   ",
+    recibe: "",
+    observacionesCierre: "\n\t",
+  });
+  assert.equal(r.consignas, undefined);
+  assert.equal(r.recibe, undefined);
+  assert.equal(r.observacionesCierre, undefined);
+});
+
+test("cierre simplificado: lo que llega igual se valida y se guarda como siempre", () => {
+  // Una app sin actualizar que manda el cierre completo: se guarda entero.
+  assert.deepEqual(
+    validarCierreTurno(base),
+    validarCierreTurno(base, CIERRE_COMPLETO),
+  );
+  // Y lo que viene mal sigue sin pasar, aunque el campo ya no se pida.
+  assert.throws(
+    () =>
+      validarCierreTurno({
+        ...simplificado,
+        novedadesElementos: true,
+        novedadesElementosDetalle: "  ",
+      }),
+    /describe la novedad/i,
+  );
 });

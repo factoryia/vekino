@@ -17,6 +17,7 @@ import * as ImagePicker from "expo-image-picker";
 import { useMutation, useQuery, useAction, Authenticated } from "convex/react";
 import { api } from "@vekino/backend/api";
 import type { Doc, Id } from "@vekino/backend/dataModel";
+import { CAMPOS_PEDIDOS_INICIO } from "@vekino/backend/inicioTurno";
 import { useCondominio } from "@/context/condominio-context";
 import { ScreenBackground, GlassCard, GlassBadge } from "@/components/ui/glass";
 import { Tap } from "@/components/ui/tap";
@@ -75,6 +76,11 @@ const DEFAULT_CHECKLIST: ChecklistRow[] = [
     observacion: "",
   },
 ];
+
+/* Lo que el inicio pide hoy. Lo que no se pide no se pinta ni se manda, pero
+ * su código se queda: se vuelve a pedir desde `CAMPOS_PEDIDOS_INICIO`. Quién
+ * toma el turno lo dice la sesión. */
+const pideInicio = CAMPOS_PEDIDOS_INICIO;
 
 function fmtFechaHora(ts: number) {
   const d = new Date(ts);
@@ -345,7 +351,7 @@ function IniciarTurnoModal({
 
   async function confirmar() {
     if (!rows || rows.length === 0) return;
-    if (!quienTurno.trim()) {
+    if (pideInicio.guardiaNombre && !quienTurno.trim()) {
       Alert.alert("Nombre requerido", "Escribe el nombre de quien toma el turno.");
       return;
     }
@@ -363,8 +369,10 @@ function IniciarTurnoModal({
             estadoOk: r.estadoOk,
             observacion: r.observacion || undefined,
           })),
-        observacionesInicio: observaciones || undefined,
-        guardiaNombre: quienTurno.trim(),
+        ...(pideInicio.observacionesInicio
+          ? { observacionesInicio: observaciones || undefined }
+          : {}),
+        ...(pideInicio.guardiaNombre ? { guardiaNombre: quienTurno.trim() } : {}),
         guardiaSecundarioNombre: companero.trim() || undefined,
       });
       onClose();
@@ -384,7 +392,9 @@ function IniciarTurnoModal({
           <Text style={styles.modalTitle}>Iniciar turno</Text>
           <Tap
             onPress={confirmar}
-            disabled={busy || !rows?.length || !quienTurno.trim()}
+            disabled={
+              busy || !rows?.length || (pideInicio.guardiaNombre && !quienTurno.trim())
+            }
           >
             <Text style={[styles.save, busy && { opacity: 0.5 }]}>
               {busy ? "…" : "Iniciar"}
@@ -392,20 +402,22 @@ function IniciarTurnoModal({
           </Tap>
         </View>
         <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }}>
-          <View style={{ gap: 6 }}>
-            <Text style={styles.fieldLabel}>Quién toma el turno</Text>
-            <TextInput
-              style={styles.input}
-              value={quienTurno}
-              onChangeText={setQuienTurno}
-              placeholder="Tu nombre completo"
-              placeholderTextColor={AuthUI.textMuted}
-              autoFocus
-            />
-            <Text style={{ fontSize: 11, color: AuthUI.textMuted }}>
-              Cuenta compartida: escribe tu nombre para la minuta.
-            </Text>
-          </View>
+          {pideInicio.guardiaNombre ? (
+            <View style={{ gap: 6 }}>
+              <Text style={styles.fieldLabel}>Quién toma el turno</Text>
+              <TextInput
+                style={styles.input}
+                value={quienTurno}
+                onChangeText={setQuienTurno}
+                placeholder="Tu nombre completo"
+                placeholderTextColor={AuthUI.textMuted}
+                autoFocus
+              />
+              <Text style={{ fontSize: 11, color: AuthUI.textMuted }}>
+                Cuenta compartida: escribe tu nombre para la minuta.
+              </Text>
+            </View>
+          ) : null}
 
           <View style={{ gap: 6 }}>
             <Text style={styles.fieldLabel}>Compañero de turno (opcional)</Text>
@@ -449,17 +461,19 @@ function IniciarTurnoModal({
             ))
           )}
 
-          <View style={{ gap: 6 }}>
-            <Text style={styles.fieldLabel}>Observaciones iniciales</Text>
-            <TextInput
-              style={[styles.input, { minHeight: 70, textAlignVertical: "top" }]}
-              value={observaciones}
-              onChangeText={setObservaciones}
-              multiline
-              placeholder="Cómo recibes la portería…"
-              placeholderTextColor={AuthUI.textMuted}
-            />
-          </View>
+          {pideInicio.observacionesInicio ? (
+            <View style={{ gap: 6 }}>
+              <Text style={styles.fieldLabel}>Observaciones iniciales</Text>
+              <TextInput
+                style={[styles.input, { minHeight: 70, textAlignVertical: "top" }]}
+                value={observaciones}
+                onChangeText={setObservaciones}
+                multiline
+                placeholder="Cómo recibes la portería…"
+                placeholderTextColor={AuthUI.textMuted}
+              />
+            </View>
+          ) : null}
         </ScrollView>
       </SafeAreaView>
     </Modal>

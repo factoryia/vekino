@@ -266,44 +266,6 @@ describe("lo inválido no cierra el turno ni escribe nada", () => {
     await sigueAbierto();
   });
 
-  test("observaciones generales vacías o de solo espacios", async () => {
-    for (const observacionesCierre of [undefined, "", "   \n  "]) {
-      await expect(
-        como(t, "ana").mutation(api.guardia.cerrarTurno, {
-          ...cierreValido(e, turnoId),
-          observacionesCierre,
-        }),
-      ).rejects.toThrow(/observaciones generales/i);
-    }
-    await sigueAbierto();
-  });
-
-  test("una app vieja que no contesta la pregunta de novedades recibe un mensaje claro", async () => {
-    /* Así llama hoy una app móvil sin actualizar: sin los campos nuevos. */
-    await expect(
-      como(t, "ana").mutation(api.guardia.cerrarTurno, {
-        turnoId,
-        consignas: "Nada pendiente",
-        recibe: "Beto",
-        observacionesCierre: OBSERVACIONES,
-      }),
-    ).rejects.toThrow(/indica si hay novedades/i);
-    await sigueAbierto();
-  });
-
-  test("relevo ausente: ni guarda elegido ni nombre", async () => {
-    for (const recibe of [undefined, "", "   "]) {
-      await expect(
-        como(t, "ana").mutation(api.guardia.cerrarTurno, {
-          ...cierreValido(e, turnoId),
-          recibeUserId: undefined,
-          recibe,
-        }),
-      ).rejects.toThrow(/guarda que recibe/i);
-    }
-    await sigueAbierto();
-  });
-
   test("relevo inválido: alguien que no es guarda vigente de esta portería", async () => {
     for (const recibeUserId of [e.residente, e.admin, e.retirado, e.deOtroConjunto]) {
       await expect(
@@ -415,6 +377,163 @@ describe("el relevo escrito a mano y las autorizaciones de siempre", () => {
     const turno = await leerTurno(t, turnoId);
     expect(turno.estado).toBe("cerrado");
     expect(turno.cerradoPorUserId).toBe(e.admin);
+  });
+});
+
+/**
+ * EL CIERRE SIMPLIFICADO.
+ *
+ * Al guarda ya no se le piden elementos, relevo, consignas ni observaciones:
+ * cierra con solo el turno (`CAMPOS_PEDIDOS_CIERRE`). Los campos siguen en el
+ * esquema y en la mutación, y lo que llega igual —una app sin actualizar— se
+ * valida y se guarda como siempre.
+ */
+describe("el cierre simplificado: el guarda cierra con solo el turno", () => {
+  let t: T;
+  let e: Escenario;
+  let turnoId: Id<"guardiaTurnos">;
+
+  beforeEach(async () => {
+    t = convexTest(schema, modules);
+    e = await escenario(t);
+    turnoId = await abrirTurno(t, e);
+  });
+
+  test("cierra sin ningún dato del formulario y libera la portería", async () => {
+    await como(t, "ana").mutation(api.guardia.cerrarTurno, { turnoId });
+
+    const turno = await leerTurno(t, turnoId);
+    expect(turno.estado).toBe("cerrado");
+    expect(turno.fechaCierre).toBeTypeOf("number");
+    expect(turno.cerradoPorUserId).toBe(e.ana);
+    // Lo que no se pidió queda ausente: ni "" ni un "no" que nadie dijo.
+    expect(turno.consignas).toBeUndefined();
+    expect(turno.recibe).toBeUndefined();
+    expect(turno.recibeUserId).toBeUndefined();
+    expect(turno.observacionesCierre).toBeUndefined();
+    expect(turno.novedadesElementos).toBeUndefined();
+    expect(turno.novedadesElementosDetalle).toBeUndefined();
+    expect(turno.checklist).toEqual(CHECKLIST);
+
+    const minuta = await como(t, "ana").query(api.guardia.listMinuta, {
+      condominioId: e.norte,
+    });
+    const cierre = minuta.find((m) => m.tipo === "Cierre de Turno")!;
+    expect(cierre.turnoId).toBe(turnoId);
+    expect(cierre.resumen).toBe("Turno de Ana Guarda cerrado por Ana Guarda.");
+
+    // La portería queda libre y el relevo abre el siguiente turno.
+    expect(
+      await como(t, "beto").query(api.guardia.turnoActivo, { condominioId: e.norte }),
+    ).toBeNull();
+    await como(t, "beto").mutation(api.guardia.iniciarTurno, {
+      condominioId: e.norte,
+      checklist: CHECKLIST,
+      guardiaNombre: "Beto Guarda",
+    });
+  });
+
+  test("textos vacíos o de solo espacios no bloquean ni se guardan", async () => {
+    await como(t, "ana").mutation(api.guardia.cerrarTurno, {
+      turnoId,
+      consignas: "",
+      recibe: "   ",
+      observacionesCierre: "  \n  ",
+    });
+    const turno = await leerTurno(t, turnoId);
+    expect(turno.estado).toBe("cerrado");
+    expect(turno.consignas).toBeUndefined();
+    expect(turno.recibe).toBeUndefined();
+    expect(turno.observacionesCierre).toBeUndefined();
+  });
+
+  test("una app sin actualizar que no contesta la pregunta de novedades cierra igual", async () => {
+    /* Así llamaba una app móvil anterior a la pregunta de novedades. */
+    await como(t, "ana").mutation(api.guardia.cerrarTurno, {
+      turnoId,
+      consignas: "Nada pendiente",
+      recibe: "Beto",
+      observacionesCierre: OBSERVACIONES,
+    });
+    const turno = await leerTurno(t, turnoId);
+    expect(turno.estado).toBe("cerrado");
+    expect(turno.consignas).toBe("Nada pendiente");
+    expect(turno.recibe).toBe("Beto");
+    expect(turno.observacionesCierre).toBe(OBSERVACIONES);
+    // No contestó: no queda un "sin novedad" que nadie dijo.
+    expect(turno.novedadesElementos).toBeUndefined();
+
+    const minuta = await como(t, "ana").query(api.guardia.listMinuta, {
+      condominioId: e.norte,
+    });
+    const resumen = minuta.find((m) => m.tipo === "Cierre de Turno")!.resumen;
+    expect(resumen).toContain("Recibe: Beto.");
+    expect(resumen).not.toContain("Elementos sin novedad");
+  });
+
+  test("lo que llega igual se sigue validando y, si está mal, no cierra", async () => {
+    await expect(
+      como(t, "ana").mutation(api.guardia.cerrarTurno, {
+        turnoId,
+        recibeUserId: e.deOtroConjunto,
+      }),
+    ).rejects.toThrow(/no es un guarda vigente/i);
+    await expect(
+      como(t, "ana").mutation(api.guardia.cerrarTurno, {
+        turnoId,
+        novedadesElementos: true,
+      }),
+    ).rejects.toThrow(/describe la novedad/i);
+    const turno = await leerTurno(t, turnoId);
+    expect(turno.estado).toBe("abierto");
+    expect(turno.cerradoPorUserId).toBeUndefined();
+  });
+
+  test("las autorizaciones no cambian", async () => {
+    await expect(
+      como(t, "carla").mutation(api.guardia.cerrarTurno, { turnoId }),
+    ).rejects.toThrow(/solo el guardia del turno/i);
+    await expect(
+      como(t, "rita").mutation(api.guardia.cerrarTurno, { turnoId }),
+    ).rejects.toThrow();
+    await como(t, "ana").mutation(api.guardia.cerrarTurno, { turnoId });
+    await expect(
+      como(t, "ana").mutation(api.guardia.cerrarTurno, { turnoId }),
+    ).rejects.toThrow(/ya está cerrado/i);
+  });
+
+  test("el histórico mezcla cierres completos y simplificados sin romperse", async () => {
+    // Un cierre con el formulario completo...
+    await como(t, "ana").mutation(api.guardia.cerrarTurno, cierreValido(e, turnoId));
+    // ...y el siguiente, simplificado.
+    const siguiente = await como(t, "beto").mutation(api.guardia.iniciarTurno, {
+      condominioId: e.norte,
+      checklist: CHECKLIST,
+      guardiaNombre: "Beto Guarda",
+    });
+    await como(t, "beto").mutation(api.guardia.cerrarTurno, { turnoId: siguiente });
+
+    const lista = await como(t, "admin").query(api.guardia.listTurnos, {
+      condominioId: e.norte,
+    });
+    expect(lista.map((x) => x._id)).toEqual(
+      expect.arrayContaining([turnoId, siguiente]),
+    );
+
+    const completo = await como(t, "admin").query(api.guardia.getTurno, { turnoId });
+    expect(completo!.recibe).toBe("Beto Guarda");
+    expect(completo!.consignas).toBe("Paquete del 402 en portería.");
+    expect(completo!.observacionesCierre).toBe(OBSERVACIONES);
+    expect(completo!.novedadesElementos).toBe(false);
+
+    const simple = await como(t, "admin").query(api.guardia.getTurno, {
+      turnoId: siguiente,
+    });
+    expect(simple!.estado).toBe("cerrado");
+    expect(simple!.cerradoPorNombre).toBe("Beto Guarda");
+    expect(simple!.recibe).toBeUndefined();
+    expect(simple!.consignas).toBeUndefined();
+    expect(simple!.novedadesElementos).toBeUndefined();
   });
 });
 
