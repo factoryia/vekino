@@ -593,7 +593,9 @@ function TurnoDetalleModal({ turnoId, onClose }: { turnoId: Id<"guardiaTurnos">;
       ["Sección", "Detalle 1", "Detalle 2", "Detalle 3"],
       ["Turno", turno.guardiaNombre, fmtFechaHora(turno.fechaInicio), turno.fechaCierre ? fmtFechaHora(turno.fechaCierre) : "en curso"],
       ...(turno.guardiaSecundarioNombre ? [["Turno compartido", turno.guardiaSecundarioNombre, "", ""]] : []),
-      ...(turno.consignas ? [["Consignas", turno.consignas, `Recibe: ${turno.recibe ?? ""}`, turno.observacionesCierre ?? ""]] : []),
+      ...(turno.consignas || turno.recibe || turno.observacionesCierre
+        ? [["Consignas", turno.consignas ?? "", `Recibe: ${turno.recibe ?? ""}`, turno.observacionesCierre ?? ""]]
+        : []),
       ...(turno.novedadesElementos !== undefined
         ? [["Novedades en elementos", turno.novedadesElementos ? "Sí" : "No", turno.novedadesElementosDetalle ?? "", turno.cerradoPorNombre ? `Cerró: ${turno.cerradoPorNombre}` : ""]]
         : []),
@@ -644,10 +646,16 @@ function TurnoDetalleModal({ turnoId, onClose }: { turnoId: Id<"guardiaTurnos">;
               {fmtFechaHora(turno.fechaInicio)} → {turno.fechaCierre ? fmtFechaHora(turno.fechaCierre) : "en curso"}
             </p>
             {turno.observacionesInicio && <p className="mt-1 text-xs text-muted-foreground">Inicio: {turno.observacionesInicio}</p>}
-            {turno.consignas && (
+            {/* El cierre simplificado puede no traer consignas ni relevo: cada
+                dato del cierre se pinta solo si se registró. */}
+            {turno.estado === "cerrado" && (
               <div className="mt-2 rounded-lg bg-card p-2 text-xs">
-                <p><span className="font-medium text-foreground">Consignas:</span> {turno.consignas}</p>
-                <p className="mt-0.5"><span className="font-medium text-foreground">Recibió:</span> {turno.recibe}</p>
+                {turno.consignas && (
+                  <p><span className="font-medium text-foreground">Consignas:</span> {turno.consignas}</p>
+                )}
+                {turno.recibe && (
+                  <p className="mt-0.5"><span className="font-medium text-foreground">Recibió:</span> {turno.recibe}</p>
+                )}
                 {/* Los cierres de antes no preguntaban por los elementos: sin
                     el dato no se dice ni "sí" ni "no". */}
                 {turno.novedadesElementos !== undefined && (

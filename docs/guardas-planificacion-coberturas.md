@@ -579,7 +579,7 @@ Si una vía de guarda está suspendida por una cobertura, el error lo explica en
 ### Inicio y cierre normal
 
 - **Iniciar turno**: requiere rol de guarda en la portería (vía operativa). Lleva checklist de dotación (al menos un ítem). No se puede abrir si ya hay un turno abierto en esa portería.
-- **Cerrar turno**: lo cierra quien opera la portería o el guarda del turno (titular o secundario). Registra quién recibe, consignas, observaciones y novedades de los elementos del checklist.
+- **Cerrar turno**: lo cierra quien opera la portería o el guarda del turno (titular o secundario). El cierre es **simplificado**: el guarda solo confirma quién entrega el turno. Quién recibe, consignas, observaciones y novedades de los elementos del checklist siguen existiendo pero están ocultos y son opcionales; se reactivan desde `CAMPOS_PEDIDOS_CIERRE` (`packages/backend/convex/lib/cierreTurno.ts`). Ver [cierre-turno-simplificado.md](cierre-turno-simplificado.md).
 
 ### Excepción de la cobertura (Fase 8)
 

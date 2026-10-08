@@ -60,6 +60,9 @@ export default defineSchema({
     // ej ...realizar-pago?idConv=00003230). Si está presente, el botón "Pagar"
     // abre este portal en vez de usar la API de la pasarela.
     avalPortalUrl: v.optional(v.string()),
+    // Nura del convenio con Aval para pagar por API (ej "00030713"). No es
+    // secreto; las llaves van en env con el Nura de sufijo (lib/avalConvenio.ts).
+    avalNura: v.optional(v.string()),
 
     /**
      * Aporte voluntario de areas comunes (el cupo de parqueadero).
@@ -357,6 +360,7 @@ export default defineSchema({
     rqUID: v.string(),                 // X-RqUID único que enviamos por transacción
     pmtAuthId: v.optional(v.string()), // PmtAuthId devuelto por Trn (== PmtId en BasicData)
     invoiceNum: v.string(),            // referencia enviada a Aval: el numero de la casa (lib/referenciaPago.ts)
+    agrmId: v.optional(v.string()),    // Nura del convenio que cobró; la consulta usa la misma llave
     approvalId: v.optional(v.string()), // X-ApprovalId final (ACH/banco/Redeban)
 
     // Montos

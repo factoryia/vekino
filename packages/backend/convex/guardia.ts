@@ -558,15 +558,18 @@ export const relevosDelTurno = query({
  * el turno y no se tocan. El cierre solo dice si volvieron con novedad; no
  * hay argumento por el que colar una lista distinta.
  *
- * `novedadesElementos` y `observacionesCierre` son opcionales en el validador
- * y obligatorios en el handler a propósito: una app móvil sin actualizar que
- * no los manda recibe "escribe las observaciones generales", no un error de
- * validación de argumentos que el guarda no puede entender.
+ * Todos los datos del cierre son opcionales en el validador a propósito: lo
+ * que es obligatorio lo decide `validarCierreTurno` según lo que el cierre
+ * pide hoy (`CAMPOS_PEDIDOS_CIERRE`). Así, cuando se vuelva a pedir un campo,
+ * una app móvil sin actualizar que no lo manda recibe "escribe las
+ * observaciones generales", no un error de validación de argumentos que el
+ * guarda no puede entender. Hoy el cierre simplificado no pide ninguno: el
+ * guarda cierra con solo `turnoId`.
  */
 export const cerrarTurno = mutation({
   args: {
     turnoId: v.id("guardiaTurnos"),
-    consignas: v.string(),
+    consignas: v.optional(v.string()),
     /** Relevo elegido del catálogo (`equipo`). Si viene, manda sobre `recibe`. */
     recibeUserId: v.optional(v.id("users")),
     /** Nombre del relevo escrito a mano (cuenta compartida, relevo sin usuario). */
@@ -633,11 +636,16 @@ export const cerrarTurno = mutation({
       modulo: "minuta",
       tipo: "Cierre de Turno",
       unidad: "Portería",
+      /* Solo lo que se dijo: sin relevo no hay "Recibe", y si no se preguntó
+       * por los elementos no se afirma que volvieron sin novedad. */
       resumen:
-        `Turno de ${turno.guardiaNombre} cerrado por ${user.name}. Recibe: ${cierre.recibe}. ` +
-        (cierre.novedadesElementos
-          ? `Novedades en elementos: ${cierre.novedadesElementosDetalle}`
-          : "Elementos sin novedad."),
+        `Turno de ${turno.guardiaNombre} cerrado por ${user.name}.` +
+        (cierre.recibe ? ` Recibe: ${cierre.recibe}.` : "") +
+        (cierre.novedadesElementos === true
+          ? ` Novedades en elementos: ${cierre.novedadesElementosDetalle}`
+          : cierre.novedadesElementos === false
+            ? " Elementos sin novedad."
+            : ""),
       estado: "cerrado",
       actorUserId: user._id,
       actorNombre: user.name,
