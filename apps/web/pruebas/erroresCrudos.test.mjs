@@ -131,7 +131,6 @@ describe("Iniciar turno", () => {
     await act(() => root.render(createElement(GuardiaMinutaHome)));
     await pulsar(boton("Iniciar turno"));
     expect(dialogo()).toBeTruthy();
-    await escribir(dialogo().querySelector('input[placeholder="Tu nombre completo"]'), "José Pérez");
   }
 
   test("con un turno huérfano pendiente: sigue rechazado y sin el error de Convex", async () => {
@@ -150,7 +149,53 @@ describe("Iniciar turno", () => {
     await abrirModal();
     await pulsar(boton("Iniciar turno", dialogo()));
     expect(llamadas.map((l) => l.nombre)).toEqual(["guardia:iniciarTurno"]);
-    expect(llamadas[0].args.guardiaNombre).toBe("José Pérez");
+    /* Quién toma el turno lo dice la sesión: el formulario no lo manda. */
+    expect(llamadas[0].args).not.toHaveProperty("guardiaNombre");
     expect(dialogo()).toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+describe("Iniciar turno simplificado", () => {
+  async function abrirModal() {
+    respuestas["guardia:turnoActivo"] = null;
+    respuestas["guardia:listMinuta"] = [];
+    respuestas["guardia:listChecklistTemplate"] = [];
+    await act(() => root.render(createElement(GuardiaMinutaHome)));
+    await pulsar(boton("Iniciar turno"));
+    expect(dialogo()).toBeTruthy();
+  }
+
+  test("solo pide el checklist de dotación y el compañero", async () => {
+    await abrirModal();
+    const texto = dialogo().textContent;
+    expect(texto).toContain("Checklist de dotación");
+    expect(texto).toContain("Compañero de turno (opcional)");
+    expect(dialogo().querySelector('input[placeholder="Nombre del segundo guardia, si aplica"]')).toBeTruthy();
+    expect(dialogo().querySelectorAll('input[placeholder="Ítem"]').length).toBe(3);
+
+    expect(texto).not.toContain("Quién toma el turno");
+    expect(texto).not.toContain("cuenta es compartida");
+    expect(dialogo().querySelector('input[placeholder="Tu nombre completo"]')).toBeNull();
+    expect(texto).not.toContain("Observaciones iniciales");
+    expect(dialogo().querySelector("textarea")).toBeNull();
+  });
+
+  test("sin nombre, observaciones ni compañero: el botón está activo y no manda lo oculto", async () => {
+    await abrirModal();
+    await pulsar(boton("Iniciar turno", dialogo()));
+    expect(llamadas.map((l) => l.nombre)).toEqual(["guardia:iniciarTurno"]);
+    const { args } = llamadas[0];
+    expect(args).not.toHaveProperty("guardiaNombre");
+    expect(args).not.toHaveProperty("observacionesInicio");
+    expect(args.guardiaSecundarioNombre).toBeUndefined();
+    expect(args.checklist.map((c) => c.item)).toEqual(["Radio de comunicación", "Linterna", "Llaves de portería"]);
+  });
+
+  test("con compañero: se manda su nombre", async () => {
+    await abrirModal();
+    await escribir(dialogo().querySelector('input[placeholder="Nombre del segundo guardia, si aplica"]'), "  Luis Gómez ");
+    await pulsar(boton("Iniciar turno", dialogo()));
+    expect(llamadas[0].args.guardiaSecundarioNombre).toBe("Luis Gómez");
   });
 });

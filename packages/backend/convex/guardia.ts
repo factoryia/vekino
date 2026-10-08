@@ -40,6 +40,7 @@ import { displayNameFromUser } from "./model/displayName";
 import { resolveMediaUrl, resolveMediaUrlList } from "./model/files";
 import { calcularCosto } from "./lib/costoReserva";
 import { validarCierreTurno } from "./lib/cierreTurno";
+import { nombreDeQuienInicia } from "./lib/inicioTurno";
 import { normalizarPlaca } from "./lib/placa";
 import { buscarCasas, ordenVinculo, type Ocupante } from "./lib/buscarCasa";
 import {
@@ -218,15 +219,17 @@ export const equipo = query({
 /**
  * Inicia turno con checklist de dotación.
  * Reglas: un solo turno abierto por condominio; checklist con al
- * menos 1 ítem. Nombre del guardia (y compañero) en texto libre —
- * suele haber una sola cuenta compartida en portería.
+ * menos 1 ítem. Quién lo toma sale de la sesión (`lib/inicioTurno.ts`);
+ * el compañero, en texto libre.
  */
 export const iniciarTurno = mutation({
   args: {
     condominioId: v.id("condominios"),
     checklist: v.array(checklistItemValidator),
+    /** Oculto en los formularios; si llega, se guarda (`CAMPOS_PEDIDOS_INICIO`). */
     observacionesInicio: v.optional(v.string()),
-    /** Nombre de quien toma el turno (cuenta compartida). */
+    /** Nombre de quien toma el turno (cuenta compartida). Hoy no se pide y,
+     * mientras no se pida, se descarta: ver `nombreDeQuienInicia`. */
     guardiaNombre: v.optional(v.string()),
     /** Legado: userId de segundo guardia (preferir nombre libre). */
     guardiaSecundarioUserId: v.optional(v.id("users")),
@@ -256,8 +259,12 @@ export const iniciarTurno = mutation({
       throw new Error("El checklist de inicio necesita al menos un ítem.");
     }
 
-    const guardiaNombre =
-      args.guardiaNombre?.trim() || displayNameFromUser(user);
+    /* El turno es de `user` —`guardiaUserId`— y su nombre lo dice la misma
+     * sesión, no lo que se escriba: así no pueden ser dos personas. */
+    const guardiaNombre = nombreDeQuienInicia(
+      args.guardiaNombre,
+      displayNameFromUser(user),
+    );
 
     let secundarioNombre = args.guardiaSecundarioNombre?.trim() || undefined;
     let secundarioUserId = args.guardiaSecundarioUserId;
