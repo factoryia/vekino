@@ -3,6 +3,7 @@ import {
   enRevision,
   facturaVigente,
   fechaLimiteDescuentoDe,
+  informaSaldoAnterior,
   periodosConsecutivos,
   saldoAnteriorDe,
   veredictoConciliacion,
@@ -186,17 +187,23 @@ type FacturaPar = {
   lineas: readonly LineaFactura[];
   saldoAnteriorDocumento?: number;
   lecturaDudosa?: LecturaDudosa | null;
+  origen?: string | null;
 };
 
-/** Si el par N → N+1 se puede juzgar: meses consecutivos y ninguna en revisión. */
+/**
+ * Si el par N → N+1 se puede juzgar: meses consecutivos, ninguna en revisión
+ * y N+1 con un saldo anterior de la contabilidad (no una factura hecha a mano,
+ * `informaSaldoAnterior`).
+ */
 export function parJuzgable(
   anterior: { periodo: string; lecturaDudosa?: LecturaDudosa | null },
-  siguiente: { periodo: string; lecturaDudosa?: LecturaDudosa | null },
+  siguiente: { periodo: string; lecturaDudosa?: LecturaDudosa | null; origen?: string | null },
 ): boolean {
   return (
     periodosConsecutivos(anterior.periodo, siguiente.periodo) &&
     !enRevision(anterior) &&
-    !enRevision(siguiente)
+    !enRevision(siguiente) &&
+    informaSaldoAnterior(siguiente)
   );
 }
 
@@ -243,7 +250,12 @@ export function discrepanciaDePar(
  */
 export function aplicadoEnPosterior(
   noAplicado: number,
-  siguiente: { periodo: string; totalAPagar: number; lecturaDudosa?: LecturaDudosa | null },
+  siguiente: {
+    periodo: string;
+    totalAPagar: number;
+    lecturaDudosa?: LecturaDudosa | null;
+    origen?: string | null;
+  },
   pagadoSiguiente: number,
   posterior: FacturaPar,
 ): boolean {
@@ -282,6 +294,8 @@ export type FacturaEstado = {
   veredictoContable?: (VeredictoContable & { at?: number }) | null;
   /** La evidencia guardada la última vez (Fase 3). */
   estadoPago?: { estado: "pagada" | "abonada" } | null;
+  /** Por dónde entró: una `manual` no juzga a la anterior (`informaSaldoAnterior`). */
+  origen?: string | null;
 };
 
 /** Una discrepancia ya guardada (`discrepanciasPago`). */
@@ -358,7 +372,10 @@ const DE_VEREDICTO: ReadonlySet<EstadoFactura> = new Set(["pagada", "abonada", "
  * ── El veredicto de cada factura ─────────────────────────────────────────
  * Lo da la siguiente de la cadena (`veredictoConciliacion`). Si el par no se
  * puede juzgar (alguna en revisión) o no hay siguiente, se conserva el que
- * ya tenía. Una factura de antes de la Fase 3, sin veredicto ni evidencia
+ * ya tenía. Si la siguiente es una factura hecha a mano, no hay veredicto:
+ * su saldo anterior no es de la contabilidad (`informaSaldoAnterior`).
+ *
+ * Una factura de antes de la Fase 3, sin veredicto ni evidencia
  * guardados, trae en `estado` lo que le puso la conciliación vieja: se
  * conserva como veredicto `heredado`, para no degradar en silencio lo que la
  * unidad ya veía. Si alguna vez tuvo evidencia (`estadoPago`), su estado
@@ -389,6 +406,11 @@ export function calcularCadena(args: {
     const evidencia = evidencias[i] ?? null;
     let veredicto: VeredictoContable | null = null;
     const calculado = siguiente ? veredictoConciliacion(f, siguiente) : null;
+    /* Una siguiente hecha a mano no dice nada de esta (QA de comprobantes,
+     * H4): no la juzga, y el veredicto que una manual le haya puesto antes se
+     * descarta. Solo se conserva un estado heredado de la migración, que no
+     * salió de ella. Sin veredicto, mandan los pagos o el documento. */
+    const siguienteManual = !!siguiente && !informaSaldoAnterior(siguiente);
     if (calculado !== null && siguiente) {
       veredicto = {
         estado: calculado,
@@ -396,10 +418,13 @@ export function calcularCadena(args: {
         facturaSiguienteId: siguiente._id,
         saldoAnteriorSiguiente: saldoAnteriorDe(siguiente),
       };
-    } else if (f.veredictoContable) {
+    } else if (
+      f.veredictoContable &&
+      (!siguienteManual || f.veredictoContable.motivo === "heredado")
+    ) {
       const { at: _at, ...guardado } = f.veredictoContable;
       veredicto = guardado;
-    } else if (!evidencia && !f.estadoPago && DE_VEREDICTO.has(f.estado)) {
+    } else if (!f.veredictoContable && !evidencia && !f.estadoPago && DE_VEREDICTO.has(f.estado)) {
       veredicto = { estado: f.estado as Veredicto, motivo: "heredado" };
     }
 

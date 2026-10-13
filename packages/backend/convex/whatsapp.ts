@@ -34,6 +34,7 @@ import {
   textosDePlazos,
 } from "./lib/cartera";
 import { MENSAJE_PASARELA_DE_PRUEBAS, pasarelaPermitida } from "./lib/avalProduccion";
+import { vigentes } from "./model/authz";
 
 /**
  * Bot de WhatsApp (YCloud).
@@ -476,12 +477,17 @@ export const contextoConversacion = internalQuery({
 
     const unidades: Array<{ unidad: Doc<"unidades">; vinculo: string }> = [];
     if (efectiva) {
-      const vinculos = await ctx.db
-        .query("usuarioUnidad")
-        .withIndex("by_membership", (q) =>
-          q.eq("membershipId", efectiva.membership._id),
-        )
-        .collect();
+      /* Solo vínculos VIGENTES, como en la web (`misUnidadIds`): con el
+       * contrato vencido, el bot no le ofrece la casa ni sus facturas,
+       * reservas o comprobantes (QA de comprobantes, H3). */
+      const vinculos = vigentes(
+        await ctx.db
+          .query("usuarioUnidad")
+          .withIndex("by_membership", (q) =>
+            q.eq("membershipId", efectiva.membership._id),
+          )
+          .collect(),
+      );
       for (const vu of vinculos) {
         const unidad = await ctx.db.get(vu.unidadId);
         if (unidad) unidades.push({ unidad, vinculo: vu.vinculo });
@@ -1172,7 +1178,7 @@ export const procesarEntrante = internalAction({
         const lineas = [
           `📄 *Factura ${factura.numeroFactura}* — ${factura.periodoLabel}`,
           `Unidad: ${[unidad.torre, unidad.numero].filter(Boolean).join(" ")}`,
-          `Estado: *${factura.estado.replace("_", " ")}*`,
+          `Estado: *${factura.estadoVisible.replace("_", " ")}*`,
           `Total a pagar: *${pesos.format(monto)}*${
             conDescuento && limiteDescuento !== null
               ? ` (con descuento por pronto pago hasta el ${fechaLarga(limiteDescuento, timezone)})`

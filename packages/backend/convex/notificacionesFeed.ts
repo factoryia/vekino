@@ -10,10 +10,12 @@ import {
 import {
   ETIQUETA_SIN_VERIFICAR,
   TEXTO_SIN_VERIFICAR,
+  carteraDeUnidad,
   estadoVisibleDeFactura,
   montoAPagarHoy,
   motivoNoPagable,
   sinPagar,
+  type CarteraUnidad,
   type MotivoNoPagable,
 } from "./lib/cartera";
 
@@ -75,15 +77,18 @@ export const feed = query({
        * también las viejas cuyo saldo ya iba dentro de la siguiente: la
        * campana pedía pagar dos veces lo mismo. */
       const cadenas = new Map<string, Doc<"facturas">[]>();
+      /* La cartera de hoy de cada unidad: dice si la vigente está en mora. */
+      const carteras = new Map<string, CarteraUnidad>();
+      const ahora = Date.now();
       for (const unidadId of unidadIds) {
-        const cadena = await ctx.db
-          .query("facturas")
-          .withIndex("by_unidad", (q) => q.eq("unidadId", unidadId))
-          .collect();
-        cadenas.set(
-          unidadId,
-          cadena.filter((f) => f.condominioId === args.condominioId),
-        );
+        const cadena = (
+          await ctx.db
+            .query("facturas")
+            .withIndex("by_unidad", (q) => q.eq("unidadId", unidadId))
+            .collect()
+        ).filter((f) => f.condominioId === args.condominioId);
+        cadenas.set(unidadId, cadena);
+        carteras.set(unidadId, carteraDeUnidad(cadena, ahora));
       }
       const facturas = await ctx.db
         .query("facturas")
@@ -98,7 +103,7 @@ export const feed = query({
           id: f._id,
           tipo: "factura",
           titulo: `Factura de ${f.periodoLabel}`,
-          detalle: detalleFactura(f, cadena, motivoNoPagable(cadena, f)),
+          detalle: detalleFactura(f, cadena, motivoNoPagable(cadena, f), carteras.get(f.unidadId)),
           createdAt: f.createdAt,
           ruta: "/(app)/(tabs)/facturas",
         });
@@ -287,15 +292,23 @@ function formatoCOP(valor: number): string {
 
 /**
  * La línea de una factura en la campana, según si hoy se puede pagar. El
- * monto "por pagar" es el de hoy: con descuento solo dentro de su plazo
- * (`montoAPagarHoy`, Fase 3).
+ * monto "por pagar" es el de hoy: con descuento solo dentro de su plazo y sin
+ * lo ya abonado (`montoAPagarHoy`). Si la unidad está en mora, la vigente se
+ * anuncia "Vencida", como la ven la cartera, la web y Finanzas
+ * (`estadoVisibleDeFactura`; QA de comprobantes, H2).
  */
 function detalleFactura(
   f: Doc<"facturas">,
   cadena: readonly Doc<"facturas">[],
   motivo: MotivoNoPagable | null,
+  cartera?: CarteraUnidad,
 ): string {
-  if (motivo === null) return `Por pagar · ${formatoCOP(montoAPagarHoy(f, Date.now()))}`;
+  if (motivo === null) {
+    const monto = formatoCOP(montoAPagarHoy(f, Date.now()));
+    return estadoVisibleDeFactura(f, cadena, cartera) === "vencida"
+      ? `Vencida · Por pagar ${monto}`
+      : `Por pagar · ${monto}`;
+  }
   if (motivo === "pagada") return "Pagada";
   /* Una historica que nadie pudo juzgar (Fase 4): no se sabe si se pago. */
   if (motivo === "historica" && estadoVisibleDeFactura(f, cadena) === "sin_verificar") {

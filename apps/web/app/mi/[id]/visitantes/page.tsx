@@ -10,7 +10,12 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Spinner } from "@/components/ui/spinner";
 import { EmptyState } from "@/components/ui/empty-state";
-import { fechaLarga, etiquetaUnidad } from "@/components/portal/portal-ui";
+import {
+  TEXTO_SIN_UNIDAD,
+  TITULO_SIN_UNIDAD,
+  fechaLarga,
+  etiquetaUnidad,
+} from "@/components/portal/portal-ui";
 import { cn } from "@/lib/utils";
 
 const TIPO_DOC = [
@@ -50,6 +55,9 @@ export default function Visitantes() {
   const [qrId, setQrId] = useState<Id<"visitantes"> | null>(null);
 
   const unidades = home && home.allowed ? home.unidades : [];
+  /* Sin una casa vinculada HOY (p. ej. el contrato de arriendo venció) no se
+   * ofrece autorizar: el backend tampoco lo acepta (QA de comprobantes, H3). */
+  const sinUnidad = home !== undefined && unidades.length === 0;
 
   return (
     <div className="space-y-6 py-2">
@@ -65,16 +73,20 @@ export default function Visitantes() {
             </p>
           </div>
         </div>
-        <button
-          onClick={() => setFormOpen(true)}
-          className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand px-4 text-sm font-semibold text-brand-foreground shadow-sm transition-colors hover:bg-brand/90"
-        >
-          <Plus className="h-4 w-4" />
-          Autorizar visitante
-        </button>
+        {sinUnidad ? null : (
+          <button
+            onClick={() => setFormOpen(true)}
+            className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand px-4 text-sm font-semibold text-brand-foreground shadow-sm transition-colors hover:bg-brand/90"
+          >
+            <Plus className="h-4 w-4" />
+            Autorizar visitante
+          </button>
+        )}
       </div>
 
-      {visitantes === undefined ? (
+      {sinUnidad ? (
+        <EmptyState icon={UserCheck} title={TITULO_SIN_UNIDAD} description={TEXTO_SIN_UNIDAD} />
+      ) : visitantes === undefined ? (
         <Card className="p-12">
           <Spinner className="mx-auto h-5 w-5" />
         </Card>
@@ -153,7 +165,7 @@ export default function Visitantes() {
         </div>
       )}
 
-      {formOpen && (
+      {formOpen && !sinUnidad && (
         <VisitanteForm
           condominioId={condominioId}
           unidades={unidades}

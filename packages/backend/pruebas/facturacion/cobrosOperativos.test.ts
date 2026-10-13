@@ -690,7 +690,11 @@ describe("Sin verificar · histórica pendiente que nadie pudo juzgar", () => {
     const { items } = await esc.como("residente").query(api.notificacionesFeed.feed, { condominioId: esc.condominioId });
     const junio = items.find((i) => i.tipo === "factura" && /junio/i.test(i.titulo));
     const agosto = items.find((i) => i.tipo === "factura" && /agosto/i.test(i.titulo));
-    expect(agosto?.detalle).toMatch(/^Por pagar/);
+    /* Agosto es la vigente y lo que se paga. El 8 de octubre la unidad está
+     * en mora (desde el 16 de septiembre), así que se anuncia "Vencida", como
+     * la ven la cartera y la tarjeta del residente (QA de comprobantes, H2;
+     * antes decía solo "Por pagar"). */
+    expect(agosto?.detalle).toMatch(/^Vencida · Por pagar \$ /);
     expect(junio?.detalle).toBe("Sin verificar · Falta el estado de cuenta del mes siguiente para saber si se pagó.");
   });
 
@@ -707,7 +711,11 @@ describe("Sin verificar · histórica pendiente que nadie pudo juzgar", () => {
       periodo: "2026-08",
       paginationOpts: { numItems: 10, cursor: null },
     });
-    expect(agosto.page[0]!.estadoVisible).toBe("pendiente");
+    /* Agosto, la vigente, no es "Sin verificar". Con la unidad en mora se ve
+     * "vencida" aunque se guarde `pendiente` (QA de comprobantes, H2; antes
+     * se veía "pendiente" mientras la cartera decía mora). */
+    expect(agosto.page[0]!.estado).toBe("pendiente");
+    expect(agosto.page[0]!.estadoVisible).toBe("vencida");
     const delBot = await esc.t.query(internal.soportesPago.sinVerificarDeUnidad, { unidadId: esc.u101 });
     expect(delBot.map((f) => f.periodo)).toEqual(["2026-06"]);
   });

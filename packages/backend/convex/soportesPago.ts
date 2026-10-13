@@ -18,6 +18,7 @@ import {
   misUnidadIds,
 } from "./model/authz";
 import {
+  carteraDeUnidad,
   estadoVisibleDeFactura,
   facturaVigente,
   formatoPesos,
@@ -452,7 +453,14 @@ export const facturaVigenteDeUnidad = internalQuery({
         .withIndex("by_unidad", (q) => q.eq("unidadId", args.unidadId))
         .collect()
     ).filter((f) => f.condominioId === unidad.condominioId);
-    return facturaVigente(cadena);
+    const vigente = facturaVigente(cadena);
+    if (!vigente) return null;
+    /* Lo que se le dice al residente: si la unidad está en mora, la vigente
+     * es "vencida" aunque se guarde `pendiente` (QA de comprobantes, H2). */
+    return {
+      ...vigente,
+      estadoVisible: estadoVisibleDeFactura(vigente, cadena, carteraDeUnidad(cadena, Date.now())),
+    };
   },
 });
 

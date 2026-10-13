@@ -12,6 +12,8 @@ import { Badge } from "@/components/ui/badge";
 import { Spinner } from "@/components/ui/spinner";
 import { EmptyState } from "@/components/ui/empty-state";
 import {
+  TEXTO_SIN_UNIDAD,
+  TITULO_SIN_UNIDAD,
   VINCULO_LABEL,
   TIPO_UNIDAD_LABEL,
 } from "@/components/portal/portal-ui";
@@ -23,7 +25,10 @@ export default function MiUnidad() {
   const condominioId = id as Id<"condominios">;
 
   const home = useQuery(api.portal.home, { condominioId });
-  const vehiculos = useQuery(api.vehiculos.listByCondominio, { condominioId });
+  /* Los de SUS casas, con vínculo vigente: los filtra el backend
+   * (`vehiculos.listMios`). Antes se pedían los de todo el conjunto y se
+   * filtraban aquí por número de casa (QA de comprobantes, H3). */
+  const vehiculos = useQuery(api.vehiculos.listMios, { condominioId });
 
   if (home === undefined) {
     return (
@@ -36,8 +41,7 @@ export default function MiUnidad() {
   }
   if (!home.allowed) return null;
 
-  const misNumeros = new Set(home.unidades.map((u) => u.numero));
-  const misVehiculos = (vehiculos ?? []).filter((v) => misNumeros.has(v.unidadNumero));
+  const misVehiculos = vehiculos ?? [];
 
   return (
     <PageContainer className="max-w-4xl space-y-8">
@@ -47,11 +51,7 @@ export default function MiUnidad() {
       />
 
       {home.unidades.length === 0 ? (
-        <EmptyState
-          icon={Building2}
-          title="No tienes una unidad vinculada"
-          description="Pide a la administración que asocie tu apartamento o casa a tu cuenta."
-        />
+        <EmptyState icon={Building2} title={TITULO_SIN_UNIDAD} description={TEXTO_SIN_UNIDAD} />
       ) : (
         <div className="space-y-6">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

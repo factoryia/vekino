@@ -337,7 +337,8 @@ async function ejecutar(
             : {}),
           numeroFactura: f.numeroFactura,
           periodo: f.periodoLabel,
-          estado: f.estado,
+          /* Con la unidad en mora, "vencida" (QA de comprobantes, H2). */
+          estado: f.estadoVisible,
           /* Lectura dudosa del PDF: el monto no está verificado. */
           enRevision: enRevision(f),
           /* Pagó y la contabilidad aún no lo refleja: no es deuda que cobrar. */

@@ -8,6 +8,7 @@ import type { Id } from "@vekino/backend/dataModel";
 import {
   ETIQUETA_SIN_VERIFICAR,
   TEXTO_SIN_VERIFICAR,
+  abonoAprobado,
   descuentoVigente,
   enRevision,
   estadoVisibleDeFactura,
@@ -15,8 +16,10 @@ import {
   inicioDeMora,
   mensajePagoEnVerificacion,
   montoAPagarHoy as montoDeHoy,
+  montoSinDescuento,
   resumenResidente,
   sinPagar,
+  type CarteraUnidad,
 } from "@vekino/backend/cartera";
 import {
   Download,
@@ -35,6 +38,8 @@ import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { cop, cn } from "@/lib/utils";
 import {
   ESTADO_FACTURA,
+  TEXTO_SIN_UNIDAD,
+  TITULO_SIN_UNIDAD,
   etiquetaUnidad,
   fechaPlazo,
   periodoHumano,
@@ -46,7 +51,8 @@ const FECHA_MIN = 946684800000;
  * Lo que se cobra hoy: la misma regla del backend de pagos
  * (`lib/cartera.ts`, `montoAPagarHoy`). El descuento vale hasta SU fecha —la
  * del documento, o el 15 del mes del período—, no hasta el vencimiento
- * (Fase 3, F-06): antes la pantalla ofrecía el descuento un mes de más.
+ * (Fase 3, F-06): antes la pantalla ofrecía el descuento un mes de más. Y lo
+ * ya abonado (pagos aprobados) no se vuelve a cobrar (QA de comprobantes, H1).
  */
 function montoAPagarHoy(f: Factura, ahora = Date.now()) {
   return montoDeHoy(f, ahora);
@@ -79,6 +85,8 @@ type Factura = {
   lecturaDudosa?: { motivos: string[]; confirmada?: unknown } | null;
   /** Un pago registrado que la contabilidad aún no refleja (Fase 3). */
   pagoEnVerificacion?: { monto: number } | null;
+  /** Lo que prueban los pagos aprobados (Fase 3): un abono baja lo que falta. */
+  estadoPago?: { estado: "pagada" | "abonada"; montoPagado: number } | null;
   unidadNumero?: string;
   unidadTipo?: string;
   unidadTorre?: string | null;
@@ -110,11 +118,16 @@ export default function MisFacturas() {
    * `vencida` ya absorbida por las siguientes no pinta "Vencida" ni se
    * ofrece para pagar; una vigente que venció sin pagarse, sí es mora. */
   const resumen = resumenResidente(lista, Date.now());
-  const estaAlDia = resumen.estado === "al_dia" || resumen.estado === "sin_facturas";
+  /* Sin ninguna casa vinculada HOY (p. ej. una arrendataria con el contrato
+   * vencido: el backend ya no le da la casa) no se dice "Estás al día": no
+   * hay de qué estar al día (QA de comprobantes, H3). */
+  const sinUnidad = home?.allowed === true && !home.isPlatform && home.unidades.length === 0;
+  const estaAlDia =
+    !sinUnidad && (resumen.estado === "al_dia" || resumen.estado === "sin_facturas");
   const enMora = resumen.estado === "en_mora";
-  const unidadesEnMora = new Set(
-    resumen.unidades.filter((u) => u.cartera.estado === "en_mora").map((u) => u.unidadId),
-  );
+  /* La cartera de hoy de cada unidad: con ella cada factura se rotula como
+   * la ve la cartera (`estadoVisibleDeFactura`, QA de comprobantes, H2). */
+  const carteras = new Map(resumen.unidades.map((u) => [String(u.unidadId), u.cartera]));
   const pagables = resumen.pagables;
   const pagableIds = new Set(pagables.map((f) => f._id));
   const deudaTotal = pagables.reduce((s, f) => s + montoAPagarHoy(f), 0);
@@ -200,6 +213,7 @@ export default function MisFacturas() {
       <div className="grid grid-cols-1 items-stretch gap-6 md:grid-cols-2">
         <ResumenActual
           loading={facturas === undefined}
+          sinUnidad={sinUnidad}
           estaAlDia={estaAlDia}
           enMora={enMora}
           enRevision={resumen.estado === "en_revision"}
@@ -211,10 +225,11 @@ export default function MisFacturas() {
         />
         <ProximoPagoCard
           loading={facturas === undefined}
+          sinUnidad={sinUnidad}
           facturas={pagables}
           estaAlDia={estaAlDia}
           enVerificacion={enVerificacion}
-          unidadesEnMora={unidadesEnMora}
+          carteras={carteras}
           avalPortalUrl={avalPortalUrl}
           multiUnidad={multiUnidad}
         />
@@ -258,6 +273,7 @@ export default function MisFacturas() {
                 condominioId={condominioId}
                 factura={f}
                 cadena={listaAll.filter((x) => String(x.unidadId) === String(f.unidadId))}
+                cartera={carteras.get(String(f.unidadId)) ?? null}
                 avalPortalUrl={avalPortalUrl}
                 pagable={pagableIds.has(f._id)}
                 showUnidad={multiUnidad && unidadFiltro === ""}
@@ -274,6 +290,7 @@ export default function MisFacturas() {
 
 function ResumenActual({
   loading,
+  sinUnidad,
   estaAlDia,
   enMora,
   enRevision,
@@ -284,6 +301,8 @@ function ResumenActual({
   onVerDetalle,
 }: {
   loading: boolean;
+  /** No tiene ninguna casa vinculada hoy: ni "al día" ni deuda. */
+  sinUnidad: boolean;
   estaAlDia: boolean;
   /** Mora ACTUAL según la cartera, no "alguna factura vencida en el historial". */
   enMora: boolean;
@@ -320,10 +339,15 @@ function ResumenActual({
           <span className="text-sm font-semibold text-foreground">
             Estado actual
           </span>
-          <Badge tone={badgeTone}>{badgeLabel}</Badge>
+          {sinUnidad ? null : <Badge tone={badgeTone}>{badgeLabel}</Badge>}
         </div>
         {loading ? (
           <div className="h-8 w-40 animate-pulse rounded bg-muted" />
+        ) : sinUnidad ? (
+          <>
+            <p className="font-semibold text-foreground">{TITULO_SIN_UNIDAD}</p>
+            <p className="mt-1 text-sm text-muted-foreground">{TEXTO_SIN_UNIDAD}</p>
+          </>
         ) : estaAlDia ? (
           <p className="text-sm text-muted-foreground">
             No tienes facturas pendientes. ¡Estás al día!
@@ -350,7 +374,7 @@ function ResumenActual({
           </>
         )}
       </div>
-      {!estaAlDia ? (
+      {!estaAlDia && !sinUnidad ? (
         <div className="relative z-1 mt-4">
           <Button variant="outline" onClick={onVerDetalle} className="min-h-10">
             Ver detalle
@@ -365,20 +389,24 @@ function ResumenActual({
 
 function ProximoPagoCard({
   loading,
+  sinUnidad,
   facturas,
   estaAlDia,
   enVerificacion,
-  unidadesEnMora,
+  carteras,
   avalPortalUrl,
   multiUnidad,
 }: {
   loading: boolean;
+  /** No tiene ninguna casa vinculada hoy. */
+  sinUnidad: boolean;
   /** Las vigentes que se pueden pagar: a lo sumo una por unidad. */
   facturas: Factura[];
   estaAlDia: boolean;
   /** Pagado y todavía no reflejado por la contabilidad (0 si no hay). */
   enVerificacion: number;
-  unidadesEnMora: ReadonlySet<string>;
+  /** La cartera de hoy de cada unidad, por id. */
+  carteras: ReadonlyMap<string, CarteraUnidad>;
   avalPortalUrl: string | null;
   multiUnidad: boolean;
 }) {
@@ -393,7 +421,12 @@ function ProximoPagoCard({
   if (facturas.length === 0) {
     return (
       <LiquidGlassCard className="flex min-h-[180px] w-full flex-col items-center justify-center gap-2 p-6 text-center">
-        {estaAlDia ? (
+        {sinUnidad ? (
+          <>
+            <p className="text-lg font-bold text-foreground">{TITULO_SIN_UNIDAD}</p>
+            <p className="text-sm text-muted-foreground">{TEXTO_SIN_UNIDAD}</p>
+          </>
+        ) : estaAlDia ? (
           <>
             <CheckCircle2 className="h-9 w-9 text-emerald-600 dark:text-emerald-400" />
             <p className="text-lg font-bold text-foreground">Estás al día</p>
@@ -466,10 +499,14 @@ function ProximoPagoCard({
 
   const factura = facturas[0]!;
   /* La vigente de una unidad en mora se rotula como la cartera: puede seguir
-   * `pendiente` en la base porque ninguna factura posterior la ha juzgado. */
-  const meta = unidadesEnMora.has(factura.unidadId)
-    ? ESTADO_FACTURA.vencida
-    : ESTADO_FACTURA[factura.estado];
+   * `pendiente` en la base porque ninguna factura posterior la ha juzgado.
+   * Es la regla de toda la app (`estadoVisibleDeFactura`, H2). */
+  const meta =
+    ESTADO_FACTURA[
+      estadoVisibleDeFactura(factura, [factura], carteras.get(String(factura.unidadId))) === "vencida"
+        ? "vencida"
+        : factura.estado
+    ];
   const venc =
     factura.fechaVencimiento > FECHA_MIN
       ? fechaPlazo(factura.fechaVencimiento)
@@ -478,10 +515,12 @@ function ProximoPagoCard({
    * mora empieza el 16 del mes siguiente. Las dos fechas, dichas claro. */
   const moraDesde = venc ? fechaPlazo(inicioDeMora(factura)) : null;
   const limiteDescuento = fechaLimiteDescuentoDe(factura);
+  /* Lo ya abonado (pagos aprobados): el monto de arriba ya lo descuenta. */
+  const abonado = abonoAprobado(factura);
 
   return (
     <LiquidGlassCard className="flex min-h-[180px] w-full flex-col justify-between gap-4 p-5 sm:flex-row sm:items-center sm:p-6">
-      <div className="min-w-0">
+      <div className="min-w-0 sm:flex-1">
         <div className="mb-1 flex flex-wrap items-center gap-2">
           <span className="text-sm font-semibold text-foreground">
             Factura pendiente
@@ -506,13 +545,21 @@ function ProximoPagoCard({
           <p className="text-xs text-muted-foreground">En mora desde el {moraDesde}</p>
         ) : null}
       </div>
-      <div className="flex shrink-0 flex-col items-start gap-2 sm:items-end">
+      {/* Acotada al 55 %: un texto largo (el aviso de la pasarela, el del
+          descuento) se acomoda aquí en vez de aplastar la columna de la
+          factura (QA de comprobantes, H5). */}
+      <div className="flex min-w-0 flex-col items-start gap-2 sm:max-w-[55%] sm:shrink-0 sm:items-end">
         <span className="text-xl font-bold tabular-nums tracking-tight text-foreground sm:text-2xl">
           {cop(montoAPagarHoy(factura))}
         </span>
+        {abonado > 0 ? (
+          <p className="text-xs text-muted-foreground sm:text-right">
+            Abonado {cop(abonado)} de {cop(factura.totalAPagar)}
+          </p>
+        ) : null}
         {limiteDescuento !== null && descuentoVigente(factura, Date.now()) ? (
-          <p className="text-xs text-muted-foreground">
-            Con descuento hasta el {fechaPlazo(limiteDescuento)}. Después: {cop(factura.totalAPagar)}
+          <p className="text-xs text-muted-foreground sm:text-right">
+            Con descuento hasta el {fechaPlazo(limiteDescuento)}. Después: {cop(montoSinDescuento(factura))}
           </p>
         ) : null}
         <PortalPayButton
@@ -533,6 +580,7 @@ function FacturaRow({
   condominioId,
   factura,
   cadena,
+  cartera,
   avalPortalUrl,
   pagable,
   showUnidad,
@@ -541,16 +589,20 @@ function FacturaRow({
   factura: Factura;
   /** Las facturas de la misma unidad: dicen si esta es historica. */
   cadena: Factura[];
+  /** La cartera de hoy de su unidad: dice si la vigente está en mora. */
+  cartera: CarteraUnidad | null;
   avalPortalUrl: string | null;
   pagable: boolean;
   showUnidad: boolean;
 }) {
   const [open, setOpen] = useState(false);
   /* Una historica que quedó `pendiente` no se sabe si se pagó: falta el
-   * estado de cuenta siguiente (Fase 4). No se rotula "Pendiente". */
-  const visible = estadoVisibleDeFactura(factura, cadena);
+   * estado de cuenta siguiente (Fase 4). No se rotula "Pendiente". Y la
+   * vigente de una unidad en mora es "Vencida", como en el resumen y la
+   * tarjeta de arriba (QA de comprobantes, H2). */
+  const visible = estadoVisibleDeFactura(factura, cadena, cartera);
   const sinVerificar = visible === "sin_verificar";
-  const meta = sinVerificar ? null : ESTADO_FACTURA[factura.estado];
+  const meta = sinVerificar ? null : ESTADO_FACTURA[visible === "vencida" ? "vencida" : factura.estado];
   const isPagada = factura.estado === "pagada";
   const venc = factura.fechaVencimiento > FECHA_MIN ? fechaPlazo(factura.fechaVencimiento) : null;
   /* La mora solo se anuncia en la vigente sin pagar (decisión B, Fase 4). */
@@ -559,6 +611,11 @@ function FacturaRow({
     venc && esVigente && sinPagar(factura.estado) ? fechaPlazo(inicioDeMora(factura)) : null;
   const periodo = periodoHumano(factura.periodo || factura.periodoLabel);
   const limiteDescuento = fechaLimiteDescuentoDe(factura);
+  /* Un abono aprobado: en la vigente se muestra lo que falta, no el total
+   * del documento (QA de comprobantes, H1). En una histórica, lo que faltó
+   * ya va en la siguiente: se deja su total. */
+  const abonado = abonoAprobado(factura);
+  const monto = esVigente && abonado > 0 ? montoSinDescuento(factura) : factura.totalAPagar;
 
   return (
     <div className="overflow-hidden rounded-lg border border-border transition-colors">
@@ -608,14 +665,23 @@ function FacturaRow({
               {mensajePagoEnVerificacion(factura.pagoEnVerificacion.monto)}
             </p>
           ) : null}
+          {abonado > 0 ? (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Abonado {cop(abonado)} de {cop(factura.totalAPagar)}
+            </p>
+          ) : null}
         </div>
 
-        <div className="flex shrink-0 items-center justify-between gap-3 sm:justify-end">
+        {/* Acotada al 60 % y con salto de línea: el aviso de la pasarela va en
+            su propia línea y ya no aplasta ni desborda la fila (H5). */}
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 sm:max-w-[60%] sm:shrink-0 sm:justify-end">
           <span className="text-lg font-bold tabular-nums text-foreground">
-            {cop(factura.totalAPagar)}
+            {cop(monto)}
           </span>
           {!isPagada && pagable && (
-            <div onClick={(e) => e.stopPropagation()}>
+            /* `contents`: el botón o el aviso son hijos directos de la fila
+             * de acciones, para que el aviso pueda ir a su propia línea. */
+            <div className="contents" onClick={(e) => e.stopPropagation()}>
               <PayButton factura={factura} avalPortalUrl={avalPortalUrl} size="sm" />
             </div>
           )}
@@ -765,7 +831,15 @@ function PayButtonContenido({
     avalPortalUrl ? "skip" : { facturaId: factura._id },
   );
   if (!avalPortalUrl && opciones?.debe && !opciones.pasarela && opciones.motivo) {
-    return <span className="max-w-[14rem] text-xs text-muted-foreground">{opciones.motivo}</span>;
+    /* Un párrafo, no un `span`: en línea, su ancho máximo no aplicaba y el
+     * aviso se pintaba en una sola línea de casi 1.000 px que desbordaba la
+     * fila y la dejaba corrida al cerrar el formulario (QA de comprobantes,
+     * H5). Va al final y a lo ancho de la fila de acciones. */
+    return (
+      <p className="order-last basis-full text-xs leading-snug text-muted-foreground sm:text-right">
+        {opciones.motivo}
+      </p>
+    );
   }
 
   async function pagar() {

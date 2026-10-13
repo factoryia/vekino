@@ -171,9 +171,12 @@ describe("notificacionesFeed · la campana no anuncia como deuda lo que ya va en
 
   test("septiembre sin pagar: 'Por pagar' es septiembre; agosto ya va dentro", async () => {
     const { esc } = await agostoAbsorbido();
+    /* Septiembre arrastra agosto, que está en mora desde el 16 de septiembre:
+     * la unidad está en mora y la vigente se anuncia "Vencida", como en la
+     * cartera y la web (QA de comprobantes, H2; antes "Por pagar · …"). */
     expect(await lineasDeFactura(esc)).toEqual([
       ["Factura de Agosto / 2026", "Su saldo pasó a la factura siguiente"],
-      ["Factura de Septiembre / 2026", "Por pagar · $ 600.000"],
+      ["Factura de Septiembre / 2026", "Vencida · Por pagar $ 600.000"],
     ]);
   });
 

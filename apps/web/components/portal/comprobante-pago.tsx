@@ -28,6 +28,8 @@ type FacturaComprobante = {
   totalAPagar: number;
   totalConDescuento?: number | null;
   fechaLimiteDescuento?: number | null;
+  /** Pagos aprobados: la sugerencia de "¿Cuánto pagaste?" ya descuenta lo abonado (H1). */
+  estadoPago?: { estado: "pagada" | "abonada"; montoPagado: number } | null;
 };
 
 type Soporte = FunctionReturnType<typeof api.soportesPago.listMios>[number];

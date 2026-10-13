@@ -20,6 +20,7 @@ import {
   mensajePagoEnVerificacion,
   montoAPagarHoy,
   vencimientoDePeriodo,
+  type CarteraUnidad,
 } from "@vekino/backend/cartera";
 import { getDocumentPicker } from "@/lib/document-picker";
 import { openDocument } from "@/lib/open-document";
@@ -41,6 +42,7 @@ import {
   TEXTO_SIN_VERIFICAR,
   descuentoDe,
   estadoVisible,
+  montoDeFila,
   plazosDe,
   tarjetaFacturas,
 } from "@/lib/resumen-facturas";
@@ -134,6 +136,8 @@ type FacturaRow = {
   lecturaDudosa?: { motivos: string[]; confirmada?: unknown };
   /** Un pago registrado que la contabilidad aún no refleja (Fase 3). */
   pagoEnVerificacion?: { monto: number } | null;
+  /** Lo que prueban los pagos aprobados (Fase 3): un abono baja lo que falta. */
+  estadoPago?: { estado: "pagada" | "abonada"; montoPagado: number } | null;
 };
 
 export default function FacturasScreen() {
@@ -222,17 +226,20 @@ function PeriodoSelect({
 function FacturaListCard({
   f,
   cadena,
+  cartera,
   onPress,
   showResident,
 }: {
   f: FacturaRow;
   /** Las facturas de la misma unidad (Fase 4: "sin verificar"). */
   cadena?: FacturaRow[];
+  /** La cartera de hoy de su unidad: la vigente en mora se ve "vencida" (H2). */
+  cartera?: CarteraUnidad | null;
   onPress: () => void;
   showResident?: boolean;
 }) {
   const { theme } = useCondominio();
-  const estado = estadoVisible(f, cadena);
+  const estado = estadoVisible(f, cadena, cartera);
   const iconMeta = ESTADO_ICON[estado] ?? ESTADO_ICON.abonada;
   /* El descuento vale hasta SU fecha (la del documento, o el 15 del mes del
    * período), no hasta el vencimiento (Fase 3, F-06). */
@@ -292,7 +299,8 @@ function FacturaListCard({
           ) : null}
         </View>
         <View style={styles.facturaRight}>
-          <Text style={styles.facturaMonto}>{cop(f.totalAPagar)}</Text>
+          {/* En la vigente con un abono aprobado, lo que falta (H1). */}
+          <Text style={styles.facturaMonto}>{cop(montoDeFila(f, cadena))}</Text>
           <View style={[styles.glassAction, { backgroundColor: theme.accentSoft }]}>
             <Ionicons name="chevron-forward" size={18} color={theme.accent} />
           </View>
@@ -563,6 +571,7 @@ function ResidentFacturasView({
                     key={f._id}
                     f={f}
                     cadena={cadenaDe(f)}
+                    cartera={tarjeta.carteras.get(String(f.unidadId))}
                     onPress={() => setDetalle(f)}
                   />
                 ))}
@@ -575,6 +584,7 @@ function ResidentFacturasView({
       <FacturaDetalleModal
         detalle={detalle}
         cadena={detalle ? cadenaDe(detalle) : undefined}
+        cartera={detalle ? tarjeta.carteras.get(String(detalle.unidadId)) : undefined}
         condominioId={condominioId}
         onClose={() => setDetalle(null)}
       />
@@ -1084,12 +1094,15 @@ function CrearFacturaSheet({
 function FacturaDetalleModal({
   detalle,
   cadena,
+  cartera,
   condominioId,
   onClose,
 }: {
   detalle: FacturaRow | null;
   /** Las facturas de la misma unidad (Fase 4: "sin verificar" y la mora). */
   cadena?: FacturaRow[];
+  /** La cartera de hoy de su unidad: la vigente en mora se ve "vencida" (H2). */
+  cartera?: CarteraUnidad | null;
   condominioId?: Id<"condominios">;
   onClose: () => void;
 }) {
@@ -1341,8 +1354,8 @@ function FacturaDetalleModal({
               ) : null}
             </View>
             <GlassBadge
-              label={ESTADO_LABEL[estadoVisible(detalle, cadena) as EstadoVisible] ?? detalle.estado}
-              tone={ESTADO_TONE[estadoVisible(detalle, cadena) as EstadoVisible] ?? "neutral"}
+              label={ESTADO_LABEL[estadoVisible(detalle, cadena, cartera) as EstadoVisible] ?? detalle.estado}
+              tone={ESTADO_TONE[estadoVisible(detalle, cadena, cartera) as EstadoVisible] ?? "neutral"}
             />
           </View>
 
@@ -1526,7 +1539,7 @@ function FacturaDetalleModal({
              * decisión B), "sin verificar" en una histórica que nadie pudo
              * juzgar, y por qué no hay "Pagar" con la pasarela en pruebas. */
             const plazos = plazosDe(detalle);
-            const visible = estadoVisible(detalle, cadena);
+            const visible = estadoVisible(detalle, cadena, cartera);
             const esVigente = !(cadena ?? []).some((x) => x.periodo > detalle.periodo);
             const sinPagar = ["pendiente", "vencida", "abonada"].includes(detalle.estado);
             const nota = { color: SoftUI.textSecondary, fontSize: SoftUI.type.caption.size, fontFamily: AuthUI.font.regular };

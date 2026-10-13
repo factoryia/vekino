@@ -203,7 +203,11 @@ function Contenido({
                   {cop(f.totalAPagar)}
                 </td>
                 <td className="px-3 py-2">
-                  <Badge tone={ESTADO_TONE[f.estado]}>{ESTADO_LABEL[f.estado]}</Badge>
+                  {/* La vigente de una unidad en mora se ve "Vencida", como dice
+                      la cartera de arriba (QA de comprobantes, H2). */}
+                  <Badge tone={ESTADO_TONE[f.estadoVisible === "vencida" ? "vencida" : f.estado]}>
+                    {ESTADO_LABEL[f.estadoVisible === "vencida" ? "vencida" : f.estado]}
+                  </Badge>
                 </td>
               </tr>
             ))}

@@ -74,6 +74,14 @@ export type VeredictoGuardado = {
 export type PagoEnVerificacion = { monto: number };
 
 /**
+ * Lo que prueban los pagos APROBADOS de la factura —la pasarela y los
+ * comprobantes—, tal como lo guarda la conciliacion (`estadoPago`, Fase 3;
+ * lo calcula `evidenciaDePago` en `lib/estadoFactura.ts`). Un comprobante sin
+ * revisar o rechazado no esta aqui.
+ */
+export type EvidenciaGuardada = { estado: "pagada" | "abonada"; montoPagado: number };
+
+/**
  * Lo que hace falta de una factura para juzgar la cartera.
  *
  * `totalAPagar` NO es la cuota del mes: es la deuda acumulada a esa fecha,
@@ -99,7 +107,22 @@ export type FacturaCartera = {
   lecturaDudosa?: LecturaDudosa | null;
   veredictoContable?: VeredictoGuardado | null;
   pagoEnVerificacion?: PagoEnVerificacion | null;
+  estadoPago?: EvidenciaGuardada | null;
 };
+
+/**
+ * Si el saldo anterior de la factura es un dato de la contabilidad, es decir,
+ * si la factura puede decir algo de la ANTERIOR.
+ *
+ * Una factura hecha a mano (`facturas.createManual`) no: el formulario no
+ * pide saldo anterior y sus lineas lo traen en 0 porque nadie lo escribio.
+ * Leer ese 0 como "la anterior quedo pagada" inventaba un pago que nadie hizo
+ * y lo sumaba al recaudo (QA de comprobantes, H4). Cuando llega el PDF del
+ * mismo periodo la reemplaza (`model/facturas.ts`), y ese si habla.
+ */
+export function informaSaldoAnterior(f: { origen?: string | null }): boolean {
+  return f.origen !== "manual";
+}
 
 /**
  * Deuda que la factura declara arrastrar del periodo anterior.
@@ -173,6 +196,12 @@ export type Veredicto = "pagada" | "abonada" | "vencida" | "saldo_a_favor" | "si
  * con un documento que no cuadra no se decide si la anterior se pago. Quien
  * llama conserva el veredicto que ya tenia.
  *
+ * Tambien `null` si la siguiente es una factura hecha a mano: su saldo
+ * anterior no lo escribio nadie (`informaSaldoAnterior`), asi que no dice si
+ * la anterior se pago. Con ella la anterior no se juzga; ver
+ * `calcularCadena` (`lib/estadoFactura.ts`), que ademas descarta lo que una
+ * manual le hubiera puesto antes.
+ *
  * Es la regla de la conciliacion (`model/estadoFactura.ts`) y la del
  * re-procesamiento (`lib/reproceso.ts`): una sola, para que lo que se simula
  * sea lo que se aplica.
@@ -184,8 +213,10 @@ export function veredictoConciliacion(
     lineas: readonly LineaFactura[];
     saldoAnteriorDocumento?: number;
     lecturaDudosa?: LecturaDudosa | null;
+    origen?: string | null;
   },
 ): Veredicto | null {
+  if (!informaSaldoAnterior(siguiente)) return null;
   if (enRevision(anterior) || enRevision(siguiente)) return null;
   const deuda = saldoAnteriorDe(siguiente);
   if (deuda <= TOLERANCIA_PAGO) return anterior.totalAPagar < 0 ? "saldo_a_favor" : "pagada";
@@ -290,6 +321,31 @@ export function conEvidenciaTotalDePago(estado: EstadoFactura): boolean {
 /** Dias completos entre el vencimiento y hoy. Negativo si aun no vence. */
 export function diasDesde(vencimiento: number, ahora: number): number {
   return Math.floor((ahora - vencimiento) / DIA);
+}
+
+/**
+ * Lo ya abonado a la factura que todavia no la salda: lo que prueban sus
+ * pagos aprobados (`estadoPago`) si con ellos quedo `abonada`. 0 sin pagos, y
+ * 0 si ya quedo pagada: entonces no hay saldo del cual descontarlo.
+ */
+export function abonoAprobado(f: { estadoPago?: EvidenciaGuardada | null }): number {
+  return f.estadoPago?.estado === "abonada" ? Math.max(0, f.estadoPago.montoPagado) : 0;
+}
+
+/**
+ * Lo que queda de la deuda que reclama la factura: su total menos lo ya
+ * abonado, y nada si esta saldada (`conEvidenciaTotalDePago`). Sin descuento:
+ * es la deuda, no el cobro de hoy (ese es `montoAPagarHoy`).
+ *
+ * Una factura `abonada` sin el monto de sus abonos (un estado heredado de
+ * antes de la Fase 3) reporta el total: preferir pasarse a quedarse corto.
+ */
+function saldoPendienteDe(f: {
+  estado: EstadoFactura;
+  totalAPagar: number;
+  estadoPago?: EvidenciaGuardada | null;
+}): number {
+  return conEvidenciaTotalDePago(f.estado) ? 0 : f.totalAPagar - abonoAprobado(f);
 }
 
 /** Las facturas del periodo mas reciente de la cadena. Normalmente una. */
@@ -465,8 +521,9 @@ export function leerMontoPesos(texto: string): number | null {
  * ── De donde sale entonces el saldo vigente ──────────────────────────────
  * De la ultima factura de la cadena, porque el modelo garantiza que arrastra
  * todo lo anterior. Cuanto queda de ella lo diria la factura siguiente —su
- * saldo anterior—, pero esa todavia no existe, asi que lo dice su estado:
- * saldada si esta `pagada` o en `saldo_a_favor`, y el total entero si no.
+ * saldo anterior—, pero esa todavia no existe, asi que lo dicen su estado y
+ * sus pagos aprobados: saldada si esta `pagada` o en `saldo_a_favor`, y si no
+ * el total menos lo ya abonado (`saldoPendienteDe`).
  *
  * ── La mora es otra pregunta ─────────────────────────────────────────────
  * La decide el ultimo periodo que YA vencio, no el mas antiguo sin pagar.
@@ -527,14 +584,13 @@ export function carteraDeUnidad(
    * reporta la que mas debe. */
   const ultimas = delUltimoPeriodo(facturas);
 
-  /* Si la vigente estuviera `abonada` no se sabria cuanto se abono —eso lo
-   * diria la siguiente, que no existe—, asi que se reporta el total. Preferir
-   * pasarse a quedarse corto: una deuda subestimada en pantalla es peor que
-   * una que el detalle matiza. */
-  const saldoActual = Math.max(
-    0,
-    ...ultimas.map((f) => (conEvidenciaTotalDePago(f.estado) ? 0 : f.totalAPagar)),
-  );
+  /* Si la vigente esta `abonada`, lo abonado lo dicen sus pagos aprobados
+   * (`estadoPago`, Fase 3): se descuenta. Antes se reportaba el total —"eso lo
+   * diria la siguiente, que no existe"— y un abono aprobado no bajaba la
+   * deuda en ninguna pantalla (QA de comprobantes, H1). Sin ese monto (un
+   * estado heredado) se sigue reportando el total: preferir pasarse a
+   * quedarse corto. */
+  const saldoActual = Math.max(0, ...ultimas.map(saldoPendienteDe));
 
   const base: CarteraUnidad = {
     ...vacia,
@@ -784,8 +840,21 @@ export function descuentoVigente(
 
 /**
  * Lo que se cobra HOY por la factura: con descuento si todavia vale, y si no
- * el total. Es lo que cobra la pasarela (`pagos.armarDatosTrn`) y lo que
- * muestran la web, el movil, el bot y el agente.
+ * el total, MENOS lo que ya se abono. Es lo que cobra la pasarela
+ * (`pagos.armarDatosTrn`) y lo que muestran la web, el movil, el bot, el
+ * agente y la campana, y de donde parte la revision de un comprobante.
+ *
+ * ── Abonos (QA de comprobantes, H1) ──────────────────────────────────────
+ * Antes solo elegia entre el total y el total con descuento: aprobado un
+ * abono de $200.000 de $335.000, se seguian mostrando y cobrando $335.000.
+ * Ahora es la regla de `evidenciaDePago` vista desde el cobro: pagar hoy esto
+ * deja la factura pagada.
+ *   · Con el descuento vigente, lo pagado dentro del plazo suma para el, asi
+ *     que falta el total con descuento menos lo abonado.
+ *   · Vencido el descuento, falta el total menos lo abonado.
+ *   · Si los pagos ya la saldaron, nada. Nunca negativo.
+ * Solo cuentan los pagos aprobados (`estadoPago`): un comprobante en
+ * revision o rechazado no descuenta nada.
  */
 export function montoAPagarHoy(
   f: {
@@ -793,10 +862,27 @@ export function montoAPagarHoy(
     totalAPagar: number;
     totalConDescuento?: number | null;
     fechaLimiteDescuento?: number | null;
+    estadoPago?: EvidenciaGuardada | null;
   },
   ahora: number,
 ): number {
-  return descuentoVigente(f, ahora) ? (f.totalConDescuento as number) : f.totalAPagar;
+  if (f.estadoPago?.estado === "pagada") return 0;
+  const monto = descuentoVigente(f, ahora) ? (f.totalConDescuento as number) : f.totalAPagar;
+  const abonado = abonoAprobado(f);
+  return abonado > 0 ? Math.max(0, monto - abonado) : monto;
+}
+
+/**
+ * Lo que se cobra cuando ya no vale el descuento: el total menos lo abonado.
+ * Es el "Después $ X" que acompaña al precio con descuento.
+ */
+export function montoSinDescuento(f: {
+  totalAPagar: number;
+  estadoPago?: EvidenciaGuardada | null;
+}): number {
+  if (f.estadoPago?.estado === "pagada") return 0;
+  const abonado = abonoAprobado(f);
+  return abonado > 0 ? Math.max(0, f.totalAPagar - abonado) : f.totalAPagar;
 }
 
 /**
@@ -931,6 +1017,12 @@ export function textosDePlazos(f: {
  *   siguiente (julio en Ciudad del Campo, mayo en parte de Arboleda) o se
  *   cargo antes de tiempo—: no se sabe si se pago. Mostrarla "Pendiente"
  *   decia que se debe, y lo que se debe hoy ya esta en la vigente.
+ * - `vencida`: es la VIGENTE, sigue `pendiente` y la unidad esta HOY en mora
+ *   (`cartera`, de `carteraDeUnidad`). En la base sigue `pendiente` porque
+ *   ninguna factura posterior la ha juzgado (`vencida` como estado lo pone
+ *   solo un veredicto), pero ya paso la fecha de mora y nada la cubre. Antes
+ *   el resumen y la tarjeta decian "Vencida" y la fila, Finanzas y la campana
+ *   "Pendiente" (QA de comprobantes, H2). Sin `cartera` no se juzga la mora.
  * - Cualquier otra: su estado.
  *
  * `cadena` son las facturas de la misma unidad (con la factura incluida).
@@ -945,6 +1037,7 @@ export function estadoVisibleDeFactura(
     pagoEnVerificacion?: PagoEnVerificacion | null;
   },
   cadena: readonly { periodo: string }[],
+  cartera?: Pick<CarteraUnidad, "estado"> | null,
 ): EstadoVisible {
   if (enRevision(f)) return "en_revision";
   if (f.pagoEnVerificacion) return "en_verificacion";
@@ -952,7 +1045,22 @@ export function estadoVisibleDeFactura(
   const historica =
     ultimas.length > 0 && f.periodo.localeCompare(ultimas[0]!.periodo) < 0;
   if (historica && f.estado === "pendiente") return "sin_verificar";
+  if (!historica && f.estado === "pendiente" && cartera?.estado === "en_mora") return "vencida";
   return f.estado as EstadoFactura;
+}
+
+/**
+ * El estado que se muestra de CADA factura de una unidad, con su cartera de
+ * hoy: lo que usan Finanzas, el estado de cuenta, la campana y el bot para no
+ * contradecir a la cartera (`estadoVisibleDeFactura`). `cadena`: todas las
+ * facturas de la unidad, en cualquier orden.
+ */
+export function estadosVisiblesDeUnidad<F extends FacturaCartera & { _id: string }>(
+  cadena: readonly F[],
+  ahora: number,
+): Map<string, EstadoVisible> {
+  const cartera = carteraDeUnidad(cadena, ahora);
+  return new Map(cadena.map((f) => [f._id, estadoVisibleDeFactura(f, cadena, cartera)]));
 }
 
 export const ETIQUETA_SIN_VERIFICAR = "Sin verificar";

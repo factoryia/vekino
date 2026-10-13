@@ -510,11 +510,13 @@ export default function CondominioHome() {
                             {cop(f.totalAPagar)}
                           </td>
                           <td className="px-2 py-3 align-middle">
+                            {/* La vigente de una unidad en mora se ve "Vencida"
+                                aunque se guarde `pendiente` (H2). */}
                             <Badge
-                              tone={ESTADO_TONE[f.estado] ?? "neutral"}
+                              tone={ESTADO_TONE[f.estadoVisible === "vencida" ? "vencida" : f.estado] ?? "neutral"}
                               className="max-w-full truncate text-[10px]"
                             >
-                              {ESTADO_LABEL[f.estado] ?? f.estado}
+                              {ESTADO_LABEL[f.estadoVisible === "vencida" ? "vencida" : f.estado] ?? f.estado}
                             </Badge>
                           </td>
                         </tr>

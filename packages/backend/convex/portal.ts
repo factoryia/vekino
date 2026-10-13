@@ -6,6 +6,7 @@ import {
   getMembership,
   hasPlatformRole,
   misUnidadIds,
+  vigentes,
 } from "./model/authz";
 import { displayNameFromUser } from "./model/displayName";
 import { resolveUserImage } from "./model/userImage";
@@ -53,10 +54,16 @@ export const home = query({
     }[] = [];
 
     if (membership) {
-      const links = await ctx.db
-        .query("usuarioUnidad")
-        .withIndex("by_membership", (q) => q.eq("membershipId", membership._id))
-        .collect();
+      /* Solo los vínculos VIGENTES (`vigentes`, la regla de `misUnidadIds`):
+       * con el contrato vencido, el encabezado, "Mi unidad" y cada pantalla
+       * que parte de aquí dejan de ofrecer la casa (QA de comprobantes, H3).
+       * La persona sigue siendo del conjunto: avisos, PQRS, documentos. */
+      const links = vigentes(
+        await ctx.db
+          .query("usuarioUnidad")
+          .withIndex("by_membership", (q) => q.eq("membershipId", membership._id))
+          .collect(),
+      );
 
       const rows = await Promise.all(
         links.map(async (l) => {
@@ -151,11 +158,8 @@ export const misActividades = query({
     }[] = [];
 
     if (membership) {
-      const links = await ctx.db
-        .query("usuarioUnidad")
-        .withIndex("by_membership", (q) => q.eq("membershipId", membership._id))
-        .collect();
-      const unidadIds = new Set(links.map((l) => l.unidadId));
+      /* Las reservas de sus casas de HOY: un vínculo vencido no cuenta. */
+      const unidadIds = await misUnidadIds(ctx, user._id, args.condominioId);
 
       if (unidadIds.size > 0) {
         const reservas = await ctx.db
@@ -274,11 +278,9 @@ export const navBadges = query({
      * porque ninguna factura posterior la ha juzgado) sumaba 0. */
     let facturasVencidas = 0;
     if (membership) {
-      const links = await ctx.db
-        .query("usuarioUnidad")
-        .withIndex("by_membership", (q) => q.eq("membershipId", membership._id))
-        .collect();
-      const unidadIds = [...new Set(links.map((l) => l.unidadId))];
+      /* Solo sus casas de hoy: la mora de una casa donde ya no vive no es
+       * suya (QA de comprobantes, H3). */
+      const unidadIds = [...(await misUnidadIds(ctx, user._id, args.condominioId))];
       const ahora = Date.now();
       const carteras = await Promise.all(
         unidadIds.map(async (unidadId) => {

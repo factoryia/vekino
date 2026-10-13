@@ -1,5 +1,6 @@
 import {
   enRevision,
+  informaSaldoAnterior,
   periodoSiguiente,
   saldoAnteriorDe,
   type LecturaDudosa,
@@ -30,6 +31,10 @@ import {
  *      pero tienen la misma falla (en agosto de 2026 de Ciudad del Campo, 44:
  *      totales en $0 o sin las hojas de continuacion). Con ellas la cuenta da
  *      cualquier cosa —hasta un recaudo negativo—.
+ *    - Ni si N+1 es una factura hecha a mano (`siguienteManual`): su saldo
+ *      anterior no es de la contabilidad (`informaSaldoAnterior`), y leerlo
+ *      como $0 contaba como recaudada una cuota que nadie pago (QA de
+ *      comprobantes, H4).
  *    No se rellena ni se estima: se informa cuantas unidades quedaron fuera.
  *
  * 2. **Recaudo registrado en Vekino.** Los pagos de la pasarela aprobados y
@@ -48,6 +53,7 @@ export type FacturaRecaudo = {
   lineas: readonly LineaFactura[];
   saldoAnteriorDocumento?: number;
   lecturaDudosa?: LecturaDudosa | null;
+  origen?: string | null;
 };
 
 export type RecaudoContable = {
@@ -63,6 +69,8 @@ export type RecaudoContable = {
   enRevision: number;
   /** N o N+1 tienen lineas que no suman su total (cargas anteriores a la Fase 2). */
   noCuadra: number;
+  /** N+1 es una factura hecha a mano: no trae el saldo anterior de la contabilidad. */
+  siguienteManual: number;
 };
 
 const vacio = (): RecaudoContable => ({
@@ -72,6 +80,7 @@ const vacio = (): RecaudoContable => ({
   mesFaltante: 0,
   enRevision: 0,
   noCuadra: 0,
+  siguienteManual: 0,
 });
 
 /** Si las lineas de la factura suman su total (±$1, la tolerancia del cuadre). */
@@ -99,6 +108,10 @@ export function recaudoContablePorPeriodo(
     if (!siguiente) {
       if (periodosDelConjunto.has(sig)) r.mesFaltante++;
       else r.sinSiguiente++;
+      continue;
+    }
+    if (!informaSaldoAnterior(siguiente)) {
+      r.siguienteManual++;
       continue;
     }
     if (enRevision(f) || enRevision(siguiente)) {

@@ -14,10 +14,12 @@ import {
   enRevision,
   estadoCuentaDeCadena,
   estadoVisibleDeFactura,
+  estadosVisiblesDeUnidad,
   facturasDelResidente,
   formatoPesos,
   periodoSiguiente,
   periodosConsecutivos,
+  type EstadoVisible,
 } from "./lib/cartera";
 import {
   PERIODO_VALIDO,
@@ -206,13 +208,15 @@ export const listByPeriodo = query({
   },
   handler: async (ctx, args) => {
     await requireCondominioRole(ctx, args.condominioId, [...CARTERA_ROLES]);
-    return await ctx.db
+    const filas = await ctx.db
       .query("facturas")
       .withIndex("by_condominio_periodo", (q) =>
         q.eq("condominioId", args.condominioId).eq("periodo", args.periodo)
       )
       .order("asc")
       .collect();
+    /* Con el estado que se muestra, como `listPage` (QA de comprobantes, H2). */
+    return await conEstadoVisible(ctx, filas);
   },
 });
 
@@ -233,7 +237,8 @@ export const listRecentByPeriodo = query({
       )
       .order("desc")
       .take(limit);
-    return rows;
+    /* Con el estado que se muestra, como `listPage` (QA de comprobantes, H2). */
+    return await conEstadoVisible(ctx, rows);
   },
 });
 
@@ -270,8 +275,14 @@ export const listPage = query({
         )
         .order("desc")
         .take(250);
+      /* Filtrar por "pendiente" o "vencida" es filtrar por lo que se muestra:
+       * la vigente en mora es "vencida" aunque se guarde `pendiente`. */
+      const visibles =
+        estado === "pendiente" || estado === "vencida"
+          ? await estadosVisibles(ctx, scan)
+          : new Map<string, EstadoVisible>();
       const filtered = scan.filter((f) => {
-        if (estado && f.estado !== estado) return false;
+        if (estado && estadoDeFinanzas(f, visibles) !== estado) return false;
         if (!needle) return true;
         return (
           f.residenteNombre.toLowerCase().includes(needle) ||
@@ -300,28 +311,68 @@ export const listPage = query({
 });
 
 /**
- * Cada factura con el estado que se le MUESTRA (Fase 4, `estadoVisibleDeFactura`):
+ * Cada factura con el estado que se le MUESTRA (`estadoVisibleDeFactura`):
  * una historica que quedo `pendiente` se ve "Sin verificar" —falta el estado
- * de cuenta siguiente para saber si se pago—. Para saber si es historica basta
- * el periodo mas reciente de su unidad. El campo `estado` no cambia.
+ * de cuenta siguiente para saber si se pago— (Fase 4), y la vigente de una
+ * unidad que HOY esta en mora se ve "Vencida", como la ven la cartera y el
+ * residente (QA de comprobantes, H2). El campo `estado` no cambia.
  */
 async function conEstadoVisible(ctx: QueryCtx, filas: Doc<"facturas">[]) {
-  const ultimoDe = new Map<string, string>();
-  for (const f of filas) {
-    if (ultimoDe.has(f.unidadId)) continue;
-    const ultima = await ctx.db
+  const visibles = await estadosVisibles(ctx, filas);
+  return filas.map((f) => ({ ...f, estadoVisible: visibles.get(f._id)! }));
+}
+
+/** Las facturas de una unidad en el conjunto: la cadena que juzga la conciliacion. */
+async function cadenaDeUnidad(
+  ctx: QueryCtx,
+  condominioId: Id<"condominios">,
+  unidadId: Id<"unidades">,
+) {
+  return (
+    await ctx.db
       .query("facturas")
-      .withIndex("by_condominio_unidad_periodo", (q) =>
-        q.eq("condominioId", f.condominioId).eq("unidadId", f.unidadId),
-      )
-      .order("desc")
-      .first();
-    ultimoDe.set(f.unidadId, ultima?.periodo ?? f.periodo);
-  }
-  return filas.map((f) => ({
-    ...f,
-    estadoVisible: estadoVisibleDeFactura(f, [f, { periodo: ultimoDe.get(f.unidadId)! }]),
-  }));
+      .withIndex("by_unidad", (q) => q.eq("unidadId", unidadId))
+      .collect()
+  ).filter((f) => f.condominioId === condominioId);
+}
+
+/**
+ * El estado visible de cada factura de `filas`, con la cartera de hoy de su
+ * unidad (`estadosVisiblesDeUnidad`).
+ *
+ * Solo una `pendiente` puede verse distinta de su estado guardado ("Sin
+ * verificar" si es histórica, "Vencida" si es la vigente de una unidad en
+ * mora), así que solo las unidades con alguna leen su cadena, una vez cada
+ * una. Para las demás basta la propia factura.
+ */
+async function estadosVisibles(
+  ctx: QueryCtx,
+  filas: readonly Doc<"facturas">[],
+): Promise<Map<string, EstadoVisible>> {
+  const ahora = Date.now();
+  const unidades = new Map<Id<"unidades">, Id<"condominios">>();
+  for (const f of filas) if (f.estado === "pendiente") unidades.set(f.unidadId, f.condominioId);
+  const salida = new Map<string, EstadoVisible>();
+  await Promise.all(
+    [...unidades].map(async ([unidadId, condominioId]) => {
+      const cadena = await cadenaDeUnidad(ctx, condominioId, unidadId);
+      for (const [id, visible] of estadosVisiblesDeUnidad(cadena, ahora)) salida.set(id, visible);
+    }),
+  );
+  for (const f of filas) if (!salida.has(f._id)) salida.set(f._id, estadoVisibleDeFactura(f, [f]));
+  return salida;
+}
+
+/**
+ * El estado con el que Finanzas cuenta y filtra: el guardado, salvo la
+ * vigente de una unidad en mora, que se cuenta "vencida" (la regla de
+ * `estadoVisibleDeFactura`). Asi el total sigue siendo la suma de los estados.
+ */
+function estadoDeFinanzas(
+  f: Doc<"facturas">,
+  visibles: ReadonlyMap<string, EstadoVisible>,
+): Doc<"facturas">["estado"] {
+  return f.estado === "pendiente" && visibles.get(f._id) === "vencida" ? "vencida" : f.estado;
 }
 
 /** Una factura como la necesita `lib/recaudo.ts`. */
@@ -334,6 +385,7 @@ function aRecaudo(f: Doc<"facturas">): FacturaRecaudo {
     lineas: f.lineas,
     saldoAnteriorDocumento: f.saldoAnteriorDocumento,
     lecturaDudosa: f.lecturaDudosa,
+    origen: f.origen,
   };
 }
 
@@ -372,6 +424,8 @@ function cifrasDeRecaudo(contable: RecaudoContable | undefined, vekino: RecaudoV
       mesFaltante: contable?.mesFaltante ?? 0,
       enRevision: contable?.enRevision ?? 0,
       noCuadra: contable?.noCuadra ?? 0,
+      /** El mes siguiente es una factura hecha a mano: no trae saldo anterior (H4). */
+      siguienteManual: contable?.siguienteManual ?? 0,
     },
     /** Registrado en Vekino: pagos y comprobantes aprobados. */
     recaudoVekino: vekino?.monto ?? 0,
@@ -414,11 +468,19 @@ export const resumenPeriodo = query({
           .collect()
       : [];
 
+    /* "Vencidas" son las que se MUESTRAN vencidas: las que la conciliación
+     * juzgó así y la vigente de una unidad que hoy está en mora, que sigue
+     * `pendiente` en la base (QA de comprobantes, H2: decía 0 con una casa en
+     * mora). Solo una `pendiente` puede cambiar, así que solo esas leen su
+     * cadena. */
+    const visibles = await estadosVisibles(ctx, rows);
+    const estados = rows.map((r) => estadoDeFinanzas(r, visibles));
+
     const total = rows.length;
-    const pagadas = rows.filter((r) => r.estado === "pagada").length;
-    const pendientes = rows.filter((r) => r.estado === "pendiente").length;
-    const vencidas = rows.filter((r) => r.estado === "vencida").length;
-    const abonadas = rows.filter((r) => r.estado === "abonada").length;
+    const pagadas = estados.filter((e) => e === "pagada").length;
+    const pendientes = estados.filter((e) => e === "pendiente").length;
+    const vencidas = estados.filter((e) => e === "vencida").length;
+    const abonadas = estados.filter((e) => e === "abonada").length;
     const saldoAFavorCount = rows.filter((r) => r.estado === "saldo_a_favor").length;
     const sumaTotalAPagar = rows.reduce((s, r) => s + r.totalAPagar, 0);
     /** @deprecated (F-19) Suma del total de las pagadas: NO es recaudo. */
@@ -493,7 +555,24 @@ export const serie = query({
       }
     >();
 
+    /* El estado con que se cuenta, como en `resumenPeriodo`: la vigente de
+     * una unidad en mora cuenta "vencida" (H2). Las facturas ya están todas
+     * aquí: se agrupan por unidad sin leer nada más. */
+    const porUnidad = new Map<string, Doc<"facturas">[]>();
     for (const r of rows) {
+      const cadena = porUnidad.get(r.unidadId);
+      if (cadena) cadena.push(r);
+      else porUnidad.set(r.unidadId, [r]);
+    }
+    const ahora = Date.now();
+    const visibles = new Map<string, EstadoVisible>();
+    for (const cadena of porUnidad.values()) {
+      if (!cadena.some((f) => f.estado === "pendiente")) continue;
+      for (const [id, visible] of estadosVisiblesDeUnidad(cadena, ahora)) visibles.set(id, visible);
+    }
+
+    for (const r of rows) {
+      const estado = estadoDeFinanzas(r, visibles);
       let e = map.get(r.periodo);
       if (!e) {
         e = {
@@ -510,15 +589,15 @@ export const serie = query({
       }
       e.total++;
       e.sumaTotalAPagar += r.totalAPagar;
-      if (r.estado === "pagada") {
+      if (estado === "pagada") {
         e.pagadas++;
         /* @deprecated (F-19): suma del total de las pagadas; NO es recaudo. */
         e.sumaPagado += r.totalAPagar;
-      } else if (r.estado === "pendiente") {
+      } else if (estado === "pendiente") {
         e.pendientes++;
-      } else if (r.estado === "vencida") {
+      } else if (estado === "vencida") {
         e.vencidas++;
-      } else if (r.estado === "abonada") {
+      } else if (estado === "abonada") {
         e.abonadas++;
       }
     }
@@ -1742,8 +1821,12 @@ export const estadoCuentaUnidad = query({
       .sort((a, b) => a.periodo.localeCompare(b.periodo));
 
     const ahora = Date.now();
+    const cartera = carteraDeUnidad(cadena, ahora);
     const filas = estadoCuentaDeCadena(cadena).map((fila, i) => ({
       ...fila,
+      /* Lo que se muestra: la vigente de una unidad en mora es "vencida",
+       * como dice la cartera de arriba (QA de comprobantes, H2). */
+      estadoVisible: estadoVisibleDeFactura(cadena[i]!, cadena, cartera),
       _id: cadena[i]!._id,
       numeroFactura: cadena[i]!.numeroFactura,
       fechaEmision: cadena[i]!.fechaEmision,
@@ -1757,7 +1840,7 @@ export const estadoCuentaUnidad = query({
         torre: unidad.torre ?? null,
         residenteNombre: cadena[cadena.length - 1]?.residenteNombre ?? null,
       },
-      cartera: carteraDeUnidad(cadena, ahora),
+      cartera,
       /* De la más reciente hacia atrás: es el orden en el que se lee un
        * estado de cuenta. */
       facturas: filas.reverse(),

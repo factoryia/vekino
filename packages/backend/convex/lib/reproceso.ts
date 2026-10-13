@@ -4,6 +4,7 @@ import {
   type CarteraUnidad,
   type EstadoCartera,
   type EstadoFactura,
+  type EvidenciaGuardada,
   type LineaFactura,
 } from "./cartera";
 import {
@@ -93,8 +94,11 @@ export type FacturaGuardada = {
   saldoAnteriorDocumento?: number;
   lecturaDudosa?: MarcaLectura;
   veredictoContable?: (VeredictoContable & { at?: number }) | null;
-  estadoPago?: { estado: "pagada" | "abonada" } | null;
+  /** Con su monto: lo abonado baja el saldo de la vigente (`carteraDeUnidad`). */
+  estadoPago?: EvidenciaGuardada | null;
   pagoEnVerificacion?: { monto: number } | null;
+  /** Por dónde entró: una `manual` no juzga a la anterior (`informaSaldoAnterior`). */
+  origen?: string | null;
 };
 
 /** Por qué una factura se deja como está. */

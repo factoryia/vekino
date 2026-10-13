@@ -8,6 +8,7 @@ import type { Id } from "@vekino/backend/dataModel";
 import { Car, Plus, Archive, ArchiveRestore, X, Loader2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
+import { TEXTO_SIN_UNIDAD, TITULO_SIN_UNIDAD } from "@/components/portal/portal-ui";
 import { cn } from "@/lib/utils";
 
 const TIPOS = [
@@ -27,6 +28,9 @@ export default function Vehiculos() {
   const [formOpen, setFormOpen] = useState(false);
 
   const unidades = home && home.allowed ? home.unidades : [];
+  /* Sin una casa vinculada HOY no se ofrece registrar: el backend tampoco lo
+   * acepta (`misUnidadIds`; QA de comprobantes, H3). */
+  const sinUnidad = home !== undefined && unidades.length === 0;
 
   return (
     <div className="space-y-6 py-2">
@@ -42,7 +46,7 @@ export default function Vehiculos() {
             </p>
           </div>
         </div>
-        {vehiculos && vehiculos.length > 0 && (
+        {vehiculos && vehiculos.length > 0 && !sinUnidad && (
           <button
             onClick={() => setFormOpen(true)}
             className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand px-4 text-sm font-semibold text-brand-foreground shadow-sm transition-colors hover:bg-brand/90"
@@ -56,6 +60,14 @@ export default function Vehiculos() {
       {vehiculos === undefined ? (
         <Card className="p-12">
           <Spinner className="mx-auto h-5 w-5" />
+        </Card>
+      ) : vehiculos.length === 0 && sinUnidad ? (
+        <Card className="flex flex-col items-center gap-3 p-12 text-center">
+          <Car className="h-12 w-12 text-muted-foreground/40" />
+          <div>
+            <p className="text-base font-semibold text-foreground">{TITULO_SIN_UNIDAD}</p>
+            <p className="mt-1 text-sm text-muted-foreground">{TEXTO_SIN_UNIDAD}</p>
+          </div>
         </Card>
       ) : vehiculos.length === 0 ? (
         <Card className="flex flex-col items-center gap-3 p-12 text-center">
@@ -84,7 +96,7 @@ export default function Vehiculos() {
         </div>
       )}
 
-      {formOpen && (
+      {formOpen && !sinUnidad && (
         <VehiculoForm
           condominioId={condominioId}
           unidades={unidades}

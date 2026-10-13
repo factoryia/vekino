@@ -24,7 +24,7 @@ import {
 import { SoftHomeHeader } from "@/components/ui/soft-home-header";
 import { Tap } from "@/components/ui/tap";
 import { cop, fmtPeriodo, formatDisplayName, greetingName } from "@/lib/utils";
-import { estadoVisible, tarjetaFacturas } from "@/lib/resumen-facturas";
+import { estadoVisible, montoDeFila, tarjetaFacturas } from "@/lib/resumen-facturas";
 import { useCondominio } from "@/context/condominio-context";
 import { C } from "@/lib/theme";
 import { AuthUI } from "@/lib/auth-ui";
@@ -501,9 +501,13 @@ function ResidentHome({
               ) : (
                 <View style={{ gap: SoftUI.space.md }}>
                   {facturas.slice(0, 3).map((f) => {
+                    const cadena = facturas.filter((x) => x.unidadId === f.unidadId);
+                    /* Con la cartera de su unidad: la vigente en mora se ve
+                     * "vencida" (H2), y con un abono, lo que falta (H1). */
                     const estado = estadoVisible(
                       f,
-                      facturas.filter((x) => x.unidadId === f.unidadId),
+                      cadena,
+                      tarjeta.carteras.get(String(f.unidadId)),
                     );
                     const iconMeta =
                       ESTADO_ICON[estado] ?? ESTADO_ICON.abonada;
@@ -543,7 +547,7 @@ function ResidentHome({
                           </View>
                           <View style={styles.facturaRight}>
                             <Text style={styles.facturaMonto}>
-                              {cop(f.totalAPagar)}
+                              {cop(montoDeFila(f, cadena))}
                             </Text>
                             <View style={styles.glassAction}>
                               <Ionicons

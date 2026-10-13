@@ -70,9 +70,15 @@ const ESTADO_LABEL: Record<string, string> = {
 /** La fila de la tabla: la factura y el estado que se muestra (Fase 4). */
 type Factura = Doc<"facturas"> & { estadoVisible?: string };
 
-/** "Sin verificar" en vez de "Pendiente" para una historica (Fase 4); si no, el estado. */
+/**
+ * "Sin verificar" en vez de "Pendiente" para una historica (Fase 4), y
+ * "Vencida" para la vigente de una unidad en mora, que se guarda `pendiente`
+ * (QA de comprobantes, H2); si no, el estado.
+ */
 function estadoMostrado(f: Factura): string {
-  return f.estadoVisible === "sin_verificar" ? "sin_verificar" : f.estado;
+  return f.estadoVisible === "sin_verificar" || f.estadoVisible === "vencida"
+    ? f.estadoVisible
+    : f.estado;
 }
 
 function useDebounced(value: string, ms: number) {

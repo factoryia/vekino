@@ -8,15 +8,19 @@ import type { Id } from "@vekino/backend/dataModel";
 import {
   ETIQUETA_SIN_VERIFICAR,
   TEXTO_SIN_VERIFICAR,
+  abonoAprobado,
   descuentoVigente,
   estadoVisibleDeFactura,
   fechaLimiteDescuentoDe,
   inicioDeMora,
   mensajePagoEnVerificacion,
   montoAPagarHoy as montoDeHoy,
+  montoSinDescuento,
   resumenResidente,
+  type CarteraUnidad,
 } from "@vekino/backend/cartera";
 import {
+  Building2,
   PiggyBank,
   CalendarCheck,
   MessageSquareWarning,
@@ -37,6 +41,8 @@ import { ComprobantePago } from "@/components/portal/comprobante-pago";
 import { cop, cn } from "@/lib/utils";
 import {
   ESTADO_FACTURA,
+  TEXTO_SIN_UNIDAD,
+  TITULO_SIN_UNIDAD,
   etiquetaUnidad,
   fechaLarga,
   fechaISO,
@@ -71,6 +77,8 @@ type Factura = {
   }[];
   /** Un pago registrado que la contabilidad aún no refleja (Fase 3). */
   pagoEnVerificacion?: { monto: number } | null;
+  /** Lo que prueban los pagos aprobados (Fase 3): un abono baja lo que falta. */
+  estadoPago?: { estado: "pagada" | "abonada"; montoPagado: number } | null;
   unidadNumero?: string;
   unidadTipo?: string;
   unidadTorre?: string | null;
@@ -79,8 +87,9 @@ type Factura = {
 /**
  * Monto que aplica HOY: la regla del backend de pagos (`lib/cartera.ts`).
  * El descuento vale hasta SU fecha —la del documento, o el 15 del mes del
- * período—, no hasta el vencimiento (Fase 3, F-06). La última factura ya
- * consolida saldos anteriores.
+ * período—, no hasta el vencimiento (Fase 3, F-06), y lo ya abonado no se
+ * vuelve a cobrar (QA de comprobantes, H1). La última factura ya consolida
+ * saldos anteriores.
  */
 /**
  * Los dos plazos de la vigente (Fase 4, decisión B): hasta cuándo se paga el
@@ -139,7 +148,11 @@ export default function PortalInicio() {
    * (`lib/cartera.ts`): por unidad, la deuda es su factura vigente, que ya
    * absorbe a las anteriores. El historial no pinta mora ni se ofrece. */
   const resumen = resumenResidente(lista, Date.now());
+  /* Sin ninguna casa vinculada HOY no se dice "Estás al día" (H3). */
+  const sinUnidad = !home.isPlatform && home.unidades.length === 0;
   const estaAlDia = resumen.estado === "al_dia" || resumen.estado === "sin_facturas";
+  /* Con la cartera de su unidad, cada fila se rotula como la ve la cartera (H2). */
+  const carteras = new Map(resumen.unidades.map((u) => [String(u.unidadId), u.cartera]));
   const pagables = resumen.pagables;
   const totalPendiente = pagables.reduce((s, f) => s + montoAPagarHoy(f), 0);
   /* Con una sola unidad en mora, desde cuándo: la mora la marca el último
@@ -210,6 +223,14 @@ export default function PortalInicio() {
       {facturas === undefined ? (
         <LiquidGlassCard className="p-6">
           <Spinner className="mx-auto h-5 w-5" />
+        </LiquidGlassCard>
+      ) : sinUnidad ? (
+        <LiquidGlassCard className="flex items-center gap-3 px-4 py-3.5">
+          <Building2 className="h-5 w-5 shrink-0 text-foreground/50" />
+          <div>
+            <p className="font-semibold text-foreground">{TITULO_SIN_UNIDAD}</p>
+            <p className="text-sm text-foreground/65">{TEXTO_SIN_UNIDAD}</p>
+          </div>
         </LiquidGlassCard>
       ) : (
         <DeudaAlert
@@ -294,6 +315,7 @@ export default function PortalInicio() {
                 key={f._id}
                 factura={f}
                 cadena={lista.filter((x) => String(x.unidadId) === String(f.unidadId))}
+                cartera={carteras.get(String(f.unidadId)) ?? null}
                 showUnidad={multiUnidad}
               />
             ))
@@ -468,6 +490,9 @@ function DeudaAlert({
   const limiteDescuento = fechaLimiteDescuentoDe(f);
   const prontoPago = !varias && descuentoVigente(f, Date.now());
   const vencida = enMora;
+  /* El total ya descuenta lo abonado (H1); se dice cuánto, para que cuadre
+   * con el documento. */
+  const abonado = varias ? 0 : abonoAprobado(f);
 
   const titulo = `Total pendiente: ${cop(totalPendiente)}`;
   let sub: string;
@@ -484,7 +509,7 @@ function DeudaAlert({
   } else if (prontoPago && limiteDescuento !== null) {
     /* La fecha real del descuento (la del documento, o el 15 del mes del
      * período), no el vencimiento: antes se anunciaba un mes de más. */
-    sub = `${periodo}${multiUnidad ? ` · ${etiquetaUnidad(f)}` : ""} · Con descuento hasta el ${fechaPlazo(limiteDescuento)} · Después ${cop(f.totalAPagar)}`;
+    sub = `${periodo}${multiUnidad ? ` · ${etiquetaUnidad(f)}` : ""} · Con descuento hasta el ${fechaPlazo(limiteDescuento)} · Después ${cop(montoSinDescuento(f))}`;
   } else if (
     limiteDescuento !== null &&
     typeof f.totalConDescuento === "number" &&
@@ -525,6 +550,11 @@ function DeudaAlert({
               {titulo}
             </p>
             <p className="mt-0.5 text-sm text-foreground/70">{sub}</p>
+            {abonado > 0 ? (
+              <p className="mt-0.5 text-sm text-foreground/70">
+                Abonado {cop(abonado)} de {cop(f.totalAPagar)}
+              </p>
+            ) : null}
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -563,19 +593,29 @@ function DeudaAlert({
 function FacturaRow({
   factura: f,
   cadena,
+  cartera,
   showUnidad,
 }: {
   factura: Factura;
   /** Las facturas de la misma unidad: dicen si esta es historica. */
   cadena: Factura[];
+  /** La cartera de hoy de su unidad: dice si la vigente está en mora. */
+  cartera: CarteraUnidad | null;
   showUnidad: boolean;
 }) {
-  /* Una historica `pendiente` no se sabe si se pagó (Fase 4): "Sin verificar". */
-  const sinVerificar = estadoVisibleDeFactura(f, cadena) === "sin_verificar";
-  const meta = sinVerificar ? null : ESTADO_FACTURA[f.estado];
+  /* Una historica `pendiente` no se sabe si se pagó (Fase 4): "Sin verificar".
+   * La vigente de una unidad en mora es "Vencida", como dice la tarjeta de
+   * arriba (QA de comprobantes, H2). */
+  const visible = estadoVisibleDeFactura(f, cadena, cartera);
+  const sinVerificar = visible === "sin_verificar";
+  const meta = sinVerificar ? null : ESTADO_FACTURA[visible === "vencida" ? "vencida" : f.estado];
   const Icon = meta?.icon;
   const periodo = periodoHumano(f.periodo || f.periodoLabel);
   const unidadTxt = showUnidad ? etiquetaUnidad(f) : null;
+  /* En la vigente con un abono aprobado, lo que falta (H1). */
+  const esVigente = !cadena.some((x) => x.periodo > f.periodo);
+  const abonado = abonoAprobado(f);
+  const monto = esVigente && abonado > 0 ? montoSinDescuento(f) : f.totalAPagar;
 
   return (
     <div className="px-4 py-3.5">
@@ -597,9 +637,16 @@ function FacturaRow({
                 : f.numeroFactura}
           </p>
         </div>
-        <p className="text-[15px] font-semibold tabular-nums text-foreground">
-          {cop(f.totalAPagar)}
-        </p>
+        <div className="text-right">
+          <p className="text-[15px] font-semibold tabular-nums text-foreground">
+            {cop(monto)}
+          </p>
+          {abonado > 0 ? (
+            <p className="mt-0.5 text-xs text-foreground/60">
+              Abonado {cop(abonado)} de {cop(f.totalAPagar)}
+            </p>
+          ) : null}
+        </div>
       </div>
 
       <div className="mt-2.5 flex flex-wrap items-center gap-2">

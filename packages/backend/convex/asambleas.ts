@@ -8,6 +8,7 @@ import {
   requireAppUser,
   getCurrentAppUser,
   getMembership,
+  vigentes,
 } from "./model/authz";
 import { calcularQuorum } from "./model/quorum";
 import { resolveMediaUrl } from "./model/files";
@@ -572,7 +573,11 @@ export const removeVotacion = mutation({
 // Asamblea en vivo: asistencia (quórum) y votación por unidad
 // ─────────────────────────────────────────────────────────────
 
-/** Unidades vinculadas al usuario en el condominio (con su doc). */
+/**
+ * Unidades vinculadas al usuario en el condominio (con su doc). Solo vínculos
+ * VIGENTES (`vigentes`): quien ya no vive en la casa no registra asistencia
+ * ni vota por ella (QA de comprobantes, H3).
+ */
 async function misUnidades(
   ctx: QueryCtx | MutationCtx,
   userId: Id<"users">,
@@ -580,10 +585,12 @@ async function misUnidades(
 ) {
   const membership = await getMembership(ctx, userId, condominioId);
   if (!membership || !membership.isActive) return [];
-  const links = await ctx.db
-    .query("usuarioUnidad")
-    .withIndex("by_membership", (q) => q.eq("membershipId", membership._id))
-    .collect();
+  const links = vigentes(
+    await ctx.db
+      .query("usuarioUnidad")
+      .withIndex("by_membership", (q) => q.eq("membershipId", membership._id))
+      .collect(),
+  );
   const unidades = await Promise.all(links.map((l) => ctx.db.get(l.unidadId)));
   return unidades.filter((u): u is NonNullable<typeof u> => u !== null);
 }

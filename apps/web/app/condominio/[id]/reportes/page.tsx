@@ -176,11 +176,14 @@ function ReportesContent({
    * comprobantes aprobados. Antes "recaudo" era la suma del total de las
    * facturas pagadas, que no es ninguna de las dos. */
   const recaudoContable = selected?.recaudoContable ?? null;
+  /* `siguienteManual` (mes siguiente hecho a mano, QA de comprobantes H4):
+   * con `?? 0` porque un backend anterior no lo trae. */
   const sinCalcular = selected
     ? selected.recaudoContableSinCalcular.sinSiguiente +
       selected.recaudoContableSinCalcular.mesFaltante +
       selected.recaudoContableSinCalcular.enRevision +
-      selected.recaudoContableSinCalcular.noCuadra
+      selected.recaudoContableSinCalcular.noCuadra +
+      (selected.recaudoContableSinCalcular.siguienteManual ?? 0)
     : 0;
 
   const ocupadas = unidades.filter((u) => u.estado === "ocupada").length;
@@ -329,7 +332,8 @@ function ReportesContent({
                     p.recaudoContableSinCalcular.sinSiguiente +
                     p.recaudoContableSinCalcular.mesFaltante +
                     p.recaudoContableSinCalcular.enRevision +
-                    p.recaudoContableSinCalcular.noCuadra;
+                    p.recaudoContableSinCalcular.noCuadra +
+                    (p.recaudoContableSinCalcular.siguienteManual ?? 0);
                   return (
                     <tr key={p.periodo}>
                       <td className="py-2 text-foreground">{periodoCorto(p.periodo)}</td>

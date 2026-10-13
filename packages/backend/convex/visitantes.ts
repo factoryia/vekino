@@ -1,11 +1,11 @@
 import { v } from "convex/values";
 import { query, mutation, internalMutation } from "./_generated/server";
-import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import {
   requireAppUser,
   getCurrentAppUser,
   getMembership,
+  misUnidadIds,
 } from "./model/authz";
 import { logMinuta } from "./model/minuta";
 import {
@@ -28,20 +28,10 @@ const tipoValidator = v.union(
   v.literal("domicilio"),
 );
 
-/** Unidades vinculadas al usuario en el condominio. */
-async function misUnidadIds(
-  ctx: QueryCtx | MutationCtx,
-  userId: Id<"users">,
-  condominioId: Id<"condominios">,
-): Promise<Set<Id<"unidades">>> {
-  const membership = await getMembership(ctx, userId, condominioId);
-  if (!membership || !membership.isActive) return new Set();
-  const links = await ctx.db
-    .query("usuarioUnidad")
-    .withIndex("by_membership", (q) => q.eq("membershipId", membership._id))
-    .collect();
-  return new Set(links.map((l) => l.unidadId));
-}
+/* Las unidades del usuario salen de `misUnidadIds` (`model/authz.ts`): solo
+ * vínculos VIGENTES. Aquí había una copia propia sin ese filtro, y una
+ * arrendataria con el contrato vencido seguía autorizando visitantes de la
+ * casa, que avisan a portería (QA de comprobantes, H3). */
 
 // ─────────────────────────────────────────────────────────────
 // API del propietario

@@ -10,7 +10,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Spinner } from "@/components/ui/spinner";
 import { EmptyState } from "@/components/ui/empty-state";
-import { fechaISO } from "@/components/portal/portal-ui";
+import { TEXTO_SIN_UNIDAD, TITULO_SIN_UNIDAD, fechaISO } from "@/components/portal/portal-ui";
 
 const ESTADO_META: Record<
   string,
@@ -32,6 +32,9 @@ export default function Reservas() {
   const [formOpen, setFormOpen] = useState(false);
 
   const unidades = home && home.allowed ? home.unidades : [];
+  /* Sin una casa vinculada HOY no se ofrece reservar: el backend tampoco lo
+   * acepta (`misUnidadIds`; QA de comprobantes, H3). */
+  const sinUnidad = home !== undefined && unidades.length === 0;
   const zonasActivas = (zonas ?? []).filter((z) => z.activa);
 
   return (
@@ -45,14 +48,16 @@ export default function Reservas() {
             Gestiona tus reservas de espacios comunes.
           </p>
         </div>
-        <button
-          onClick={() => setFormOpen(true)}
-          disabled={zonasActivas.length === 0}
-          className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand px-4 text-sm font-semibold text-brand-foreground shadow-sm transition-colors hover:bg-brand/90 disabled:opacity-50"
-        >
-          <Plus className="h-4 w-4" />
-          Nueva reserva
-        </button>
+        {sinUnidad ? null : (
+          <button
+            onClick={() => setFormOpen(true)}
+            disabled={zonasActivas.length === 0}
+            className="inline-flex h-10 items-center gap-2 rounded-lg bg-brand px-4 text-sm font-semibold text-brand-foreground shadow-sm transition-colors hover:bg-brand/90 disabled:opacity-50"
+          >
+            <Plus className="h-4 w-4" />
+            Nueva reserva
+          </button>
+        )}
       </div>
 
       {/* Zonas comunes */}
@@ -103,6 +108,8 @@ export default function Reservas() {
           <Card className="p-6">
             <Spinner className="mx-auto h-5 w-5" />
           </Card>
+        ) : misReservas.length === 0 && sinUnidad ? (
+          <EmptyState icon={CalendarCheck} title={TITULO_SIN_UNIDAD} description={TEXTO_SIN_UNIDAD} />
         ) : misReservas.length === 0 ? (
           <EmptyState
             icon={CalendarCheck}
@@ -135,7 +142,7 @@ export default function Reservas() {
         )}
       </div>
 
-      {formOpen && (
+      {formOpen && !sinUnidad && (
         <ReservaForm
           condominioId={condominioId}
           unidades={unidades}

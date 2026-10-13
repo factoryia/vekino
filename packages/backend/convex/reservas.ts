@@ -1235,12 +1235,10 @@ export const createFromBot = internalMutation({
       throw new Error("No tienes una cuenta activa en este conjunto.");
     }
 
-    // La unidad debe estar vinculada a la membresía del usuario.
-    const links = await ctx.db
-      .query("usuarioUnidad")
-      .withIndex("by_membership", (q) => q.eq("membershipId", membership._id))
-      .collect();
-    if (!links.some((l) => l.unidadId === args.unidadId)) {
+    // La unidad debe estar vinculada a la membresía del usuario, y el vínculo
+    // vigente (`misUnidadIds`, como `createMia`; QA de comprobantes, H3).
+    const unidadIds = await misUnidadIds(ctx, args.userId, args.condominioId);
+    if (!unidadIds.has(args.unidadId)) {
       throw new Error("Esa unidad no está vinculada a tu cuenta.");
     }
     const unidad = await ctx.db.get(args.unidadId);

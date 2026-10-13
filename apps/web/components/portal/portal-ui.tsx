@@ -57,6 +57,16 @@ export const ESTADO_FACTURA: Record<
   },
 };
 
+/**
+ * Lo que ve quien no tiene ninguna casa vinculada HOY —por ejemplo, una
+ * arrendataria con el contrato vencido, a quien el backend ya no le da la
+ * casa—: ni "Estás al día" ni deuda, porque no hay de qué (QA de
+ * comprobantes, H3). Es el mismo aviso de "Mi unidad".
+ */
+export const TITULO_SIN_UNIDAD = "No tienes una unidad vinculada";
+export const TEXTO_SIN_UNIDAD =
+  "Pide a la administración que asocie tu apartamento o casa a tu cuenta.";
+
 export const VINCULO_LABEL: Record<string, string> = {
   propietario: "Propietario",
   apoderado: "Apoderado",

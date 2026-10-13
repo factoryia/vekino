@@ -1,13 +1,17 @@
 import {
   ETIQUETA_SIN_VERIFICAR,
   TEXTO_SIN_VERIFICAR,
+  abonoAprobado,
   descuentoVigente,
   enRevision,
   estadoVisibleDeFactura,
   fechaLimiteDescuentoDe,
   inicioDeMora,
   montoAPagarHoy,
+  montoSinDescuento,
   resumenResidente,
+  type CarteraUnidad,
+  type EvidenciaGuardada,
   type FacturaCartera,
   type LecturaDudosa,
 } from "@vekino/backend/cartera";
@@ -59,7 +63,7 @@ export function tarjetaFacturas<F extends FacturaTarjeta>(
           : pagables.length === 1
             ? "1 factura pendiente"
             : `${pagables.length} facturas pendientes`,
-    /** Lo que se debe hoy: la vigente de cada unidad, nunca el historial. */
+    /** Lo que se debe hoy: la vigente de cada unidad, nunca el historial (sin lo ya abonado). */
     porPagar: pagables.reduce((s, f) => s + montoAPagarHoy(f, ahora), 0),
     /** Pagado y todavía no reflejado por la contabilidad. */
     enVerificacion,
@@ -67,6 +71,8 @@ export function tarjetaFacturas<F extends FacturaTarjeta>(
     enMora,
     /** A lo sumo una por unidad. */
     pagables,
+    /** La cartera de hoy de cada unidad, por id: con ella se rotula cada factura (`estadoVisible`). */
+    carteras: new Map<string, CarteraUnidad>(unidades.map((u) => [u.unidadId, u.cartera])),
   };
 }
 
@@ -82,6 +88,11 @@ export function tarjetaFacturas<F extends FacturaTarjeta>(
  * siguiente para saber si se pagó—. La regla es la del backend
  * (`estadoVisibleDeFactura`); si la fila ya trae `estadoVisible` (la lista de
  * la administración), manda ese.
+ *
+ * Con `cartera` (la de su unidad, `tarjetaFacturas(...).carteras`), la vigente
+ * de una unidad en mora se ve "vencida", como dice la tarjeta ("Tienes un
+ * saldo vencido") y como la ven la web y la administración (QA de
+ * comprobantes, H2).
  */
 export function estadoVisible(
   f: {
@@ -92,12 +103,28 @@ export function estadoVisible(
     estadoVisible?: string;
   },
   cadena?: readonly { periodo: string }[],
+  cartera?: Pick<CarteraUnidad, "estado"> | null,
 ): string {
   if (f.estadoVisible) return f.estadoVisible;
-  if (cadena && f.periodo) return estadoVisibleDeFactura({ ...f, periodo: f.periodo }, cadena);
+  if (cadena && f.periodo) return estadoVisibleDeFactura({ ...f, periodo: f.periodo }, cadena, cartera);
   if (enRevision(f)) return "en_revision";
   if (f.pagoEnVerificacion) return "en_verificacion";
   return f.estado;
+}
+
+/**
+ * El monto de la fila de una factura: el de su documento, salvo en la VIGENTE
+ * con un abono aprobado, que muestra lo que falta (QA de comprobantes, H1).
+ * En una histórica lo que faltó ya va en la siguiente: se deja su total. Sin
+ * `cadena` no se sabe si es la vigente, y se deja el total.
+ */
+export function montoDeFila(
+  f: { periodo: string; totalAPagar: number; estadoPago?: EvidenciaGuardada | null },
+  cadena?: readonly { periodo: string }[],
+): number {
+  if (!cadena) return f.totalAPagar;
+  const esVigente = !cadena.some((x) => x.periodo > f.periodo);
+  return esVigente && abonoAprobado(f) > 0 ? montoSinDescuento(f) : f.totalAPagar;
 }
 
 /**

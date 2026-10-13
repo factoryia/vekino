@@ -266,15 +266,16 @@ test("recaudo según la contabilidad: total del mes menos el saldo anterior del 
   assert.equal(junio.monto, null); // nadie se pudo calcular
   assert.equal(junio.mesFaltante, 0);
   assert.equal(junio.sinSiguiente, 1); // el conjunto no tiene julio cargado
-  /* Septiembre es el último cargado: no se calcula y se dice por qué. */
-  assert.deepEqual(r.get("2026-09"), { monto: null, unidades: 0, sinSiguiente: 2, mesFaltante: 0, enRevision: 0, noCuadra: 0 });
+  /* Septiembre es el último cargado: no se calcula y se dice por qué.
+   * (`siguienteManual`, el motivo nuevo del H4 del QA de comprobantes, en 0.) */
+  assert.deepEqual(r.get("2026-09"), { monto: null, unidades: 0, sinSiguiente: 2, mesFaltante: 0, enRevision: 0, noCuadra: 0, siguienteManual: 0 });
   /* Una factura cargada antes de la Fase 2 cuyas líneas no suman su total
    * (agosto de CDC: totales en $0) no se calcula: daría un recaudo negativo. */
   const viejo = recaudoContablePorPeriodo([
     { ...fr("y8", "Y", "2026-08", 0), lineas: [{ codigo: 1, concepto: "CUOTA", saldoAnterior: 900_000, actual: 300_000, total: 1_200_000 }] },
     fr("y9", "Y", "2026-09", 1_500_000, 1_200_000),
   ]);
-  assert.deepEqual(viejo.get("2026-08"), { monto: null, unidades: 0, sinSiguiente: 0, mesFaltante: 0, enRevision: 0, noCuadra: 1 });
+  assert.deepEqual(viejo.get("2026-08"), { monto: null, unidades: 0, sinSiguiente: 0, mesFaltante: 0, enRevision: 0, noCuadra: 1, siguienteManual: 0 });
   /* Con una lectura en revisión tampoco. */
   const revision = recaudoContablePorPeriodo([
     fr("x8", "X", "2026-08", 300_000),
