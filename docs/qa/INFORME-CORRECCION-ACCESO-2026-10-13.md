@@ -32,6 +32,8 @@ Las tres operaciones afectadas eran:
 
 **¿Desde cuándo?** El 2 de agosto se hizo un cambio para arreglar el inicio de sesión con Google, y ese cambio movió el lugar donde se guarda el pase. Las tres operaciones se construyeron después, así que **nunca funcionaron en un navegador real**. Las pruebas automáticas no lo detectaron porque simulaban que la sesión ya existía.
 
+**¿La corrección afecta el inicio de sesión con Google?** No. La corrección no deshace el cambio del 2 de agosto: el pase se sigue guardando en el mismo lugar y el inicio de sesión no se modificó. Lo único nuevo es que, en esas tres operaciones, la página toma ese mismo pase y también se lo muestra al intermediario.
+
 ---
 
 ## ¿A quién afecta hoy?
