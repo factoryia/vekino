@@ -19,24 +19,44 @@ export type PdfLeido = {
   totalPaginas: number;
 };
 
+/**
+ * El archivo no se pudo abrir o recorrer como PDF: vacío, de texto con
+ * extensión .pdf, cortado, cifrado. Es un problema del archivo, no del
+ * servidor. Lo que falle después, al interpretar el texto, no entra aquí.
+ */
+export class PdfIlegible extends Error {
+  constructor(causa: unknown) {
+    super(causa instanceof Error ? causa.message : String(causa));
+    this.name = "PdfIlegible";
+  }
+}
+
 export function hashDe(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
 export async function leerPdf(bytes: Uint8Array): Promise<PdfLeido> {
-  const doc = await PDFDocument.load(bytes);
-  const totalPaginas = doc.getPageCount();
-  /* Texto por página: cada una se extrae sola, con sus columnas en su sitio
-   * (ver pdf-layout.ts), y después se agrupan por factura. */
-  const textos: string[] = [];
-  for (let i = 0; i < totalPaginas; i++) {
-    const una = await PDFDocument.create();
-    const [pagina] = await una.copyPages(doc, [i]);
-    una.addPage(pagina);
-    textos.push(await extraerTextoConLayout(await una.save()));
-  }
+  const { doc, textos } = await abrirPdf(bytes);
   const { facturas, errores } = leerFacturas(textos);
-  return { hash: hashDe(bytes), doc, facturas, errores, totalPaginas };
+  return { hash: hashDe(bytes), doc, facturas, errores, totalPaginas: doc.getPageCount() };
+}
+
+async function abrirPdf(bytes: Uint8Array): Promise<{ doc: PDFDocument; textos: string[] }> {
+  try {
+    const doc = await PDFDocument.load(bytes);
+    /* Texto por página: cada una se extrae sola, con sus columnas en su sitio
+     * (ver pdf-layout.ts), y después se agrupan por factura. */
+    const textos: string[] = [];
+    for (let i = 0; i < doc.getPageCount(); i++) {
+      const una = await PDFDocument.create();
+      const [pagina] = await una.copyPages(doc, [i]);
+      una.addPage(pagina);
+      textos.push(await extraerTextoConLayout(await una.save()));
+    }
+    return { doc, textos };
+  } catch (e) {
+    throw new PdfIlegible(e);
+  }
 }
 
 /**

@@ -222,6 +222,8 @@ export function UploadFacturas({
   const porTorreCount = conUnidad.filter((i) => i.matchModo === "torre" || i.matchModo === "deducido").length;
   const multiPagina = invoices.filter((i) => i.pageCount > 1).length;
   const opcionesPeriodo = [...new Set([...periodosElegibles(), ...periodosDocumento])].sort().reverse();
+  // Las marcadas en revisión ya van contadas entre insertadas y actualizadas.
+  const sinCarga = result?.tipo === "nueva" && result.insertadas + result.actualizadas === 0;
 
   const footer =
     step === "done" ? (
@@ -453,12 +455,24 @@ export function UploadFacturas({
         {/* Step: done */}
         {step === "done" && result && (
           <div className="flex flex-col items-center gap-4 py-6 text-center">
-            <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10">
-              <CheckCircle className="h-8 w-8 text-emerald-500" aria-hidden />
-            </div>
+            {/* Un lote en el que no entró ninguna factura (todas rechazadas u
+              * omitidas) no se da por cargado: el detalle de abajo dice por qué. */}
+            {sinCarga ? (
+              <div className="flex h-14 w-14 items-center justify-center rounded-full bg-amber-500/10">
+                <AlertCircle className="h-8 w-8 text-amber-500" aria-hidden />
+              </div>
+            ) : (
+              <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10">
+                <CheckCircle className="h-8 w-8 text-emerald-500" aria-hidden />
+              </div>
+            )}
             <div>
               <p className="text-lg font-semibold text-foreground">
-                {result.tipo === "repetida" ? "Este archivo ya se había cargado" : "¡Facturas cargadas!"}
+                {result.tipo === "repetida"
+                  ? "Este archivo ya se había cargado"
+                  : sinCarga
+                    ? "No se cargó ninguna factura"
+                    : "¡Facturas cargadas!"}
               </p>
               <p className="mt-1 text-sm text-muted-foreground">
                 {result.insertadas} nuevas

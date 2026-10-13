@@ -134,3 +134,52 @@ describe("F07 · /api/facturas/upload exige sesión y permiso sobre el conjunto"
     expect(subidas).toEqual([]);
   });
 });
+
+/*
+ * Auditoría de facturación en Factory (2026-10-13): un archivo que no es PDF,
+ * uno vacío o uno dañado respondían 500 con el mensaje interno de pdf-lib en
+ * inglés ("Failed to parse PDF document (line:2 col:0 offset=59): No PDF header
+ * found"), y la pantalla lo mostraba tal cual. No es un error del servidor: es
+ * un archivo que no sirve, y la persona tiene que entender qué hacer.
+ */
+describe("archivos que no son un PDF legible: rechazo claro, sin detalles internos", () => {
+  async function subirArchivo(bytes, nombre) {
+    const form = new FormData();
+    form.append("pdf", new File([bytes], nombre, { type: "application/pdf" }));
+    form.append("condominioId", "condo-de-prueba");
+    const res = await POST(new Request("http://localhost/api/facturas/upload", { method: "POST", body: form }));
+    return { status: res.status, cuerpo: await res.json() };
+  }
+
+  test("un archivo vacío: 400 y lo dice", async () => {
+    const { status, cuerpo } = await subirArchivo(new Uint8Array(0), "vacio.pdf");
+    expect(status).toBe(400);
+    expect(cuerpo.error).toBe("El archivo está vacío. Elige el PDF con las cuentas de cobro.");
+    expect(subidas).toEqual([]);
+  });
+
+  test.each([
+    ["un texto con extensión .pdf", new TextEncoder().encode("Esto es texto, no un PDF.\n")],
+    ["un PDF cortado a la mitad", PDF.subarray(0, Math.floor(PDF.length / 2))],
+  ])("%s: 422 con un mensaje que se entiende, sin el error interno del lector", async (_caso, bytes) => {
+    const { status, cuerpo } = await subirArchivo(bytes, "factura.pdf");
+    expect(status).toBe(422);
+    expect(cuerpo.error).toBe("El archivo no es un PDF válido o está dañado. Revísalo y vuelve a subirlo.");
+    expect(JSON.stringify(cuerpo)).not.toMatch(/Failed to parse|offset|line:/);
+    expect(subidas).toEqual([]);
+  });
+
+  test("sin sesión, aun con un archivo dañado, primero responde 401", async () => {
+    haySesion = false;
+    const { status } = await subirArchivo(new TextEncoder().encode("no es un PDF"), "factura.pdf");
+    expect(status).toBe(401);
+  });
+
+  /* El 422 es solo para el archivo que no se pudo abrir: un fallo al
+   * interpretar el texto es del servidor y no debe pasar por "archivo dañado". */
+  test("solo cuenta como PDF ilegible lo que no se pudo abrir", async () => {
+    const { leerPdf, PdfIlegible } = await import("../app/api/facturas/lectura");
+    await expect(leerPdf(new TextEncoder().encode("no es un PDF"))).rejects.toBeInstanceOf(PdfIlegible);
+    expect((await leerPdf(new Uint8Array(PDF))).facturas).toHaveLength(1);
+  });
+});

@@ -200,6 +200,24 @@ describe("confirmar", () => {
     expect(pantalla()).toContain("No se publicó ni se guardó nada otra vez.");
   });
 
+  /*
+   * Auditoría en Factory (2026-10-13): un lote en el que no entró ninguna
+   * factura (5 rechazadas por período) mostraba "¡Facturas cargadas!" con el
+   * visto verde, y debajo "0 nuevas · 5 no entraron".
+   */
+  test.each([
+    ["todas rechazadas", { rechazadas: 2, rechazos: [{ indice: 0, motivo: "periodo_no_coincide" }, { indice: 1, motivo: "periodo_no_coincide" }] }, "0 nuevas · 2 no entraron"],
+    ["todas omitidas (ya existían)", { omitidas: 2 }, "0 nuevas · 2 omitidas"],
+  ])("si no entró ninguna factura (%s), no dice que se cargaron", async (_caso, cuerpo, detalle) => {
+    await elegirPdf();
+    confirmacion.cuerpo = { tipo: "nueva", insertadas: 0, actualizadas: 0, omitidas: 0, marcadas: 0, rechazadas: 0, rechazos: [], conciliacion: { pagadas: 0, abonadas: 0, vencidas: 0 }, publicadas: 0, ...cuerpo };
+    await click(boton("Confirmar"));
+    await esperar();
+    expect(pantalla()).not.toContain("¡Facturas cargadas!");
+    expect(pantalla()).toContain("No se cargó ninguna factura");
+    expect(pantalla()).toContain(detalle);
+  });
+
   test("si la confirmación falla, se ve el motivo y se puede reintentar", async () => {
     await elegirPdf();
     confirmacion = { status: 409, cuerpo: { error: "El archivo no es el mismo de la vista previa. Vuelve a seleccionarlo." } };
