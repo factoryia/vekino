@@ -13,6 +13,7 @@ import {
   type MotivoRechazo,
 } from "@vekino/backend/lecturaFactura";
 import { emparejarLote, type ModoEmparejado } from "@/lib/emparejar-unidad";
+import { fetchConSesion } from "@/lib/fetch-con-sesion";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { Select } from "@/components/ui/input";
@@ -128,7 +129,7 @@ export function UploadFacturas({
     form.append("condominioId", condominioId);
 
     try {
-      const res = await fetch("/api/facturas/upload", { method: "POST", body: form });
+      const res = await fetchConSesion("/api/facturas/upload", { method: "POST", body: form });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Error desconocido");
 
@@ -193,7 +194,7 @@ export function UploadFacturas({
       ),
     );
     try {
-      const res = await fetch("/api/facturas/confirmar", { method: "POST", body: form });
+      const res = await fetchConSesion("/api/facturas/confirmar", { method: "POST", body: form });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Error desconocido");
       setResult(data as Resultado);

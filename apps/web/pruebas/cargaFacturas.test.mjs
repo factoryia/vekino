@@ -33,6 +33,12 @@ const UNIDADES = [
 mock.module("convex/react", () => ({
   useQuery: (fn) => (getFunctionName(fn) === "unidades:listByCondominio" ? UNIDADES : undefined),
 }));
+/* La sesión del cliente oficial. Las dos rutas la reciben en la cabecera
+ * Better-Auth-Cookie (lib/fetch-con-sesion.ts): en el dominio de la app no
+ * hay cookie de sesión. */
+const SESION = "better-auth.session_token=sesion-de-prueba";
+let cookieSesion;
+mock.module("@/lib/auth-client", () => ({ authClient: { getCookie: () => cookieSesion } }));
 const { UploadFacturas } = await import("../components/upload-facturas");
 
 const HUELLA = "a".repeat(64);
@@ -55,13 +61,16 @@ const LOTE = [
   factura("555", "2026-09", 335_000),
 ];
 
-let peticiones, vistaPrevia, confirmacion, contenedor, root;
+let peticiones, vistaPrevia, confirmacion, alertas, contenedor, root;
 beforeEach(() => {
   peticiones = [];
+  alertas = [];
+  cookieSesion = SESION;
   vistaPrevia = { status: 200, cuerpo: { hash: HUELLA, invoices: LOTE, noLeidas: [] } };
   confirmacion = { status: 200, cuerpo: {} };
+  globalThis.alert = (mensaje) => alertas.push(mensaje);
   globalThis.fetch = async (url, init) => {
-    peticiones.push({ url, body: init?.body });
+    peticiones.push({ url, body: init?.body, headers: new Headers(init?.headers) });
     const r = url === "/api/facturas/upload" ? vistaPrevia : confirmacion;
     return { ok: r.status < 400, status: r.status, json: async () => r.cuerpo };
   };
@@ -107,6 +116,7 @@ describe("vista previa: nada se publica ni se guarda", () => {
   test("el período sale de los documentos y cada factura muestra su lectura", async () => {
     await elegirPdf();
     expect(peticiones.map((p) => p.url)).toEqual(["/api/facturas/upload"]);
+    expect(peticiones[0].headers.get("better-auth-cookie")).toBe(SESION);
     expect(resumen()).toEqual([3, 1, 1, 1]);
     expect(document.body.querySelector("select").value).toBe("2026-09");
     expect(pantalla()).toContain("según los documentos: Septiembre / 2026");
@@ -165,6 +175,7 @@ describe("confirmar", () => {
 
     const envio = peticiones.find((p) => p.url === "/api/facturas/confirmar");
     expect(envio).toBeTruthy();
+    expect(envio.headers.get("better-auth-cookie")).toBe(SESION);
     expect(envio.body.get("pdf")).toBe(pdf);
     expect(envio.body.get("hash")).toBe(HUELLA);
     expect(envio.body.get("periodo")).toBe("2026-09");
@@ -195,6 +206,31 @@ describe("confirmar", () => {
     await click(boton("Confirmar"));
     await esperar();
     expect(pantalla()).toContain("El archivo no es el mismo de la vista previa");
+    expect(boton("Confirmar").disabled).toBe(false);
+  });
+});
+
+describe("la sesión viaja a las dos rutas, y la ruta decide", () => {
+  test("sin sesión guardada, la vista previa sale sin la cabecera y se ve el rechazo del servidor", async () => {
+    cookieSesion = "";
+    vistaPrevia = { status: 401, cuerpo: { error: "Inicia sesión para subir facturas." } };
+    await elegirPdf();
+    expect(peticiones).toHaveLength(1);
+    expect(peticiones[0].headers.has("better-auth-cookie")).toBe(false);
+    expect(alertas).toEqual(["Error procesando PDF: Inicia sesión para subir facturas."]);
+    // Vuelve a pedir el archivo: no se queda cargando.
+    expect(pantalla()).toContain("Haz clic para seleccionar el PDF");
+  });
+
+  test("una confirmación sin permiso muestra el motivo, no da la carga por hecha y no expone la sesión", async () => {
+    await elegirPdf();
+    confirmacion = { status: 403, cuerpo: { error: "No tienes permiso para subir facturas de este conjunto." } };
+    await click(boton("Confirmar"));
+    await esperar();
+    expect(peticiones.map((p) => p.headers.get("better-auth-cookie"))).toEqual([SESION, SESION]);
+    expect(pantalla()).toContain("No tienes permiso para subir facturas de este conjunto.");
+    expect(pantalla()).not.toContain("¡Facturas cargadas!");
+    expect(pantalla()).not.toContain("sesion-de-prueba");
     expect(boton("Confirmar").disabled).toBe(false);
   });
 });

@@ -82,6 +82,9 @@ mock.module("convex/react", () => ({
   useAction: () => async () => ({ pagoId: "pago-prueba", redirectUrl: "https://pasarela.test" }),
   useMutation: () => async () => {},
 }));
+/* Finanzas monta la carga de facturas, que lee la sesión del cliente oficial
+ * (lib/fetch-con-sesion.ts). Aquí no se carga nada. */
+mock.module("@/lib/auth-client", () => ({ authClient: { getCookie: () => "" } }));
 const { default: MisFacturas } = await import("../app/mi/[id]/cuenta/page");
 const { default: PortalInicio } = await import("../app/mi/[id]/page");
 const { default: Reportes } = await import("../app/condominio/[id]/reportes/page");

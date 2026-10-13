@@ -1,3 +1,5 @@
+import { fetchConSesion } from "@/lib/fetch-con-sesion";
+
 export type EstadoExportacionIncidentes = "Preparando" | "Generando" | "Descargando" | "Completado";
 const ERRORES_REPORTE = ["El periodo es demasiado amplio. Acota el periodo o selecciona un conjunto.", "No hay incidentes para los filtros seleccionados.", "No tienes acceso a este reporte. Revisa tu sesión.", "El PDF contiene caracteres que la fuente disponible no admite. Exporta CSV o Excel."];
 export function mensajeErrorReporteIncidentes(error: unknown): string {
@@ -9,7 +11,7 @@ export async function descargarReporteIncidentes(parametros: URLSearchParams, fo
   await new Promise((resolve) => setTimeout(resolve, 0));
   if (signal.aborted) return;
   estado("Generando");
-  const respuesta = await fetch("/api/incidentes/reporte", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ parametros: parametros.toString(), formato }), signal });
+  const respuesta = await fetchConSesion("/api/incidentes/reporte", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ parametros: parametros.toString(), formato }), signal });
   if (!respuesta.ok) {
     // Solo mensajes operacionales conocidos; jamás mostrar una respuesta técnica.
     const body = await respuesta.json().catch(() => ({}));

@@ -16,6 +16,9 @@ mock.module("convex/react", () => ({ useQuery: (fn, args) => {
 mock.module("next/navigation", () => ({ useSearchParams: () => params, useRouter: () => ({ push: (url) => { navegaciones.push(url); params = new URLSearchParams(url.split("?")[1]); } }) }));
 mock.module("next/link", () => ({ default: ({ children, ...props }) => createElement("a", props, children) }));
 mock.module("@/lib/auth-server", () => ({ fetchAuthQuery: async (fn, args) => { servidorArgs = args; if (servidorError) throw servidorError; return datos; } }));
+// Sesión del cliente oficial: la exportación la manda en Better-Auth-Cookie (lib/fetch-con-sesion.ts).
+const SESION = "better-auth.session_token=sesion-de-prueba";
+mock.module("@/lib/auth-client", () => ({ authClient: { getCookie: () => SESION } }));
 const { IncidentesReportes } = await import("../components/vigilancia/incidentes-reportes");
 const { IncidentesDashboard } = await import("../components/vigilancia/incidentes-dashboard");
 const { POST } = await import("../app/api/incidentes/reporte/route");
@@ -84,6 +87,7 @@ describe("reportes: vista, navegación y descargas", () => {
     await render(); await act(() => { boton("Generar CSV").click(); boton("Generar CSV").click(); }); expect(contenedor.textContent).toMatch(/Preparando|Generando/); await tick();
     expect(contenedor.textContent).toContain("Generando"); expect(boton("Exportar Excel").disabled).toBe(true); expect(peticiones).toHaveLength(1); expect(descargas).toHaveLength(0);
     const body = JSON.parse(peticiones[0].body); const p = new URLSearchParams(body.parametros); expect(p.get("periodo")).toBe("personalizado"); expect(p.get("hasta")).toBe("2026-09-30"); expect(body.formato).toBe("csv");
+    const cabeceras = new Headers(peticiones[0].headers); expect(cabeceras.get("better-auth-cookie")).toBe(SESION); expect(cabeceras.get("content-type")).toBe("application/json"); expect(peticiones[0].method).toBe("POST"); expect(peticiones[0].signal).toBeInstanceOf(AbortSignal);
     await act(() => responder(new Response("archivo", { headers: { "Content-Disposition": 'attachment; filename="incidentes-2026-09-01-2026-09-30.csv"' } }))); await tick();
     expect(descargas[0].nombre).toBe("incidentes-2026-09-01-2026-09-30.csv"); expect(contenedor.textContent).toContain("Completado"); expect(boton("Generar CSV").disabled).toBe(false);
   });

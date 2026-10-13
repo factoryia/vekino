@@ -8,7 +8,7 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 export async function POST(request: Request): Promise<Response> {
   try {
-    // No aceptar datos/filas del cliente. Solo parámetros; sesión mediante cookie.
+    // No aceptar datos/filas del cliente. Solo parámetros; la sesión llega en la cabecera Better-Auth-Cookie (lib/fetch-con-sesion.ts) y la valida Convex.
     const body = await request.json();
     if (!body || typeof body.parametros !== "string" || body.parametros.length > 2000 || !["csv", "xlsx", "pdf"].includes(body.formato)) return Response.json({ error: "Solicitud de reporte no válida." }, { status: 400 });
     const formato = body.formato as "csv" | "xlsx" | "pdf";

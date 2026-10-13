@@ -38,6 +38,10 @@ mock.module("convex/react", () => ({
   useAction: () => async () => null,
   useMutation: () => async () => {},
 }));
+/* La sesión del cliente oficial, que la carga manda en Better-Auth-Cookie
+ * (lib/fetch-con-sesion.ts). */
+const SESION = "better-auth.session_token=sesion-de-prueba";
+mock.module("@/lib/auth-client", () => ({ authClient: { getCookie: () => SESION } }));
 const { AdminTopbarProvider, useTopbarOverride } = await import("../components/layout/admin-topbar-context");
 const { default: Finanzas } = await import("../app/condominio/[id]/finanzas/page");
 const { default: InicioConjunto } = await import("../app/condominio/[id]/page");
@@ -73,7 +77,7 @@ let contenedor, root, peticiones;
 beforeEach(() => {
   peticiones = [];
   globalThis.fetch = async (url, init) => {
-    peticiones.push({ url, body: init?.body });
+    peticiones.push({ url, body: init?.body, headers: new Headers(init?.headers) });
     return { ok: true, status: 200, json: async () => ({ hash: "a".repeat(64), invoices: [], noLeidas: [] }) };
   };
   contenedor = document.createElement("div");
@@ -129,6 +133,7 @@ describe("Finanzas · 'Subir facturas' en un conjunto sin legacyId", () => {
     await act(async () => input.dispatchEvent(new Event("change", { bubbles: true })));
 
     expect(peticiones.map((p) => p.url)).toEqual(["/api/facturas/upload"]);
+    expect(peticiones[0].headers.get("better-auth-cookie")).toBe(SESION);
     const form = peticiones[0].body;
     expect(form.get("condominioId")).toBe(CONDOMINIO);
     expect(form.get("condominioLegacyId")).toBeNull();

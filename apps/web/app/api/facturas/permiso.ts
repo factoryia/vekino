@@ -7,10 +7,11 @@ import { fetchAuthQuery, isAuthenticated } from "@/lib/auth-server";
  * Sesión, permiso y destino para leer y cargar PDFs de facturas.
  *
  * Las rutas de facturas leen PDFs con datos de los residentes y, al confirmar,
- * publican en S3 y escriben en la base. Piden la misma sesión que el resto de
- * la web (la cookie de Better Auth, que Convex valida; igual que
- * `/api/incidentes/reporte`) y el rol de quien sube facturas en ese conjunto.
- * Ante la duda, no dejan pasar.
+ * publican en S3 y escriben en la base. Piden la sesión de Better Auth, que no
+ * es una cookie del dominio de la app: la web la manda en la cabecera
+ * `Better-Auth-Cookie` (`lib/fetch-con-sesion.ts`) y el auth de Convex la
+ * valida, igual que en `/api/incidentes/reporte`. Y piden el rol de quien sube
+ * facturas en ese conjunto. Ante la duda, no dejan pasar.
  *
  * El conjunto lo resuelve el backend (`facturas.destinoCarga`), por
  * `condominioId` o por `condominioLegacyId` (la web anterior manda este), y
