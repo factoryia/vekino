@@ -8,13 +8,60 @@ import {
   hasPlatformRole,
 } from "./model/authz";
 import { displayNameFromUser } from "./model/displayName";
-import { scheduleDeleteS3Keys, s3KeyFromPublicUrl } from "./model/s3";
+import {
+  carpetaConsejo,
+  exigirLlaveDeCarpeta,
+  scheduleDeleteS3Keys,
+  s3KeyFromPublicUrl,
+} from "./model/s3";
 
 function resolveS3Key(
   s3Key: string | null | undefined,
   fileUrl: string | null | undefined,
 ): string | null {
   return s3Key?.trim() || s3KeyFromPublicUrl(fileUrl) || null;
+}
+
+/** Las llaves S3 que usan los documentos del consejo del conjunto y sus versiones. */
+async function llavesEnUso(
+  ctx: MutationCtx,
+  condominioId: Id<"condominios">,
+): Promise<Set<string>> {
+  const enUso = new Set<string>();
+  const docs = await ctx.db
+    .query("consejoDocumentos")
+    .withIndex("by_condominio", (q) => q.eq("condominioId", condominioId))
+    .collect();
+  for (const d of docs) {
+    const versiones = await ctx.db
+      .query("consejoDocumentoVersiones")
+      .withIndex("by_documento", (q) => q.eq("documentoId", d._id))
+      .collect();
+    for (const f of [d, ...versiones]) {
+      const key = resolveS3Key(f.s3Key, f.fileUrl);
+      if (key) enUso.add(key);
+    }
+  }
+  return enUso;
+}
+
+/**
+ * Borra los archivos que ya no usa ningún documento ni versión del consejo
+ * del conjunto (se llama DESPUÉS de guardar el cambio: una versión
+ * restaurada sigue en uso), y solo si son de su carpeta
+ * (`scheduleDeleteS3Keys`).
+ */
+async function borrarArchivosSinUso(
+  ctx: MutationCtx,
+  condominioId: Id<"condominios">,
+  keys: Array<string | null>,
+) {
+  const enUso = await llavesEnUso(ctx, condominioId);
+  await scheduleDeleteS3Keys(
+    ctx,
+    carpetaConsejo(condominioId),
+    keys.filter((k) => k !== null && !enUso.has(k)),
+  );
 }
 
 const VIEW_ROLES = ["administrador", "contadora", "junta_directiva"] as const;
@@ -444,6 +491,7 @@ export const createDocumento = mutation({
     }
     const titulo = args.titulo.trim();
     if (!titulo) throw new Error("El título es obligatorio.");
+    const s3Key = exigirLlaveDeCarpeta(args.s3Key, carpetaConsejo(args.condominioId));
     const now = Date.now();
     return await ctx.db.insert("consejoDocumentos", {
       condominioId: args.condominioId,
@@ -455,7 +503,7 @@ export const createDocumento = mutation({
       fileName: args.fileName,
       mimeType: args.mimeType,
       sizeBytes: args.sizeBytes,
-      s3Key: args.s3Key,
+      s3Key,
       version: 1,
       estado: "aprobado",
       createdByUserId: user._id,
@@ -485,6 +533,7 @@ export const nuevaVersion = mutation({
       doc.condominioId,
       UPLOAD_ROLES,
     );
+    const s3Key = exigirLlaveDeCarpeta(args.s3Key, carpetaConsejo(doc.condominioId));
     const now = Date.now();
     await ctx.db.insert("consejoDocumentoVersiones", {
       condominioId: doc.condominioId,
@@ -504,7 +553,7 @@ export const nuevaVersion = mutation({
       fileName: args.fileName,
       mimeType: args.mimeType,
       sizeBytes: args.sizeBytes,
-      s3Key: args.s3Key,
+      s3Key,
       version: doc.version + 1,
       estado: "aprobado",
       descripcion: args.nota?.trim()
@@ -605,10 +654,10 @@ export const removeVersion = mutation({
       if (!ver || ver.documentoId !== doc._id) {
         throw new Error("Versión no encontrada.");
       }
-      await scheduleDeleteS3Keys(ctx, [
+      await ctx.db.delete(ver._id);
+      await borrarArchivosSinUso(ctx, doc.condominioId, [
         resolveS3Key(ver.s3Key, ver.fileUrl),
       ]);
-      await ctx.db.delete(ver._id);
       return { kind: "archived" as const };
     }
 
@@ -625,9 +674,6 @@ export const removeVersion = mutation({
     }
 
     const prev = versiones[0]!;
-    await scheduleDeleteS3Keys(ctx, [
-      resolveS3Key(doc.s3Key, doc.fileUrl),
-    ]);
     await ctx.db.patch(doc._id, {
       fileUrl: prev.fileUrl,
       fileName: prev.fileName,
@@ -640,6 +686,9 @@ export const removeVersion = mutation({
       updatedAt: Date.now(),
     });
     await ctx.db.delete(prev._id);
+    await borrarArchivosSinUso(ctx, doc.condominioId, [
+      resolveS3Key(doc.s3Key, doc.fileUrl),
+    ]);
     return { kind: "restored" as const, version: prev.version };
   },
 });
@@ -656,10 +705,6 @@ async function deleteDocumentoCascade(
     .query("consejoDocumentoComentarios")
     .withIndex("by_documento", (q) => q.eq("documentoId", doc._id))
     .collect();
-  await scheduleDeleteS3Keys(ctx, [
-    resolveS3Key(doc.s3Key, doc.fileUrl),
-    ...versiones.map((v) => resolveS3Key(v.s3Key, v.fileUrl)),
-  ]);
   for (const c of comentarios) {
     const reacciones = await ctx.db
       .query("consejoComentarioReacciones")
@@ -670,6 +715,10 @@ async function deleteDocumentoCascade(
   }
   for (const v of versiones) await ctx.db.delete(v._id);
   await ctx.db.delete(doc._id);
+  await borrarArchivosSinUso(ctx, doc.condominioId, [
+    resolveS3Key(doc.s3Key, doc.fileUrl),
+    ...versiones.map((v) => resolveS3Key(v.s3Key, v.fileUrl)),
+  ]);
 }
 
 // ─── Comentarios ──────────────────────────────────────────────

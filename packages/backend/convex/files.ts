@@ -5,8 +5,11 @@ import { S3Client, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { v } from "convex/values";
 import { action, internalAction } from "./_generated/server";
-import { api } from "./_generated/api";
+import type { ActionCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
+import { api, internal } from "./_generated/api";
 import { bucketPublico, carpetaComprobantes, urlPublica, vTipoComprobante } from "./lib/comprobantes";
+import { CARPETA_AVATARES, carpetaAvatar } from "./model/s3";
 
 function requireS3Env() {
   /* Bucket y región como los lee `crearMio` para validar la URL de un
@@ -61,6 +64,24 @@ function sanitizeFolder(folderArg: string): string {
     .slice(0, 6)
     .join("/");
   return limpio || "uploads";
+}
+
+/**
+ * La carpeta en la que de verdad se sube.
+ *
+ * Las fotos de perfil van a la carpeta de quien sube (`avatars/{userId}`),
+ * la pida como la pida el cliente: la web y el móvil —también los builds ya
+ * instalados— mandan `"avatars"`. Así la llave dice de quién es la foto, y
+ * `users.setMyAvatar` solo borra fotos de esa carpeta. Nadie puede dejar
+ * archivos en la carpeta de otro usuario.
+ */
+async function carpetaDeSubida(ctx: ActionCtx, folderArg: string): Promise<string> {
+  const folder = sanitizeFolder(folderArg);
+  if (folder !== CARPETA_AVATARES && !folder.startsWith(`${CARPETA_AVATARES}/`)) {
+    return folder;
+  }
+  const userId: Id<"users"> = await ctx.runQuery(internal.users.miIdParaArchivos, {});
+  return carpetaAvatar(userId);
 }
 
 /** Key \u00fanico en el bucket: `{folder}/{timestamp}-{uuid corto}-{nombre saneado}`. */
@@ -118,7 +139,7 @@ export const generateUploadUrl = action({
 
     const { bucket } = requireS3Env();
     const client = s3Client();
-    const key = buildObjectKey(args.folder, args.fileName);
+    const key = buildObjectKey(await carpetaDeSubida(ctx, args.folder), args.fileName);
 
     const command = new PutObjectCommand({
       Bucket: bucket,
@@ -160,7 +181,7 @@ export const uploadBytes = action({
     }
 
     return await subirAlBucket(
-      args.folder,
+      await carpetaDeSubida(ctx, args.folder),
       args.fileName,
       args.contentType || "application/octet-stream",
       Buffer.from(args.bytes),
@@ -181,18 +202,18 @@ async function deleteS3Key(key: string) {
   );
 }
 
-/** Borra un objeto del bucket (si se conoce el key). */
-export const deleteObject = action({
-  args: { key: v.string() },
-  handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("No autenticado.");
-    await deleteS3Key(args.key);
-    return { ok: true as const };
-  },
-});
+/*
+ * No hay borrado público por llave. Existía `deleteObject` (cualquier sesión
+ * borraba cualquier llave del bucket) y ningún cliente lo usaba: se retiró.
+ * Los archivos se borran solo al borrar o reemplazar su registro, con la
+ * carpeta de su entidad (`model/s3.ts`, `scheduleDeleteS3Keys`).
+ */
 
-/** Borrado interno (p. ej. al reemplazar avatar / adjuntos). */
+/**
+ * Borrado interno (p. ej. al reemplazar avatar / adjuntos). Lo programan
+ * `scheduleDeleteS3Keys`, que ya filtró la llave por la carpeta de su
+ * entidad, y `soportesPago.enviarMio`, con la llave que acaba de crear.
+ */
 export const deleteObjectInternal = internalAction({
   args: { key: v.string() },
   handler: async (_ctx, args) => {

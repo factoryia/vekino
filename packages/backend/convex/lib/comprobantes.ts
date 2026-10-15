@@ -105,7 +105,7 @@ export function urlPublica(destino: BucketPublico, key: string): string {
  * tiene `[A-Za-z0-9._-]`, hasta 120 caracteres, y puede quedar vacío. Sin `/`
  * no hay `..` como tramo ni dobles barras; sin `?`, `#` ni `%`, nada más.
  */
-const TRAMO_DE_LLAVE = /^\d{13}-[0-9a-f]{8}-[A-Za-z0-9._-]{0,120}$/;
+export const TRAMO_DE_LLAVE = /^\d{13}-[0-9a-f]{8}-[A-Za-z0-9._-]{0,120}$/;
 
 /**
  * Si `url` es la de un archivo subido con `generateUploadUrl` a la carpeta de

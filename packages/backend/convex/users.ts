@@ -33,7 +33,14 @@ import {
   type Via,
 } from "./model/vias";
 import { miCompaniaDe } from "./model/acceso";
-import { scheduleDeleteS3Keys, s3KeyFromPublicUrl } from "./model/s3";
+import {
+  carpetaAvatar,
+  esLlaveDeCarpeta,
+  exigirLlaveDeCarpeta,
+  llaveDeArchivo,
+  scheduleDeleteS3Keys,
+  s3KeyFromPublicUrl,
+} from "./model/s3";
 import { normalizarTelefonoE164 } from "./lib/telefono";
 
 /**
@@ -300,7 +307,25 @@ export const generateAvatarUploadUrl = mutation({
   },
 });
 
-/** Guarda el avatar (URL S3 preferida; storageId legacy). Borra la foto anterior de S3. */
+/**
+ * El `_id` de quien sube, para la carpeta de su foto de perfil
+ * (`files.generateUploadUrl` / `uploadBytes`, `avatars/{userId}`).
+ */
+export const miIdParaArchivos = internalQuery({
+  args: {},
+  handler: async (ctx): Promise<Id<"users">> => (await requireAppUser(ctx))._id,
+});
+
+/**
+ * Guarda el avatar (URL S3 preferida; storageId legacy). Borra la foto anterior de S3.
+ *
+ * Solo cuenta como foto propia una llave de `avatars/{su _id}`, la carpeta
+ * que `files.ts` impone al subir: un `s3Key` de otra carpeta se rechaza, y
+ * del anterior solo se borra lo que esté en esa carpeta. Así cambiar o
+ * quitar la foto nunca alcanza el archivo de otro usuario. Las fotos de
+ * antes de la carpeta por usuario (`avatars/{llave}`) no se pueden atribuir:
+ * se quedan en el bucket.
+ */
 export const setMyAvatar = mutation({
   args: {
     storageId: v.optional(v.id("_storage")),
@@ -309,20 +334,22 @@ export const setMyAvatar = mutation({
   },
   handler: async (ctx, args) => {
     const user = await requireAppUser(ctx);
+    const carpeta = carpetaAvatar(user._id);
+    const s3Key = exigirLlaveDeCarpeta(args.s3Key, carpeta);
     let image = args.url?.trim();
     if (!image && args.storageId) {
       image = (await ctx.storage.getUrl(args.storageId)) ?? undefined;
     }
     if (!image) throw new Error("No se pudo obtener la URL del avatar.");
 
+    const deLaUrl = s3KeyFromPublicUrl(image);
     const newKey =
-      args.s3Key?.trim() || s3KeyFromPublicUrl(image) || undefined;
-    const oldKey =
-      user.imageS3Key?.trim() || s3KeyFromPublicUrl(user.image) || undefined;
+      s3Key ?? (esLlaveDeCarpeta(deLaUrl, carpeta) ? deLaUrl : undefined);
+    const oldKey = llaveDeArchivo(user.imageS3Key, user.image);
 
     if (oldKey && oldKey !== newKey) {
       try {
-        await scheduleDeleteS3Keys(ctx, [oldKey]);
+        await scheduleDeleteS3Keys(ctx, carpeta, [oldKey]);
       } catch {
         /* no bloquear el cambio de avatar si falla el borrado async */
       }
@@ -347,9 +374,10 @@ export const clearMyAvatar = mutation({
   args: {},
   handler: async (ctx) => {
     const user = await requireAppUser(ctx);
-    const oldKey =
-      user.imageS3Key?.trim() || s3KeyFromPublicUrl(user.image) || undefined;
-    if (oldKey) await scheduleDeleteS3Keys(ctx, [oldKey]);
+    // Solo si la foto es de su carpeta (ver `setMyAvatar`).
+    await scheduleDeleteS3Keys(ctx, carpetaAvatar(user._id), [
+      llaveDeArchivo(user.imageS3Key, user.image),
+    ]);
     if (user.imageStorageId) {
       await ctx.storage.delete(user.imageStorageId).catch(() => {});
     }
@@ -406,15 +434,14 @@ export const anonymizeUserRecords = internalMutation({
       .collect();
     for (const t of tokens) await ctx.db.delete(t._id);
 
-    // Avatar (S3 + storage legacy): se borra el archivo real.
-    const s3Key =
-      user.imageS3Key?.trim() || s3KeyFromPublicUrl(user.image) || undefined;
-    if (s3Key) {
-      try {
-        await scheduleDeleteS3Keys(ctx, [s3Key]);
-      } catch {
-        /* no bloquear el borrado si falla la limpieza async del avatar */
-      }
+    // Avatar (S3 + storage legacy): se borra el archivo real, si es de su
+    // carpeta (ver `setMyAvatar`).
+    try {
+      await scheduleDeleteS3Keys(ctx, carpetaAvatar(user._id), [
+        llaveDeArchivo(user.imageS3Key, user.image),
+      ]);
+    } catch {
+      /* no bloquear el borrado si falla la limpieza async del avatar */
     }
     if (user.imageStorageId) {
       await ctx.storage.delete(user.imageStorageId).catch(() => {});

@@ -1,4 +1,5 @@
 import { beforeEach, afterEach, describe, expect, test, vi } from "vitest";
+import { makeFunctionReference } from "convex/server";
 import { api, internal } from "../convex/_generated/api";
 import { montar } from "./helpers/incidentes";
 import { MAX_EVIDENCIA_BYTES } from "../convex/lib/incidenteEvidencias";
@@ -108,7 +109,11 @@ describe("expediente privado: evidencias, personas e identidad histórica", () =
     const evidencia = await e.t.run((ctx) => ctx.db.get(evidenciaId));
     vi.stubEnv("AWS_ACCESS_KEY_ID", "legacy-fake"); vi.stubEnv("AWS_SECRET_ACCESS_KEY", "legacy-fake");
     aws.send.mockClear();
-    await e.como("adminB").action(api.files.deleteObject, { key: evidencia!.storageKey });
+    // Ya no hay borrado público por llave (Fase 1A de S3): ni otra compañía ni nadie lo alcanza.
+    await expect(e.como("adminB").action(makeFunctionReference<"action">("files:deleteObject"), { key: evidencia!.storageKey })).rejects.toThrow();
+    expect(aws.send).not.toHaveBeenCalled();
+    // El borrado interno, aunque recibiera esa clave, solo opera sobre el bucket público.
+    await e.t.action(internal.files.deleteObjectInternal, { key: evidencia!.storageKey });
     expect(aws.send.mock.calls[0]![0].input).toEqual({ Bucket: "archivos-publicos", Key: evidencia!.storageKey });
     expect(await e.t.run((ctx) => ctx.db.get(evidenciaId))).toEqual(evidencia);
   });

@@ -1,10 +1,17 @@
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { query, mutation, internalQuery } from "./_generated/server";
+import type { MutationCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { requireCondominioRole } from "./model/authz";
 import { resolveMediaUrl } from "./model/files";
-import { scheduleDeleteS3Keys, s3KeyFromPublicUrl } from "./model/s3";
+import {
+  carpetaComunicados,
+  exigirLlaveDeCarpeta,
+  llaveDeArchivo,
+  scheduleDeleteS3Keys,
+} from "./model/s3";
 
 const audienciaValidator = v.union(
   v.literal("todos"),
@@ -28,6 +35,72 @@ const archivoValidator = v.object({
 });
 
 const ADMIN_ROLES = ["administrador", "junta_directiva", "contadora"] as const;
+
+type Archivo = {
+  storageId?: Id<"_storage">;
+  url?: string;
+  s3Key?: string;
+  mimeType: string;
+  nombre: string;
+};
+
+/**
+ * Los adjuntos con su `s3Key` revisado: el de un adjunto nuevo tiene que ser
+ * de la carpeta de comunicados del conjunto. Los que el comunicado ya tenía
+ * (la edición los reenvía tal cual) pasan como estaban.
+ */
+function exigirAdjuntos(
+  archivos: Archivo[],
+  condominioId: Id<"condominios">,
+  previos: Archivo[] = [],
+): Archivo[] {
+  const yaEstaban = new Set(
+    previos.map((a) => a.s3Key?.trim()).filter((k): k is string => Boolean(k)),
+  );
+  const carpeta = carpetaComunicados(condominioId);
+  return archivos.map((a) => {
+    const key = a.s3Key?.trim();
+    if (!key || yaEstaban.has(key)) return a;
+    return { ...a, s3Key: exigirLlaveDeCarpeta(key, carpeta) };
+  });
+}
+
+/** Las llaves S3 que usan los adjuntos de los comunicados del conjunto. */
+async function llavesEnUso(
+  ctx: MutationCtx,
+  condominioId: Id<"condominios">,
+): Promise<Set<string>> {
+  const rows = await ctx.db
+    .query("comunicados")
+    .withIndex("by_condominio", (q) => q.eq("condominioId", condominioId))
+    .collect();
+  return new Set(
+    rows
+      .flatMap((r) => r.archivos ?? [])
+      .map((a) => llaveDeArchivo(a.s3Key, a.url))
+      .filter((k): k is string => Boolean(k)),
+  );
+}
+
+/**
+ * Borra los archivos de `archivos` que ya no usa ningún comunicado del
+ * conjunto (se llama DESPUÉS de guardar el cambio), y solo si son de su
+ * carpeta (`scheduleDeleteS3Keys`).
+ */
+async function borrarAdjuntosSinUso(
+  ctx: MutationCtx,
+  condominioId: Id<"condominios">,
+  archivos: Archivo[],
+) {
+  const enUso = await llavesEnUso(ctx, condominioId);
+  await scheduleDeleteS3Keys(
+    ctx,
+    carpetaComunicados(condominioId),
+    archivos
+      .map((a) => llaveDeArchivo(a.s3Key, a.url))
+      .filter((k) => k !== null && !enUso.has(k)),
+  );
+}
 
 /** URL de subida — @deprecated usar api.files.generateUploadUrl (S3). */
 export const generateUploadUrl = mutation({
@@ -203,7 +276,7 @@ export const create = mutation({
       audiencia: args.audiencia,
       prioridad: args.prioridad,
       fijado: args.fijado,
-      archivos: args.archivos ?? [],
+      archivos: exigirAdjuntos(args.archivos ?? [], args.condominioId),
       createdAt: now,
       updatedAt: now,
     });
@@ -234,19 +307,10 @@ export const update = mutation({
     if (!existing) throw new Error("Comunicado no encontrado.");
     await requireCondominioRole(ctx, existing.condominioId, [...ADMIN_ROLES]);
 
-    const nextArchivos = args.archivos ?? existing.archivos ?? [];
+    const nextArchivos = args.archivos
+      ? exigirAdjuntos(args.archivos, existing.condominioId, existing.archivos)
+      : existing.archivos ?? [];
     if (args.archivos) {
-      const keep = new Set(
-        nextArchivos
-          .map((a) => a.s3Key?.trim() || s3KeyFromPublicUrl(a.url))
-          .filter((k): k is string => Boolean(k)),
-      );
-      const toDelete = (existing.archivos ?? [])
-        .map((a) => a.s3Key?.trim() || s3KeyFromPublicUrl(a.url))
-        .filter((k): k is string => Boolean(k))
-        .filter((k) => !keep.has(k));
-      await scheduleDeleteS3Keys(ctx, toDelete);
-
       const keepStorage = new Set(
         nextArchivos
           .map((a) => a.storageId)
@@ -268,6 +332,11 @@ export const update = mutation({
       archivos: nextArchivos,
       updatedAt: Date.now(),
     });
+
+    // Los adjuntos que se quitaron (los que siguen, siguen en uso).
+    if (args.archivos) {
+      await borrarAdjuntosSinUso(ctx, existing.condominioId, existing.archivos ?? []);
+    }
   },
 });
 
@@ -297,13 +366,8 @@ export const remove = mutation({
         .filter((a) => a.storageId)
         .map((a) => ctx.storage.delete(a.storageId!).catch(() => {})),
     );
-    await scheduleDeleteS3Keys(
-      ctx,
-      (existing.archivos ?? []).map(
-        (a) => a.s3Key?.trim() || s3KeyFromPublicUrl(a.url),
-      ),
-    );
     await ctx.db.delete(args.id);
+    await borrarAdjuntosSinUso(ctx, existing.condominioId, existing.archivos ?? []);
   },
 });
 

@@ -1,10 +1,16 @@
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { query, mutation } from "./_generated/server";
-import type { Doc } from "./_generated/dataModel";
+import type { MutationCtx } from "./_generated/server";
+import type { Doc, Id } from "./_generated/dataModel";
 import { requireCondominioRole } from "./model/authz";
 import { resolveMediaUrl } from "./model/files";
-import { scheduleDeleteS3Keys, s3KeyFromPublicUrl } from "./model/s3";
+import {
+  carpetaDocumentos,
+  exigirLlaveDeCarpeta,
+  llaveDeArchivo,
+  scheduleDeleteS3Keys,
+} from "./model/s3";
 
 const ADMIN_ROLES = ["administrador", "junta_directiva", "contadora"] as const;
 
@@ -124,13 +130,18 @@ export const create = mutation({
     if (!args.url && !args.storageId) {
       throw new Error("Falta la URL del archivo (S3).");
     }
+    // La llave, si viene, tiene que ser de la carpeta de documentos del conjunto.
+    const s3Key = exigirLlaveDeCarpeta(
+      args.s3Key,
+      carpetaDocumentos(args.condominioId),
+    );
     return await ctx.db.insert("documentos", {
       condominioId: args.condominioId,
       nombre: args.nombre.trim(),
       categoria: args.categoria,
       storageId: args.storageId,
       url: args.url,
-      s3Key: args.s3Key,
+      s3Key,
       mimeType: args.mimeType,
       tamanio: args.tamanio,
       autorNombre: user.name,
@@ -149,9 +160,30 @@ export const remove = mutation({
     if (existing.storageId) {
       await ctx.storage.delete(existing.storageId).catch(() => {});
     }
-    await scheduleDeleteS3Keys(ctx, [
-      existing.s3Key?.trim() || s3KeyFromPublicUrl(existing.url),
-    ]);
     await ctx.db.delete(args.id);
+
+    // El archivo, solo si es de la carpeta del conjunto y ya no lo usa otro
+    // documento.
+    const key = llaveDeArchivo(existing.s3Key, existing.url);
+    const enUso = await llavesEnUso(ctx, existing.condominioId);
+    if (key && !enUso.has(key)) {
+      await scheduleDeleteS3Keys(ctx, carpetaDocumentos(existing.condominioId), [key]);
+    }
   },
 });
+
+/** Las llaves S3 que usan los documentos del conjunto. */
+async function llavesEnUso(
+  ctx: MutationCtx,
+  condominioId: Id<"condominios">,
+): Promise<Set<string>> {
+  const docs = await ctx.db
+    .query("documentos")
+    .withIndex("by_condominio", (q) => q.eq("condominioId", condominioId))
+    .collect();
+  return new Set(
+    docs
+      .map((d) => llaveDeArchivo(d.s3Key, d.url))
+      .filter((k): k is string => Boolean(k)),
+  );
+}
