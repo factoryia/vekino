@@ -37,7 +37,11 @@ import {
   ventanaHoyBogota,
 } from "./model/visitantes";
 import { displayNameFromUser } from "./model/displayName";
-import { resolveMediaUrl, resolveMediaUrlList } from "./model/files";
+import {
+  exigirStorageIdDelRegistro,
+  resolveMediaUrl,
+  resolveMediaUrlList,
+} from "./model/files";
 import { calcularCosto } from "./lib/costoReserva";
 import { validarCierreTurno } from "./lib/cierreTurno";
 import { nombreDeQuienInicia } from "./lib/inicioTurno";
@@ -1551,7 +1555,8 @@ export const recibirPaquete = mutation({
       remitente: args.remitente?.trim() || undefined,
       destinatario: args.destinatario?.trim() || undefined,
       descripcion: args.descripcion?.trim() || undefined,
-      fotoStorageId: args.fotoStorageId,
+      // Un paquete nuevo no puede llevar un archivo de Convex Storage (`model/files.ts`).
+      fotoStorageId: exigirStorageIdDelRegistro(args.fotoStorageId),
       fotoUrl: args.fotoUrl,
       estado: "recibido",
       recibidoPorNombre: user.name,
@@ -1602,12 +1607,16 @@ export const entregarPaquete = mutation({
     if (!p) throw new Error("Paquete no encontrado.");
     const { user } = await requireCondominioRole(ctx, p.condominioId, [...GUARD_ROLES]);
     if (p.estado === "entregado") return;
+    // De Convex Storage, solo la foto que el paquete ya tenía (`model/files.ts`).
+    const fotoEntregaStorageId = exigirStorageIdDelRegistro(args.fotoEntregaStorageId, [
+      p.fotoEntregaStorageId,
+    ]);
     await ctx.db.patch(args.id, {
       estado: "entregado",
       entregadoPorNombre: user.name,
       entregadoANombre: args.entregadoA?.trim() || undefined,
       observacionesEntrega: args.observaciones?.trim() || undefined,
-      fotoEntregaStorageId: args.fotoEntregaStorageId,
+      fotoEntregaStorageId,
       fotoEntregaUrl: args.fotoEntregaUrl,
       fechaEntregado: Date.now(),
     });
@@ -1644,7 +1653,8 @@ export const eliminarPaqueteReciente = mutation({
       );
     }
 
-    if (p.fotoStorageId) await ctx.storage.delete(p.fotoStorageId).catch(() => {});
+    // La foto de Convex Storage heredada se desvincula sin borrarla: su id no
+    // prueba de quién es (`model/files.ts`).
     await ctx.db.delete(args.id);
     await logMinuta(ctx, {
       condominioId: p.condominioId,
@@ -1665,8 +1675,7 @@ export const removePaquete = mutation({
     const p = await ctx.db.get(args.id);
     if (!p) return;
     await requireCondominioRole(ctx, p.condominioId, [...ADMIN_ROLES]);
-    if (p.fotoStorageId) await ctx.storage.delete(p.fotoStorageId).catch(() => {});
-    if (p.fotoEntregaStorageId) await ctx.storage.delete(p.fotoEntregaStorageId).catch(() => {});
+    // Las fotos de Convex Storage heredadas se desvinculan sin borrarlas (`model/files.ts`).
     await ctx.db.delete(args.id);
   },
 });
@@ -1800,7 +1809,8 @@ export const registrarDepositoReserva = mutation({
       reservaId: args.reservaId,
       monto: args.monto,
       observacionesIngreso: args.observaciones?.trim() || undefined,
-      fotoIngresoStorageId: args.fotoStorageId,
+      // Un depósito nuevo no puede llevar un archivo de Convex Storage (`model/files.ts`).
+      fotoIngresoStorageId: exigirStorageIdDelRegistro(args.fotoStorageId),
       fotoIngresoUrl: args.fotoUrl,
       estado: "registrado",
       recibidoPorNombre: user.name,
@@ -1896,7 +1906,8 @@ export const resolverDepositoReserva = mutation({
       razon: args.observaciones,
       saldoEsperado: args.saldoEsperado,
       fotoUrl: args.fotoUrl,
-      fotoStorageId: args.fotoStorageId,
+      // De Convex Storage, solo la foto que el depósito ya tenía (`model/files.ts`).
+      fotoStorageId: exigirStorageIdDelRegistro(args.fotoStorageId, [dep.fotoSalidaStorageId]),
     });
 
     const r = await ctx.db.get(dep.reservaId);
@@ -2663,7 +2674,8 @@ export const reportarNovedad = mutation({
       titulo,
       descripcion,
       prioridad: args.prioridad,
-      archivoStorageId: args.archivoStorageId,
+      // Un reporte nuevo no puede llevar un archivo de Convex Storage (`model/files.ts`).
+      archivoStorageId: exigirStorageIdDelRegistro(args.archivoStorageId),
       archivoUrl: args.archivoUrl,
       archivoNombre: args.archivoNombre?.trim() || undefined,
       vehiculoId,

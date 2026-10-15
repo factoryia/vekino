@@ -11,7 +11,7 @@ import {
   vigentes,
 } from "./model/authz";
 import { calcularQuorum } from "./model/quorum";
-import { resolveMediaUrl } from "./model/files";
+import { exigirStorageIdDelRegistro, resolveMediaUrl } from "./model/files";
 import { resolveUserImage } from "./model/userImage";
 import {
   codigoActual,
@@ -292,6 +292,8 @@ export const remove = mutation({
       .withIndex("by_asamblea", (q) => q.eq("asambleaId", args.id))
       .collect();
     await Promise.all(votaciones.map((vt) => ctx.db.delete(vt._id)));
+    // El acta sí se borra: ninguna mutación recibe `actaStorageId` del
+    // cliente, así que el id no lo puso nadie de afuera (`model/files.ts`).
     if (existing.actaStorageId) await ctx.storage.delete(existing.actaStorageId);
     await ctx.db.delete(args.id);
   },
@@ -1496,7 +1498,8 @@ export const otorgarPoder = mutation({
       representanteNombre: nombre,
       apoderadoDocumento: documento,
       codigoAcceso: codigo,
-      documentoStorageId: args.documentoStorageId,
+      // Un poder nuevo no puede llevar un archivo de Convex Storage (`model/files.ts`).
+      documentoStorageId: exigirStorageIdDelRegistro(args.documentoStorageId),
       documentoUrl: args.documentoUrl,
       // Vecino del conjunto: debe aceptar el poder. Externo: válido con el código.
       // Registro por administración queda validado de una vez.

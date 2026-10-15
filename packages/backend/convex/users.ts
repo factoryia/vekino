@@ -23,6 +23,7 @@ import { ROLES_DE_MANDO_EN_CONJUNTO, tipoDocumentoValidator } from "./model/role
 import { evaluarPassword } from "./lib/passwordFuerte";
 import { credencialDeAlta, fijarPasswordDeCuenta } from "./model/credencial";
 import { resolveUserImage } from "./model/userImage";
+import { exigirStorageIdDelRegistro } from "./model/files";
 import { misAsignacionesDesde, viasDeAsignacionDe } from "./model/asignacion";
 import {
   aplicarContexto,
@@ -336,9 +337,11 @@ export const setMyAvatar = mutation({
     const user = await requireAppUser(ctx);
     const carpeta = carpetaAvatar(user._id);
     const s3Key = exigirLlaveDeCarpeta(args.s3Key, carpeta);
+    // De Convex Storage, solo la foto que ya tenía (`model/files.ts`).
+    const storageId = exigirStorageIdDelRegistro(args.storageId, [user.imageStorageId]);
     let image = args.url?.trim();
-    if (!image && args.storageId) {
-      image = (await ctx.storage.getUrl(args.storageId)) ?? undefined;
+    if (!image && storageId) {
+      image = (await ctx.storage.getUrl(storageId)) ?? undefined;
     }
     if (!image) throw new Error("No se pudo obtener la URL del avatar.");
 
@@ -354,14 +357,13 @@ export const setMyAvatar = mutation({
         /* no bloquear el cambio de avatar si falla el borrado async */
       }
     }
-    if (user.imageStorageId && user.imageStorageId !== args.storageId) {
-      await ctx.storage.delete(user.imageStorageId).catch(() => {});
-    }
+    // La foto anterior de Convex Storage se desvincula, pero no se borra: su
+    // id no prueba de quién es (`model/files.ts`).
 
     await ctx.db.patch(user._id, {
       image,
       // Con S3 limpiamos el storage legacy para que resolveUserImage no lo priorice.
-      imageStorageId: args.storageId ?? undefined,
+      imageStorageId: storageId ?? undefined,
       imageS3Key: newKey,
       updatedAt: Date.now(),
     });
@@ -378,9 +380,7 @@ export const clearMyAvatar = mutation({
     await scheduleDeleteS3Keys(ctx, carpetaAvatar(user._id), [
       llaveDeArchivo(user.imageS3Key, user.image),
     ]);
-    if (user.imageStorageId) {
-      await ctx.storage.delete(user.imageStorageId).catch(() => {});
-    }
+    // La de Convex Storage se desvincula sin borrarla (`model/files.ts`).
     await ctx.db.patch(user._id, {
       image: undefined,
       imageStorageId: undefined,
@@ -400,7 +400,8 @@ export const clearMyAvatar = mutation({
  *   NO se borra la fila para no romper las referencias del historial.
  * - Membresías: se desactivan (no se borran) → la unidad conserva su historia.
  * - Tokens push: se borran → deja de recibir notificaciones.
- * - Avatar: se borra el archivo real de S3 / storage.
+ * - Avatar: se borra el archivo real de S3 (si es de su carpeta); el de
+ *   Convex Storage heredado se desvincula sin borrarlo (`model/files.ts`).
  *
  * El borrado REAL de la cuenta (identidad Better Auth) lo hace `deleteMyAccount`.
  * Interno: lo invoca esa action pasando el authId ya resuelto.
@@ -443,9 +444,8 @@ export const anonymizeUserRecords = internalMutation({
     } catch {
       /* no bloquear el borrado si falla la limpieza async del avatar */
     }
-    if (user.imageStorageId) {
-      await ctx.storage.delete(user.imageStorageId).catch(() => {});
-    }
+    // La de Convex Storage se desvincula abajo sin borrarla: su id no prueba
+    // de quién es (`model/files.ts`).
 
     const email = user.email;
 

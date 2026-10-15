@@ -5,7 +5,7 @@ import type { MutationCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { requireCondominioRole } from "./model/authz";
-import { resolveMediaUrl } from "./model/files";
+import { exigirStorageIdDelRegistro, resolveMediaUrl } from "./model/files";
 import {
   carpetaComunicados,
   exigirLlaveDeCarpeta,
@@ -47,7 +47,8 @@ type Archivo = {
 /**
  * Los adjuntos con su `s3Key` revisado: el de un adjunto nuevo tiene que ser
  * de la carpeta de comunicados del conjunto. Los que el comunicado ya tenía
- * (la edición los reenvía tal cual) pasan como estaban.
+ * (la edición los reenvía tal cual) pasan como estaban. Un `storageId` de
+ * Convex Storage solo vale si el comunicado ya lo tenía (`model/files.ts`).
  */
 function exigirAdjuntos(
   archivos: Archivo[],
@@ -57,8 +58,10 @@ function exigirAdjuntos(
   const yaEstaban = new Set(
     previos.map((a) => a.s3Key?.trim()).filter((k): k is string => Boolean(k)),
   );
+  const storagePrevios = previos.map((a) => a.storageId);
   const carpeta = carpetaComunicados(condominioId);
   return archivos.map((a) => {
+    exigirStorageIdDelRegistro(a.storageId, storagePrevios);
     const key = a.s3Key?.trim();
     if (!key || yaEstaban.has(key)) return a;
     return { ...a, s3Key: exigirLlaveDeCarpeta(key, carpeta) };
@@ -310,18 +313,8 @@ export const update = mutation({
     const nextArchivos = args.archivos
       ? exigirAdjuntos(args.archivos, existing.condominioId, existing.archivos)
       : existing.archivos ?? [];
-    if (args.archivos) {
-      const keepStorage = new Set(
-        nextArchivos
-          .map((a) => a.storageId)
-          .filter((id): id is NonNullable<typeof id> => Boolean(id)),
-      );
-      await Promise.all(
-        (existing.archivos ?? [])
-          .filter((a) => a.storageId && !keepStorage.has(a.storageId))
-          .map((a) => ctx.storage.delete(a.storageId!).catch(() => {})),
-      );
-    }
+    // Un adjunto de Convex Storage que se quita se desvincula sin borrarlo:
+    // su id no prueba de quién es (`model/files.ts`).
 
     await ctx.db.patch(args.id, {
       titulo: args.titulo.trim(),
@@ -361,11 +354,7 @@ export const remove = mutation({
     const existing = await ctx.db.get(args.id);
     if (!existing) throw new Error("Comunicado no encontrado.");
     await requireCondominioRole(ctx, existing.condominioId, [...ADMIN_ROLES]);
-    await Promise.all(
-      (existing.archivos ?? [])
-        .filter((a) => a.storageId)
-        .map((a) => ctx.storage.delete(a.storageId!).catch(() => {})),
-    );
+    // Los adjuntos de Convex Storage se desvinculan sin borrarlos (`model/files.ts`).
     await ctx.db.delete(args.id);
     await borrarAdjuntosSinUso(ctx, existing.condominioId, existing.archivos ?? []);
   },

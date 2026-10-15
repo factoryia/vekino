@@ -29,6 +29,7 @@ import {
   type MotivoRechazo,
 } from "./lib/lecturaFactura";
 import { planificarReproceso, type PlanUnidad } from "./lib/reproceso";
+import { exigirStorageIdDelRegistro } from "./model/files";
 import {
   recaudoContablePorPeriodo,
   recaudoVekinoPorPeriodo,
@@ -1530,9 +1531,11 @@ export const createManual = mutation({
     const numeroFactura = `FAC-${args.periodo}-${unidad.numero}-${consecutivo}`;
     const numeroInterno = consecutivo;
 
+    // Una factura nueva no puede llevar un archivo de Convex Storage (`model/files.ts`).
+    const pdfStorageId = exigirStorageIdDelRegistro(args.pdfStorageId);
     let pdfUrl = args.pdfUrl;
-    if (!pdfUrl && args.pdfStorageId) {
-      pdfUrl = (await ctx.storage.getUrl(args.pdfStorageId)) ?? undefined;
+    if (!pdfUrl && pdfStorageId) {
+      pdfUrl = (await ctx.storage.getUrl(pdfStorageId)) ?? undefined;
     }
 
     const entrada: EntradaFactura = {

@@ -4,7 +4,7 @@ import { query, mutation } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireCondominioRole } from "./model/authz";
-import { resolveMediaUrl } from "./model/files";
+import { exigirStorageIdDelRegistro, resolveMediaUrl } from "./model/files";
 import {
   carpetaDocumentos,
   exigirLlaveDeCarpeta,
@@ -135,11 +135,13 @@ export const create = mutation({
       args.s3Key,
       carpetaDocumentos(args.condominioId),
     );
+    // Un documento nuevo no puede llevar un archivo de Convex Storage (`model/files.ts`).
+    const storageId = exigirStorageIdDelRegistro(args.storageId);
     return await ctx.db.insert("documentos", {
       condominioId: args.condominioId,
       nombre: args.nombre.trim(),
       categoria: args.categoria,
-      storageId: args.storageId,
+      storageId,
       url: args.url,
       s3Key,
       mimeType: args.mimeType,
@@ -157,9 +159,8 @@ export const remove = mutation({
     const existing = await ctx.db.get(args.id);
     if (!existing) throw new Error("Documento no encontrado.");
     await requireCondominioRole(ctx, existing.condominioId, [...ADMIN_ROLES]);
-    if (existing.storageId) {
-      await ctx.storage.delete(existing.storageId).catch(() => {});
-    }
+    // Un archivo de Convex Storage heredado se desvincula sin borrarlo: su id
+    // no prueba de quién es (`model/files.ts`).
     await ctx.db.delete(args.id);
 
     // El archivo, solo si es de la carpeta del conjunto y ya no lo usa otro
