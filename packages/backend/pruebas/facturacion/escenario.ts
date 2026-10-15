@@ -3,6 +3,8 @@ import { expect, vi } from "vitest";
 import schema from "../../convex/schema";
 import { api, internal } from "../../convex/_generated/api";
 import type { Doc, Id } from "../../convex/_generated/dataModel";
+import { carpetaComprobantes } from "../../convex/lib/comprobantes";
+import { subidaValidada } from "../helpers/subidas";
 
 /**
  * ESCENARIO COMÚN DE LA RED DE SEGURIDAD DE FACTURACIÓN (Fase 0).
@@ -313,12 +315,27 @@ export async function aprobarPagoAval(
   return pagoId;
 }
 
+/**
+ * La URL de un comprobante que `quien` acaba de subir (H-12, Fase 4 de S3):
+ * `crearMio` solo registra un archivo que quien envía subió, ya validado, a
+ * la carpeta de comprobantes del conjunto.
+ */
+export async function comprobanteSubido(
+  esc: Escenario,
+  quien: "residente" | "vecino" = "residente",
+  nombre = "comprobante.pdf",
+) {
+  const userId = quien === "residente" ? esc.residenteId : esc.vecinoId;
+  const { url } = await subidaValidada(esc.t, { userId, carpeta: carpetaComprobantes(esc.condominioId), nombre });
+  return url;
+}
+
 /** El residente sube un comprobante y la administración lo aprueba. */
 export async function aprobarComprobante(esc: Escenario, facturaId: Id<"facturas">) {
   const soporteId = await esc.como("residente").mutation(api.soportesPago.crearMio, {
     condominioId: esc.condominioId,
     facturaId,
-    url: "https://archivos.test/comprobante.pdf",
+    url: await comprobanteSubido(esc),
     mimeType: "application/pdf",
   });
   await esc.como("admin").mutation(api.soportesPago.aprobar, { id: soporteId });

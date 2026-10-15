@@ -9,6 +9,11 @@ type GenerateS3Upload = (args: {
   size?: number;
 }) => Promise<FunctionReturnType<typeof api.files.generateUploadUrl>>;
 
+/** Publica el PUT directo después de que el servidor revisa el objeto (`files.confirmarSubida`). */
+type ConfirmarSubida = (args: {
+  key: string;
+}) => Promise<FunctionReturnType<typeof api.files.confirmarSubida>>;
+
 type UploadBytesFn = (args: {
   folder: string;
   contentType: string;
@@ -33,10 +38,12 @@ export type UploadToS3Options = {
  * Sube un File/Blob a S3.
  *
  * - Archivos ≤ 15 MB + `uploadBytes`: sube por Convex (sin CORS).
- * - Archivos grandes: PUT firmado al bucket (con progreso XHR).
+ * - Archivos grandes: PUT firmado al bucket (con progreso XHR), y luego el
+ *   servidor revisa lo que llegó antes de publicarlo (`confirmarSubida`).
  */
 export async function uploadToS3(
   generateUploadUrl: GenerateS3Upload,
+  confirmarSubida: ConfirmarSubida,
   file: Blob & { name?: string },
   folder: string,
   uploadBytes?: UploadBytesFn,
@@ -71,6 +78,7 @@ export async function uploadToS3(
       try {
         return await putSigned(
           generateUploadUrl,
+          confirmarSubida,
           file,
           folder,
           contentType,
@@ -85,6 +93,7 @@ export async function uploadToS3(
   try {
     return await putSigned(
       generateUploadUrl,
+      confirmarSubida,
       file,
       folder,
       contentType,
@@ -125,6 +134,7 @@ export async function uploadToS3(
 
 async function putSigned(
   generateUploadUrl: GenerateS3Upload,
+  confirmarSubida: ConfirmarSubida,
   file: Blob & { name?: string },
   folder: string,
   contentType: string,
@@ -145,8 +155,11 @@ async function putSigned(
       label: `Subiendo… ${percent}%`,
     });
   });
+  // Lo que llegó se publica solo si el servidor confirma tamaño y tipo real.
+  onProgress?.({ percent: 99, label: "Revisando el archivo…" });
+  const confirmado = await confirmarSubida({ key });
   onProgress?.({ percent: 100, label: "Listo" });
-  return { url: publicUrl, key };
+  return { url: confirmado.publicUrl, key: confirmado.key };
 }
 
 /** PUT con progreso real (XHR). Timeout 90s. */

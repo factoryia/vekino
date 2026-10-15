@@ -1,7 +1,14 @@
 "use node";
 
 import { createHash, randomBytes, randomUUID } from "crypto";
-import { S3Client, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import {
+  S3Client,
+  PutObjectCommand,
+  DeleteObjectCommand,
+  HeadObjectCommand,
+  GetObjectCommand,
+  CopyObjectCommand,
+} from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { v } from "convex/values";
 import { action, internalAction } from "./_generated/server";
@@ -10,10 +17,17 @@ import { api, internal } from "./_generated/api";
 import { bucketPublico, carpetaComprobantes, urlPublica, vTipoComprobante } from "./lib/comprobantes";
 import {
   BYTES_CABECERA,
+  CARPETA_TEMPORAL,
+  CATEGORIAS,
+  MENSAJE_ARCHIVO_GRANDE,
   MENSAJE_CONTENIDO,
+  MENSAJE_SUBIDA_NO_VALIDA,
   TIPOS_DESCARGA,
+  VIGENCIA_PENDIENTE_DIRECTA_MS,
   tipoNeutralizado,
   tipoVerificado,
+  type Categoria,
+  type NombreCategoria,
 } from "./lib/subidas";
 
 function requireS3Env() {
@@ -173,17 +187,33 @@ export const generateUploadUrl = action({
     const key = buildObjectKey(destino.carpeta, args.fileName);
 
     if (directo) {
-      /* El cliente manda en el PUT exactamente este `Content-Type`, y el
-       * navegador pone el `Content-Length`: los dos quedan firmados. */
+      /* El PUT va a una llave provisional (`pendientes/…`), con el tipo y el
+       * tamaño firmados: el cliente manda exactamente este `Content-Type` y
+       * el navegador pone el `Content-Length`. Firmar no prueba qué bytes
+       * llegan: eso lo revisa `confirmarSubida` leyendo el objeto, y solo
+       * entonces lo publica en `key` con el tipo verificado. */
+      const claveTemporal = `${CARPETA_TEMPORAL}/${randomBytes(16).toString("hex")}`;
       const command = new PutObjectCommand({
         Bucket: bucket,
-        Key: key,
+        Key: claveTemporal,
         ContentType: args.contentType,
         ContentLength: args.size,
       });
       const uploadUrl = await getSignedUrl(s3Client(), command, {
         expiresIn: VIGENCIA_ENLACE_MS / 1000,
         signableHeaders: new Set(["content-type", "content-length"]),
+      });
+      await ctx.runMutation(internal.subidas.registrarPendiente, {
+        key,
+        url: publicUrlFor(key),
+        carpeta: destino.carpeta,
+        categoria: destino.categoria,
+        tipoDeclarado: args.contentType,
+        userId: destino.userId,
+        expiraEn: Date.now() + VIGENCIA_PENDIENTE_DIRECTA_MS,
+        modo: "directo",
+        size: args.size,
+        claveTemporal,
       });
       return { uploadUrl, key, publicUrl: publicUrlFor(key) };
     }
@@ -194,10 +224,13 @@ export const generateUploadUrl = action({
     await ctx.runMutation(internal.subidas.registrarPendiente, {
       tokenHash: createHash("sha256").update(token).digest("hex"),
       key,
+      url: publicUrlFor(key),
+      carpeta: destino.carpeta,
       categoria: destino.categoria,
       tipoDeclarado: args.contentType,
       userId: destino.userId,
       expiraEn: Date.now() + VIGENCIA_ENLACE_MS,
+      modo: "intermediado",
     });
     return {
       uploadUrl: `${sitio}/archivos/subida?token=${token}`,
@@ -245,7 +278,19 @@ export const uploadBytes = action({
     const tipo = tipoVerificado(cabecera, args.contentType, destino.tipos);
     if (!tipo) throw new Error(MENSAJE_CONTENIDO);
 
-    return await subirAlBucket(destino.carpeta, args.fileName, tipo, Buffer.from(args.bytes));
+    const subido = await subirAlBucket(destino.carpeta, args.fileName, tipo, Buffer.from(args.bytes));
+    // Validada desde ya: el servidor vio los bytes.
+    await ctx.runMutation(internal.subidas.registrarValidada, {
+      key: subido.key,
+      url: subido.publicUrl,
+      carpeta: destino.carpeta,
+      categoria: destino.categoria,
+      tipoDeclarado: args.contentType,
+      userId: destino.userId,
+      tipo,
+      bytes: size,
+    });
+    return subido;
   },
 });
 
@@ -261,6 +306,82 @@ export const publicarSubida = internalAction({
     if (!archivo) throw new Error("No se encontró el archivo de la subida.");
     await ponerEnBucket(args.key, args.contentType, Buffer.from(await archivo.arrayBuffer()));
     return null;
+  },
+});
+
+/**
+ * Publica un PUT directo (`generateUploadUrl` con `size`) después de mirar
+ * el objeto que de verdad llegó a su llave provisional:
+ *   1. su tamaño real (`HeadObject`), que tiene que ser el firmado y no pasar
+ *      el de su categoría;
+ *   2. sus primeros bytes (`GetObject` con `Range`, 1 KB: no se baja el
+ *      archivo), que tienen que ser de un tipo permitido;
+ *   3. si pasa, una copia dentro de S3 (no pasa por aquí: sirve para las
+ *      grabaciones de 50 MiB) a su llave definitiva con el tipo verificado, y
+ *      la subida queda validada para registrarse. Si no pasa, se borra y no
+ *      se publica nada.
+ * Destino, categoría, tamaño y tipo declarado salen de la subida guardada al
+ * firmar, no del cliente; solo puede confirmarla quien la pidió.
+ */
+export const confirmarSubida = action({
+  args: { key: v.string() },
+  handler: async (ctx, args): Promise<{ key: string; publicUrl: string }> => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("No autenticado.");
+    const subida = await ctx.runQuery(internal.subidas.paraConfirmar, { key: args.key });
+    if (!subida) throw new Error(MENSAJE_SUBIDA_NO_VALIDA);
+
+    const { bucket } = requireS3Env();
+    const client = s3Client();
+    const descartar = async (mensaje: string): Promise<never> => {
+      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: subida.claveTemporal })).catch(() => {});
+      await ctx.runMutation(internal.subidas.descartar, { key: subida.key });
+      throw new Error(mensaje);
+    };
+    const categoria: Categoria | undefined = CATEGORIAS[subida.categoria as NombreCategoria];
+    if (!categoria) return await descartar(MENSAJE_SUBIDA_NO_VALIDA);
+
+    // 1. El tamaño real.
+    let bytes: number;
+    try {
+      const cabeza = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: subida.claveTemporal }));
+      bytes = Number(cabeza.ContentLength);
+    } catch {
+      throw new Error("El archivo no llegó. Vuelve a intentarlo.");
+    }
+    if (!Number.isSafeInteger(bytes) || bytes <= 0 || bytes !== subida.size || bytes > categoria.maxBytes) {
+      return await descartar(MENSAJE_ARCHIVO_GRANDE);
+    }
+
+    // 2. El tipo real, por sus primeros bytes.
+    const parte = await client.send(
+      new GetObjectCommand({ Bucket: bucket, Key: subida.claveTemporal, Range: `bytes=0-${BYTES_CABECERA - 1}` }),
+    );
+    const cabecera = parte.Body ? (await parte.Body.transformToByteArray()).subarray(0, BYTES_CABECERA) : new Uint8Array();
+    const permitidos = categoria.tipos.filter((t) => !categoria.soloServidor?.includes(t));
+    const tipo = tipoVerificado(cabecera, subida.tipoDeclarado, permitidos);
+    if (!tipo) return await descartar(MENSAJE_CONTENIDO);
+
+    // 3. Publicar con el tipo verificado.
+    await client.send(
+      new CopyObjectCommand({
+        Bucket: bucket,
+        Key: subida.key,
+        CopySource: `${bucket}/${subida.claveTemporal}`,
+        MetadataDirective: "REPLACE",
+        ContentType: tipo,
+        ...(TIPOS_DESCARGA.has(tipo) ? { ContentDisposition: "attachment" } : {}),
+      }),
+    );
+    await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: subida.claveTemporal })).catch(() => {});
+    try {
+      await ctx.runMutation(internal.subidas.marcarValidada, { key: subida.key, tipo, bytes });
+    } catch (e) {
+      // Venció o se descartó mientras tanto: no queda publicado.
+      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: subida.key })).catch(() => {});
+      throw e;
+    }
+    return { key: subida.key, publicUrl: publicUrlFor(subida.key) };
   },
 });
 

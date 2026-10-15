@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { httpAction, internalMutation, internalQuery } from "./_generated/server";
-import type { QueryCtx } from "./_generated/server";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import {
@@ -12,6 +12,7 @@ import {
 import { exigirAccesoCompania } from "./model/acceso";
 import type { OperationalRole } from "./model/roles";
 import { carpetaAvatar } from "./model/s3";
+import { exigirArchivoSubido } from "./model/registroArchivos";
 import { ADMIN_ROLES as ROLES_DOCUMENTOS } from "./documentos";
 import { ADMIN_ROLES as ROLES_COMUNICADOS } from "./comunicados";
 import { ADMIN_ROLES as ROLES_ICONOS_CONSEJO, UPLOAD_ROLES as ROLES_CONSEJO } from "./consejo";
@@ -21,13 +22,16 @@ import { WRITE_ROLES as ROLES_MESA } from "./asambleas";
 import { MANUAL_ROLES } from "./facturas";
 import {
   BYTES_CABECERA,
+  CARPETA_TEMPORAL,
   CATEGORIAS,
   MAX_INTERMEDIADA,
   MENSAJE_ARCHIVO_GRANDE,
   MENSAJE_CONTENIDO,
+  MENSAJE_SUBIDA_NO_VALIDA,
   MENSAJE_TIPO_NO_PERMITIDO,
   normalizarTipo,
   tipoVerificado,
+  VIGENCIA_REGISTRO_MS,
   type Categoria,
   type NombreCategoria,
 } from "./lib/subidas";
@@ -208,29 +212,147 @@ export const autorizar = internalQuery({
   },
 });
 
-/* ── Subida intermediada (apps instaladas y web anterior) ─────────────────── */
+/* ── El registro de cada subida (`subidasPendientes`) ─────────────────────── */
 
-/** Registra un enlace de subida de un solo uso. Limpia de paso los vencidos. */
+/**
+ * Borra algunas filas vencidas. Si era un PUT directo que nunca se confirmó,
+ * borra también su objeto provisional (`pendientes/…`, llave del servidor):
+ * nunca llegó a publicarse.
+ */
+async function limpiarVencidas(ctx: MutationCtx) {
+  const vencidas = await ctx.db
+    .query("subidasPendientes")
+    .withIndex("by_expira", (q) => q.lt("expiraEn", Date.now()))
+    .take(20);
+  for (const p of vencidas) {
+    const pendiente = (p.estado ?? "pendiente") === "pendiente";
+    if (pendiente && p.claveTemporal?.startsWith(`${CARPETA_TEMPORAL}/`)) {
+      await ctx.scheduler.runAfter(0, internal.files.deleteObjectInternal, { key: p.claveTemporal });
+    }
+    await ctx.db.delete(p._id);
+  }
+}
+
+const vModo = v.union(v.literal("directo"), v.literal("intermediado"), v.literal("servidor"));
+
+/** Una subida autorizada que todavía no llega (o no se ha comprobado). */
 export const registrarPendiente = internalMutation({
   args: {
-    tokenHash: v.string(),
     key: v.string(),
+    url: v.string(),
+    carpeta: v.string(),
     categoria: v.string(),
     tipoDeclarado: v.string(),
     userId: v.id("users"),
     expiraEn: v.number(),
+    modo: vModo,
+    tokenHash: v.optional(v.string()),
+    size: v.optional(v.number()),
+    claveTemporal: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const vencidos = await ctx.db
-      .query("subidasPendientes")
-      .withIndex("by_expira", (q) => q.lt("expiraEn", Date.now()))
-      .take(20);
-    for (const p of vencidos) await ctx.db.delete(p._id);
-    await ctx.db.insert("subidasPendientes", args);
+    await limpiarVencidas(ctx);
+    await ctx.db.insert("subidasPendientes", { ...args, estado: "pendiente" });
   },
 });
 
-/** Gasta el enlace: lo borra siempre, y lo devuelve solo si no venció. */
+/** Una subida que el servidor ya escribió con los bytes revisados (`uploadBytes`). */
+export const registrarValidada = internalMutation({
+  args: {
+    key: v.string(),
+    url: v.string(),
+    carpeta: v.string(),
+    categoria: v.string(),
+    tipoDeclarado: v.string(),
+    userId: v.id("users"),
+    tipo: v.string(),
+    bytes: v.number(),
+  },
+  handler: async (ctx, args) => {
+    await limpiarVencidas(ctx);
+    await ctx.db.insert("subidasPendientes", {
+      ...args,
+      modo: "servidor",
+      estado: "validada",
+      expiraEn: Date.now() + VIGENCIA_REGISTRO_MS,
+    });
+  },
+});
+
+async function porLlave(ctx: QueryCtx, key: string) {
+  return await ctx.db
+    .query("subidasPendientes")
+    .withIndex("by_key", (q) => q.eq("key", key))
+    .first();
+}
+
+/**
+ * El contenido ya se leyó y es de un tipo permitido: la subida queda
+ * validada, con el tipo y el tamaño comprobados, lista para registrarse.
+ */
+export const marcarValidada = internalMutation({
+  args: { key: v.string(), tipo: v.string(), bytes: v.number() },
+  handler: async (ctx, args) => {
+    const p = await porLlave(ctx, args.key);
+    // Sin fila (venció o se descartó): quien llama no debe dejar nada publicado.
+    if (!p) throw new Error(MENSAJE_SUBIDA_NO_VALIDA);
+    // Ya validada (dos confirmaciones a la vez): nada que hacer.
+    if (p.estado === "validada") return;
+    await ctx.db.patch(p._id, {
+      estado: "validada",
+      tipo: args.tipo,
+      bytes: args.bytes,
+      tokenHash: undefined,
+      claveTemporal: undefined,
+      expiraEn: Date.now() + VIGENCIA_REGISTRO_MS,
+    });
+  },
+});
+
+/** La subida no pasó la revisión: se olvida (nada quedó publicado). */
+export const descartar = internalMutation({
+  args: { key: v.string() },
+  handler: async (ctx, args) => {
+    const p = await porLlave(ctx, args.key);
+    if (p && (p.estado ?? "pendiente") === "pendiente") await ctx.db.delete(p._id);
+  },
+});
+
+/**
+ * La subida directa que `files.confirmarSubida` va a revisar: de quien
+ * confirma, pendiente y sin vencer. Lo demás (destino, categoría, tamaño
+ * firmado, tipo declarado) sale de aquí, no del cliente.
+ */
+export const paraConfirmar = internalQuery({
+  args: { key: v.string() },
+  handler: async (ctx, args) => {
+    const user = await requireAppUser(ctx);
+    const p = await porLlave(ctx, args.key);
+    if (
+      !p ||
+      p.userId !== user._id ||
+      p.modo !== "directo" ||
+      (p.estado ?? "pendiente") !== "pendiente" ||
+      !p.claveTemporal ||
+      p.size === undefined ||
+      p.expiraEn < Date.now()
+    ) {
+      return null;
+    }
+    return {
+      key: p.key,
+      claveTemporal: p.claveTemporal,
+      size: p.size,
+      categoria: p.categoria,
+      tipoDeclarado: p.tipoDeclarado,
+    };
+  },
+});
+
+/**
+ * Gasta el enlace de la subida intermediada (un solo uso): borra su huella y
+ * devuelve la subida si sigue pendiente y no venció.
+ */
 export const consumirPendiente = internalMutation({
   args: { tokenHash: v.string() },
   handler: async (ctx, args) => {
@@ -239,11 +361,26 @@ export const consumirPendiente = internalMutation({
       .withIndex("by_token", (q) => q.eq("tokenHash", args.tokenHash))
       .first();
     if (!p) return null;
-    await ctx.db.delete(p._id);
-    if (p.expiraEn < Date.now()) return null;
+    if (p.expiraEn < Date.now() || (p.estado ?? "pendiente") !== "pendiente") {
+      await ctx.db.delete(p._id);
+      return null;
+    }
+    await ctx.db.patch(p._id, { tokenHash: undefined });
     return { key: p.key, categoria: p.categoria, tipoDeclarado: p.tipoDeclarado };
   },
 });
+
+/** Para acciones (la bandeja de WhatsApp): `exigirArchivoSubido` en una mutación. */
+export const exigirSubidaParaRegistro = internalMutation({
+  args: { userId: v.id("users"), url: v.string(), carpeta: v.string(), reutilizable: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    await exigirArchivoSubido(ctx, args.userId, { url: args.url }, args.carpeta, {
+      reutilizable: args.reutilizable,
+    });
+  },
+});
+
+/* ── Subida intermediada (apps instaladas y web anterior) ─────────────────── */
 
 /* La subida la hacen el navegador (la web anterior, por XHR) y la app; el
  * enlace es la credencial, así que no hacen falta cookies ni un origen fijo. */
@@ -326,16 +463,20 @@ export const recibirSubida = httpAction(async (ctx, request) => {
   if (!pendiente || !categoria) return respuesta(403, { error: MENSAJE_ENLACE });
 
   const max = Math.min(categoria.maxBytes, MAX_INTERMEDIADA);
+  /* Si no pasa la revisión, la subida se olvida: no queda nada publicado ni
+   * nada que una entidad pueda registrar. */
+  const rechazar = async (status: number, error: string) => {
+    await ctx.runMutation(internal.subidas.descartar, { key: pendiente.key });
+    return respuesta(status, { error });
+  };
   const anunciado = Number(request.headers.get("content-length"));
-  if (Number.isFinite(anunciado) && anunciado > max) {
-    return respuesta(413, { error: MENSAJE_ARCHIVO_GRANDE });
-  }
+  if (Number.isFinite(anunciado) && anunciado > max) return await rechazar(413, MENSAJE_ARCHIVO_GRANDE);
   const leido = await leerConLimite(request, max);
-  if (!leido) return respuesta(413, { error: MENSAJE_ARCHIVO_GRANDE });
-  if (leido.total === 0) return respuesta(400, { error: "Archivo vacío." });
+  if (!leido) return await rechazar(413, MENSAJE_ARCHIVO_GRANDE);
+  if (leido.total === 0) return await rechazar(400, "Archivo vacío.");
 
   const tipo = tipoVerificado(leido.cabecera, pendiente.tipoDeclarado, categoria.tipos);
-  if (!tipo) return respuesta(415, { error: MENSAJE_CONTENIDO });
+  if (!tipo) return await rechazar(415, MENSAJE_CONTENIDO);
 
   const storageId = await ctx.storage.store(new Blob(leido.trozos as BlobPart[], { type: tipo }));
   try {
@@ -345,9 +486,16 @@ export const recibirSubida = httpAction(async (ctx, request) => {
       contentType: tipo,
     });
   } catch {
-    return respuesta(502, { error: "No se pudo guardar el archivo. Intenta de nuevo." });
+    return await rechazar(502, "No se pudo guardar el archivo. Intenta de nuevo.");
   } finally {
     await ctx.storage.delete(storageId);
+  }
+  try {
+    await ctx.runMutation(internal.subidas.marcarValidada, { key: pendiente.key, tipo, bytes: leido.total });
+  } catch {
+    // Venció mientras llegaba: no queda publicado nada que no se pueda registrar.
+    await ctx.runAction(internal.files.deleteObjectInternal, { key: pendiente.key });
+    return respuesta(403, { error: MENSAJE_ENLACE });
   }
   return respuesta(200, { ok: true });
 });

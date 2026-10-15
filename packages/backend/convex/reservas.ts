@@ -34,6 +34,7 @@ import {
   misUnidadIds,
 } from "./model/authz";
 import { ventanaDiaBogota } from "./model/visitantes";
+import { exigirArchivosSubidos } from "./model/registroArchivos";
 
 export const ADMIN_ROLES = ["administrador", "junta_directiva", "contadora"] as const;
 
@@ -627,6 +628,8 @@ export const registrarIncidente = mutation({
     const reserva = await ctx.db.get(args.reservaId);
     if (!reserva) throw new Error("Reserva no encontrada.");
     const { user } = await requireCondominioRole(ctx, reserva.condominioId, [...ADMIN_ROLES]);
+    // Fotos de subidas validadas de quien registra, a la carpeta de la caja (`model/registroArchivos.ts`).
+    await exigirArchivosSubidos(ctx, user._id, args.fotos ?? [], `condominios/${reserva.condominioId}/reservas/incidentes`);
     return await crearIncidente(ctx, {
       reserva,
       user,

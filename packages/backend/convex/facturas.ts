@@ -30,6 +30,7 @@ import {
 } from "./lib/lecturaFactura";
 import { planificarReproceso, type PlanUnidad } from "./lib/reproceso";
 import { exigirStorageIdDelRegistro } from "./model/files";
+import { exigirArchivoSubido } from "./model/registroArchivos";
 import {
   recaudoContablePorPeriodo,
   recaudoVekinoPorPeriodo,
@@ -1532,6 +1533,8 @@ export const createManual = mutation({
 
     // Una factura nueva no puede llevar un archivo de Convex Storage (`model/files.ts`).
     const pdfStorageId = exigirStorageIdDelRegistro(args.pdfStorageId);
+    // El PDF sale de una subida validada de quien la crea (`model/registroArchivos.ts`).
+    await exigirArchivoSubido(ctx, user._id, { url: args.pdfUrl }, `condominios/facturas/${args.condominioId}`);
     let pdfUrl = args.pdfUrl;
     if (!pdfUrl && pdfStorageId) {
       pdfUrl = (await ctx.storage.getUrl(pdfStorageId)) ?? undefined;

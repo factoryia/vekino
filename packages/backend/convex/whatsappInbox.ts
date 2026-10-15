@@ -322,6 +322,18 @@ export const enviar = action({
       return { ok: false, motivo: "Escribe un mensaje o adjunta un archivo." };
     }
 
+    /* El adjunto sale de una subida validada de este agente a la carpeta de
+     * salientes (`model/registroArchivos.ts`): ni una URL cualquiera ni un
+     * archivo de otro módulo. Puede reenviarse si el envío falló. */
+    if (args.mediaUrl) {
+      await ctx.runMutation(internal.subidas.exigirSubidaParaRegistro, {
+        userId: staff.userId,
+        url: args.mediaUrl,
+        carpeta: "whatsapp/salientes",
+        reutilizable: true,
+      });
+    }
+
     let payload: Record<string, unknown> & { to: string };
     let tipo = "text";
     if (args.mediaUrl) {
@@ -394,7 +406,7 @@ export const staffActual = internalQuery({
   args: {},
   handler: async (ctx) => {
     const user = await requirePlatformStaff(ctx);
-    return { nombre: user.name };
+    return { nombre: user.name, userId: user._id };
   },
 });
 

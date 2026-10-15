@@ -6,6 +6,7 @@ import type { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { requireCondominioRole } from "./model/authz";
 import { exigirStorageIdDelRegistro, resolveMediaUrl } from "./model/files";
+import { exigirArchivoSubido } from "./model/registroArchivos";
 import {
   carpetaComunicados,
   exigirLlaveDeCarpeta,
@@ -45,27 +46,43 @@ type Archivo = {
 };
 
 /**
- * Los adjuntos con su `s3Key` revisado: el de un adjunto nuevo tiene que ser
- * de la carpeta de comunicados del conjunto. Los que el comunicado ya tenía
- * (la edición los reenvía tal cual) pasan como estaban. Un `storageId` de
- * Convex Storage solo vale si el comunicado ya lo tenía (`model/files.ts`).
+ * Los adjuntos que se guardan.
+ *
+ * Los que el comunicado ya tenía (la edición los reenvía) se conservan tal
+ * como estaban guardados, no como los manda el cliente; un `storageId` de
+ * Convex Storage solo vale así (`model/files.ts`). Uno NUEVO tiene que tener
+ * su `s3Key` en la carpeta de comunicados del conjunto y salir de una subida
+ * validada de quien guarda (`model/registroArchivos.ts`).
  */
-function exigirAdjuntos(
+async function exigirAdjuntos(
+  ctx: MutationCtx,
+  userId: Id<"users">,
   archivos: Archivo[],
   condominioId: Id<"condominios">,
   previos: Archivo[] = [],
-): Archivo[] {
-  const yaEstaban = new Set(
-    previos.map((a) => a.s3Key?.trim()).filter((k): k is string => Boolean(k)),
-  );
+): Promise<Archivo[]> {
   const storagePrevios = previos.map((a) => a.storageId);
   const carpeta = carpetaComunicados(condominioId);
-  return archivos.map((a) => {
-    exigirStorageIdDelRegistro(a.storageId, storagePrevios);
+  const resultado: Archivo[] = [];
+  for (const a of archivos) {
     const key = a.s3Key?.trim();
-    if (!key || yaEstaban.has(key)) return a;
-    return { ...a, s3Key: exigirLlaveDeCarpeta(key, carpeta) };
-  });
+    const url = a.url?.trim();
+    const previo = previos.find(
+      (p) =>
+        (a.storageId !== undefined && p.storageId === a.storageId) ||
+        (key !== undefined && key !== "" && p.s3Key?.trim() === key) ||
+        (!key && a.storageId === undefined && url !== undefined && url !== "" && p.url?.trim() === url),
+    );
+    if (previo) {
+      resultado.push(previo);
+      continue;
+    }
+    exigirStorageIdDelRegistro(a.storageId, storagePrevios);
+    const s3Key = exigirLlaveDeCarpeta(key, carpeta);
+    await exigirArchivoSubido(ctx, userId, { url: a.url, s3Key: a.s3Key }, carpeta);
+    resultado.push({ ...a, s3Key });
+  }
+  return resultado;
 }
 
 /** Las llaves S3 que usan los adjuntos de los comunicados del conjunto. */
@@ -279,7 +296,7 @@ export const create = mutation({
       audiencia: args.audiencia,
       prioridad: args.prioridad,
       fijado: args.fijado,
-      archivos: exigirAdjuntos(args.archivos ?? [], args.condominioId),
+      archivos: await exigirAdjuntos(ctx, user._id, args.archivos ?? [], args.condominioId),
       createdAt: now,
       updatedAt: now,
     });
@@ -308,10 +325,10 @@ export const update = mutation({
   handler: async (ctx, args) => {
     const existing = await ctx.db.get(args.id);
     if (!existing) throw new Error("Comunicado no encontrado.");
-    await requireCondominioRole(ctx, existing.condominioId, [...ADMIN_ROLES]);
+    const { user } = await requireCondominioRole(ctx, existing.condominioId, [...ADMIN_ROLES]);
 
     const nextArchivos = args.archivos
-      ? exigirAdjuntos(args.archivos, existing.condominioId, existing.archivos)
+      ? await exigirAdjuntos(ctx, user._id, args.archivos, existing.condominioId, existing.archivos)
       : existing.archivos ?? [];
     // Un adjunto de Convex Storage que se quita se desvincula sin borrarlo:
     // su id no prueba de quién es (`model/files.ts`).

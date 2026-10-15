@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
+import { exigirArchivoSubido } from "./model/registroArchivos";
 import {
   requireAppUser,
   requireCondominioRole,
@@ -275,6 +276,11 @@ export const anotarParteGrabacion = mutation({
     const user = await requireAppUser(ctx);
     const asamblea = await ctx.db.get(args.asambleaId);
     if (!asamblea) throw new Error("Asamblea no encontrada.");
+    /* Solo la mesa graba (`iniciarGrabacion`), y cada parte sale de una
+     * subida validada suya a la carpeta de ESTA asamblea: nadie mete en la
+     * grabación de otra asamblea un archivo ajeno o una URL cualquiera. */
+    await requireCondominioRole(ctx, asamblea.condominioId, [...WRITE_ROLES]);
+    await exigirArchivoSubido(ctx, user._id, { url: args.url }, `asambleas/${args.asambleaId}/grabacion`);
 
     await ctx.db.insert("salaGrabacionPartes", {
       condominioId: asamblea.condominioId,

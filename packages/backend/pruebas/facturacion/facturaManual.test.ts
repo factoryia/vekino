@@ -5,6 +5,7 @@ import {
   bloquearRed,
   bogota,
   cargar,
+  comprobanteSubido,
   esperarProgramadas,
   facturaDe,
   fijarReloj,
@@ -133,7 +134,7 @@ describe("H4 · lo que sí prueba un pago o un documento sigue contando", () => 
     const soporte = await esc.como("residente").mutation(api.soportesPago.crearMio, {
       condominioId: esc.condominioId,
       facturaId: agosto,
-      url: "https://archivos.test/comprobante.png",
+      url: await comprobanteSubido(esc, "residente", "comprobante.png"),
       mimeType: "image/png",
       monto: 335_000,
       fechaPago: mediodia("2026-09-05"),

@@ -14,6 +14,10 @@ import {
   scheduleDeleteS3Keys,
   s3KeyFromPublicUrl,
 } from "./model/s3";
+import { exigirArchivoSubido } from "./model/registroArchivos";
+
+/** Carpeta de los íconos de imagen de las categorías (la que usa la web al subir). */
+const carpetaIconosConsejo = (condominioId: Id<"condominios">) => `${carpetaConsejo(condominioId)}/icons`;
 
 function resolveS3Key(
   s3Key: string | null | undefined,
@@ -270,7 +274,7 @@ export const createCategoria = mutation({
     iconValue: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireConsejoAccess(ctx, args.condominioId, ADMIN_ROLES);
+    const { user } = await requireConsejoAccess(ctx, args.condominioId, ADMIN_ROLES);
     const nombre = args.nombre.trim();
     if (!nombre) throw new Error("El nombre es obligatorio.");
     const slug = await uniqueSlug(ctx, args.condominioId, nombre);
@@ -279,6 +283,10 @@ export const createCategoria = mutation({
       .withIndex("by_condominio", (q) => q.eq("condominioId", args.condominioId))
       .collect();
     const icon = normalizeCategoriaIcon(args);
+    // Un ícono de imagen sale de una subida validada (`model/registroArchivos.ts`).
+    if (icon.iconType === "image") {
+      await exigirArchivoSubido(ctx, user._id, { url: icon.iconValue }, carpetaIconosConsejo(args.condominioId));
+    }
     const now = Date.now();
     return await ctx.db.insert("consejoCategorias", {
       condominioId: args.condominioId,
@@ -305,7 +313,7 @@ export const updateCategoria = mutation({
   handler: async (ctx, args) => {
     const cat = await ctx.db.get(args.id);
     if (!cat) throw new Error("Categoría no encontrada.");
-    await requireConsejoAccess(ctx, cat.condominioId, ADMIN_ROLES);
+    const { user } = await requireConsejoAccess(ctx, cat.condominioId, ADMIN_ROLES);
     const nombre = args.nombre.trim();
     if (!nombre) throw new Error("El nombre es obligatorio.");
     const slug = await uniqueSlug(ctx, cat.condominioId, nombre, args.id);
@@ -334,6 +342,11 @@ export const updateCategoria = mutation({
         iconKey: args.iconKey ?? cat.iconKey,
         colorKey: args.colorKey ?? cat.colorKey,
       });
+      if (icon.iconType === "image") {
+        await exigirArchivoSubido(ctx, user._id, { url: icon.iconValue }, carpetaIconosConsejo(cat.condominioId), {
+          previas: [cat.iconValue],
+        });
+      }
       patch.iconType = icon.iconType;
       patch.iconValue = icon.iconValue;
       patch.iconKey = icon.iconKey;
@@ -492,6 +505,7 @@ export const createDocumento = mutation({
     const titulo = args.titulo.trim();
     if (!titulo) throw new Error("El título es obligatorio.");
     const s3Key = exigirLlaveDeCarpeta(args.s3Key, carpetaConsejo(args.condominioId));
+    await exigirArchivoSubido(ctx, user._id, { url: args.fileUrl, s3Key: args.s3Key }, carpetaConsejo(args.condominioId));
     const now = Date.now();
     return await ctx.db.insert("consejoDocumentos", {
       condominioId: args.condominioId,
@@ -534,6 +548,7 @@ export const nuevaVersion = mutation({
       UPLOAD_ROLES,
     );
     const s3Key = exigirLlaveDeCarpeta(args.s3Key, carpetaConsejo(doc.condominioId));
+    await exigirArchivoSubido(ctx, user._id, { url: args.fileUrl, s3Key: args.s3Key }, carpetaConsejo(doc.condominioId));
     const now = Date.now();
     await ctx.db.insert("consejoDocumentoVersiones", {
       condominioId: doc.condominioId,

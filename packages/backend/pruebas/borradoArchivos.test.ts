@@ -5,6 +5,8 @@ import schema from "../convex/schema";
 import { api, internal } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import { MENSAJE_ARCHIVO_AJENO } from "../convex/model/s3";
+import { MENSAJE_ARCHIVO_NO_AUTORIZADO } from "../convex/model/registroArchivos";
+import { subidaValidada } from "./helpers/subidas";
 
 /* Las carpetas tal como las mandan la web y el móvil al subir (el contrato
  * con los clientes, escrito aquí a propósito y no importado del backend). */
@@ -132,6 +134,30 @@ async function montar() {
 
 type Escenario = Awaited<ReturnType<typeof montar>>;
 let e: Escenario;
+
+/**
+ * Una llave que `quien` subió a `carpeta` y que el servidor ya validó: lo
+ * único que una entidad registra como archivo nuevo desde la Fase 4 (H-12).
+ * Las de `llave()` nunca se subieron; sirven para sembrar y para atacar.
+ */
+const subida = async (quien: Quien, carpeta: string, nombre?: string) =>
+  (await subidaValidada(e.t, { userId: e[quien], carpeta, nombre })).key;
+
+/** Lo que hace una app instalada: pide el enlace (sin tamaño) y sube por el backend (H-06). */
+async function subirComoLaApp(quien: Quien, folder: string) {
+  const r = await e.como(quien).action(api.files.generateUploadUrl, {
+    folder,
+    contentType: "image/jpeg",
+    fileName: "yo.jpg",
+  });
+  const put = await e.t.fetch(r.uploadUrl.slice("https://vekino-pruebas.convex.site".length), {
+    method: "PUT",
+    headers: { "Content-Type": "image/jpeg" },
+    body: new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46]),
+  });
+  expect(put.status).toBe(200);
+  return { key: r.key, publicUrl: r.publicUrl };
+}
 
 beforeEach(async () => {
   vi.stubEnv("AWS_S3_BUCKET_NAME", "vekino");
@@ -309,12 +335,14 @@ describe("borrado indirecto: otro conjunto no alcanza los archivos de A", () => 
       e.como("adminB").mutation(api.documentos.create, datosDocumento(e.condoB, deA)),
     ).rejects.toThrow(MENSAJE_ARCHIVO_AJENO);
 
-    // Con solo la URL (no hay llave que revisar) se guarda, pero no borra.
-    const soloUrl = await e.como("adminB").mutation(api.documentos.create, {
-      ...datosDocumento(e.condoB, deA),
-      s3Key: undefined,
-    });
-    await e.como("adminB").mutation(api.documentos.remove, { id: soloUrl });
+    // Con solo la URL: antes se guardaba (sin borrarla); desde la Fase 4 ni
+    // siquiera se registra, porque no salió de una subida de B (H-12).
+    await expect(
+      e.como("adminB").mutation(api.documentos.create, {
+        ...datosDocumento(e.condoB, deA),
+        s3Key: undefined,
+      }),
+    ).rejects.toThrow(MENSAJE_ARCHIVO_NO_AUTORIZADO);
 
     // Y uno guardado antes de esta fase con la llave de A, tampoco.
     const sembrado = await documentoDirecto(e.condoB, { s3Key: deA, url: url(deA) });
@@ -363,7 +391,7 @@ describe("borrado indirecto: otro conjunto no alcanza los archivos de A", () => 
 
     const propio = await e.como("adminB").mutation(
       api.consejo.createDocumento,
-      datosConsejo(e.condoB, e.catB, llave(carpetaConsejo(e.condoB))),
+      datosConsejo(e.condoB, e.catB, await subida("adminB", carpetaConsejo(e.condoB))),
     );
     await expect(
       e.como("adminB").mutation(api.consejo.nuevaVersion, {
@@ -430,21 +458,25 @@ describe("avatar: cambiar o quitar la foto nunca borra la de otro usuario", () =
     expect(doc.key.startsWith(`${carpetaDocumentos(e.condoA)}/`)).toBe(true);
   });
 
-  test("la llave de otro usuario se rechaza; con solo su URL no queda como propia; y quitarla no la borra", async () => {
-    const deA = llave(carpetaAvatar(e.residenteA), "yo.jpg");
+  test("la llave de otro usuario se rechaza; con solo su URL tampoco entra; y quitarla no la borra", async () => {
+    const deA = await subida("residenteA", carpetaAvatar(e.residenteA), "yo.jpg");
     await e.como("residenteA").mutation(api.users.setMyAvatar, { url: url(deA), s3Key: deA });
 
     await expect(
       e.como("residenteB").mutation(api.users.setMyAvatar, { url: url(deA), s3Key: deA }),
     ).rejects.toThrow(MENSAJE_ARCHIVO_AJENO);
 
-    await e.como("residenteB").mutation(api.users.setMyAvatar, { url: url(deA) });
+    // Con solo la URL: antes quedaba puesta sin llave; desde la Fase 4 no
+    // entra, ni por `setMyAvatar` ni por `updateMyProfile` (H-12).
+    await expect(
+      e.como("residenteB").mutation(api.users.setMyAvatar, { url: url(deA) }),
+    ).rejects.toThrow(MENSAJE_ARCHIVO_NO_AUTORIZADO);
+    await expect(
+      e.como("residenteB").mutation(api.users.updateMyProfile, { image: url(deA) }),
+    ).rejects.toThrow(MENSAJE_ARCHIVO_NO_AUTORIZADO);
     const b = await e.t.run((ctx) => ctx.db.get(e.residenteB));
+    expect(b!.image).toBeUndefined();
     expect(b!.imageS3Key).toBeUndefined();
-    await e.como("residenteB").mutation(api.users.clearMyAvatar, {});
-
-    // Con la URL ajena puesta por `updateMyProfile`, tampoco.
-    await e.como("residenteB").mutation(api.users.updateMyProfile, { image: url(deA) });
     await e.como("residenteB").mutation(api.users.clearMyAvatar, {});
 
     expect(await borradas()).toEqual([]);
@@ -456,7 +488,7 @@ describe("avatar: cambiar o quitar la foto nunca borra la de otro usuario", () =
       e.t.run((ctx) => ctx.db.patch(e.residenteB, { image: url(deA), imageS3Key: deA }));
 
     await plantar();
-    const nueva = llave(carpetaAvatar(e.residenteB), "yo.jpg");
+    const nueva = await subida("residenteB", carpetaAvatar(e.residenteB), "yo.jpg");
     await e.como("residenteB").mutation(api.users.setMyAvatar, { url: url(nueva), s3Key: nueva });
     await plantar();
     await e.como("residenteB").mutation(api.users.clearMyAvatar, {});
@@ -480,14 +512,7 @@ describe("avatar: cambiar o quitar la foto nunca borra la de otro usuario", () =
 
 describe("los borrados de archivos propios siguen funcionando", () => {
   test("avatar: subir, cambiar (borra la anterior), quitar (borra la actual) y eliminar la cuenta", async () => {
-    const subir = async () => {
-      const { key, publicUrl } = await e.como("residenteA").action(api.files.generateUploadUrl, {
-        folder: "avatars",
-        contentType: "image/jpeg",
-        fileName: "yo.jpg",
-      });
-      return { key, publicUrl };
-    };
+    const subir = () => subirComoLaApp("residenteA", "avatars");
     const primera = await subir();
     await e.como("residenteA").mutation(api.users.setMyAvatar, {
       url: primera.publicUrl,
@@ -513,15 +538,20 @@ describe("los borrados de archivos propios siguen funcionando", () => {
   });
 
   test("documentos: borrar el documento borra su archivo; si otro documento lo usa, espera al último", async () => {
-    const k = llave(carpetaDocumentos(e.condoA));
+    const k = await subida("adminA", carpetaDocumentos(e.condoA));
     const id = await e.como("adminA").mutation(api.documentos.create, datosDocumento(e.condoA, k));
     await e.como("adminA").mutation(api.documentos.remove, { id });
     expect(await borradas()).toEqual([k]);
 
     aws.send.mockClear();
-    const compartida = llave(carpetaDocumentos(e.condoA));
+    const compartida = await subida("adminA", carpetaDocumentos(e.condoA));
     const uno = await e.como("adminA").mutation(api.documentos.create, datosDocumento(e.condoA, compartida));
-    const dos = await e.como("adminA").mutation(api.documentos.create, datosDocumento(e.condoA, compartida));
+    // Una subida se registra una sola vez (H-12): el segundo documento con el
+    // mismo archivo solo puede venir de antes de la Fase 4.
+    await expect(
+      e.como("adminA").mutation(api.documentos.create, datosDocumento(e.condoA, compartida)),
+    ).rejects.toThrow(MENSAJE_ARCHIVO_NO_AUTORIZADO);
+    const dos = await documentoDirecto(e.condoA, { s3Key: compartida, url: url(compartida) });
     await e.como("adminA").mutation(api.documentos.remove, { id: uno });
     expect(await borradas()).toEqual([]);
     await e.como("adminA").mutation(api.documentos.remove, { id: dos });
@@ -529,7 +559,10 @@ describe("los borrados de archivos propios siguen funcionando", () => {
   });
 
   test("comunicados: quitar un adjunto borra solo ese; borrar el comunicado, los que quedan", async () => {
-    const [k1, k2] = [llave(carpetaComunicados(e.condoA)), llave(carpetaComunicados(e.condoA))];
+    const [k1, k2] = [
+      await subida("adminA", carpetaComunicados(e.condoA)),
+      await subida("adminA", carpetaComunicados(e.condoA)),
+    ];
     const id = await e.como("adminA").mutation(
       api.comunicados.create,
       datosComunicado(e.condoA, [k1, k2]),
@@ -556,7 +589,11 @@ describe("los borrados de archivos propios siguen funcionando", () => {
   });
 
   test("consejo: borrar una versión archivada, la actual (restaura la anterior) y el documento entero", async () => {
-    const [v1, v2, v3] = [1, 2, 3].map(() => llave(carpetaConsejo(e.condoA)));
+    const [v1, v2, v3] = [
+      await subida("adminA", carpetaConsejo(e.condoA)),
+      await subida("adminA", carpetaConsejo(e.condoA)),
+      await subida("adminA", carpetaConsejo(e.condoA)),
+    ];
     const id = await e.como("adminA").mutation(
       api.consejo.createDocumento,
       datosConsejo(e.condoA, e.catA, v1),

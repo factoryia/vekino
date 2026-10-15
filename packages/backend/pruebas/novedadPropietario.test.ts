@@ -3,6 +3,7 @@ import { convexTest } from "convex-test";
 import schema from "../convex/schema";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
+import { subidaValidada } from "./helpers/subidas";
 
 const modules = import.meta.glob("../convex/**/*.ts");
 
@@ -107,14 +108,18 @@ async function escenario(t: T) {
 
 type Escenario = Awaited<ReturnType<typeof escenario>>;
 
-const aporte = (t: T, s: Escenario, vehiculoId: Id<"vehiculos">) =>
+/** La URL de una foto que el guarda subió en la ronda (H-12, Fase 4 de S3). */
+const fotoDeLaRonda = async (t: T, s: Escenario) =>
+  (await subidaValidada(t, { userId: s.guardaId, carpeta: `condominios/guardia/${s.condominioId}/vehiculos`, nombre: "foto.jpg", tipo: "image/jpeg" })).url;
+
+const aporte = async (t: T, s: Escenario, vehiculoId: Id<"vehiculos">) =>
   como(t, "guarda").mutation(api.guardia.reportarNovedad, {
     condominioId: s.condominioId,
     titulo: "Aporte Voluntario Parqueadero",
     descripcion: "Detectado durante la ronda.",
     prioridad: "media",
     vehiculoId,
-    fotos: [{ url: "https://s3.test/foto.jpg" }],
+    fotos: [{ url: await fotoDeLaRonda(t, s) }],
   });
 
 const listar = (t: T, s: Escenario) =>
@@ -222,7 +227,7 @@ describe("apartados de novedades y aportes del guarda", () => {
       descripcion: "Detectado durante la ronda.",
       prioridad: "media",
       vehiculoId: s.hdw,
-      fotos: [{ url: "https://s3.test/foto.jpg" }],
+      fotos: [{ url: await fotoDeLaRonda(t, s) }],
     });
     const novedadId = await como(t, "guarda").mutation(api.guardia.reportarNovedad, {
       condominioId: s.condominioId,
@@ -250,7 +255,7 @@ describe("apartados de novedades y aportes del guarda", () => {
       titulo: "Otro · QQQ111",
       descripcion: "Placa QQQ111 (placa no registrada en el conjunto). Detectado a las 02:00 durante la ronda.",
       prioridad: "media",
-      fotos: [{ url: "https://s3.test/foto.jpg" }],
+      fotos: [{ url: await fotoDeLaRonda(t, s) }],
     });
     const viejo = await t.run((ctx) => ctx.db.insert("guardiaNovedadReportes", {
       condominioId: s.condominioId,

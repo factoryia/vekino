@@ -9,6 +9,7 @@ import {
   bloquearRed,
   bogota,
   cargar,
+  comprobanteSubido,
   esperarProgramadas,
   facturaDe,
   fijarReloj,
@@ -77,12 +78,17 @@ async function conSeptiembre() {
   return { esc, septiembre: await facturaDe(esc, "2026-09") };
 }
 
-/** Lo que manda la web al enviar. */
-function envio(esc: Escenario, facturaId: Id<"facturas">, extra: Record<string, unknown> = {}) {
+/** Lo que manda la web al enviar, con un comprobante que `quien` acaba de subir. */
+async function envio(
+  esc: Escenario,
+  facturaId: Id<"facturas">,
+  extra: Record<string, unknown> = {},
+  quien: "residente" | "vecino" = "residente",
+) {
   return {
     condominioId: esc.condominioId,
     facturaId,
-    url: `https://vekino.s3.us-east-1.amazonaws.com/condominios/soportes/${esc.condominioId}/1-a-comprobante.pdf`,
+    url: await comprobanteSubido(esc, quien),
     mimeType: "application/pdf",
     monto: 150_000,
     fechaPago: mediodia("2026-10-07"),
@@ -96,7 +102,7 @@ const listMios = (esc: Escenario, quien: "residente" | "vecino" = "residente") =
 describe("Uno en revisión por factura · lo que oculta y vuelve a mostrar el botón", () => {
   test("el segundo se rechaza con el mensaje estable; rechazado el primero, se puede enviar otro", async () => {
     const { esc, septiembre } = await conSeptiembre();
-    const primero = await esc.como("residente").mutation(api.soportesPago.crearMio, envio(esc, septiembre._id));
+    const primero = await esc.como("residente").mutation(api.soportesPago.crearMio, await envio(esc, septiembre._id));
 
     /* Lo que pinta la pantalla. */
     expect(await listMios(esc)).toEqual([
@@ -111,7 +117,7 @@ describe("Uno en revisión por factura · lo que oculta y vuelve a mostrar el bo
       }),
     ]);
     await expect(
-      esc.como("residente").mutation(api.soportesPago.crearMio, envio(esc, septiembre._id)),
+      esc.como("residente").mutation(api.soportesPago.crearMio, await envio(esc, septiembre._id)),
     ).rejects.toThrow(MENSAJE_PENDIENTE);
 
     await esc.como("admin").mutation(api.soportesPago.rechazar, { id: primero, notaRevision: "No se lee el valor." });
@@ -120,7 +126,7 @@ describe("Uno en revisión por factura · lo que oculta y vuelve a mostrar el bo
       expect.objectContaining({ _id: primero, estado: "rechazado", notaRevision: "No se lee el valor." }),
     ]);
 
-    const segundo = await esc.como("residente").mutation(api.soportesPago.crearMio, envio(esc, septiembre._id));
+    const segundo = await esc.como("residente").mutation(api.soportesPago.crearMio, await envio(esc, septiembre._id));
     expect((await listMios(esc)).map((s) => [s._id, s.estado])).toEqual([
       [segundo, "pendiente_revision"],
       [primero, "rechazado"],
@@ -140,7 +146,7 @@ describe("Uno en revisión por factura · lo que oculta y vuelve a mostrar el bo
       [delBot, septiembre._id, "pendiente_revision"],
     ]);
     await expect(
-      esc.como("residente").mutation(api.soportesPago.crearMio, envio(esc, septiembre._id)),
+      esc.como("residente").mutation(api.soportesPago.crearMio, await envio(esc, septiembre._id)),
     ).rejects.toThrow(MENSAJE_PENDIENTE);
   });
 
@@ -148,7 +154,7 @@ describe("Uno en revisión por factura · lo que oculta y vuelve a mostrar el bo
     const { esc, septiembre } = await conSeptiembre();
     const antes = await esc.como("residente").query(api.pagos.opcionesDePago, { facturaId: septiembre._id });
     expect(antes).toEqual({ debe: true, pasarela: false, motivo: MENSAJE_PASARELA_DE_PRUEBAS });
-    await esc.como("residente").mutation(api.soportesPago.crearMio, envio(esc, septiembre._id));
+    await esc.como("residente").mutation(api.soportesPago.crearMio, await envio(esc, septiembre._id));
     expect(await esc.como("residente").query(api.pagos.opcionesDePago, { facturaId: septiembre._id })).toEqual(antes);
   });
 
@@ -161,7 +167,7 @@ describe("Uno en revisión por factura · lo que oculta y vuelve a mostrar el bo
       (await esc.como("residente").query(api.pagos.opcionesDePago, { facturaId: agosto._id })).debe,
     ).toBe(false);
     await expect(
-      esc.como("residente").mutation(api.soportesPago.crearMio, envio(esc, agosto._id)),
+      esc.como("residente").mutation(api.soportesPago.crearMio, await envio(esc, agosto._id)),
     ).rejects.toThrow(MENSAJE_COMPROBANTE_HISTORICA);
   });
 });
@@ -173,11 +179,11 @@ describe("La fecha que manda la web · el día de Colombia", () => {
     await cargar(esc, [{ periodo: "2026-10", lineas: [linea("CUOTA", 0, 380_000)] }]);
     const octubre = await facturaDe(esc, "2026-10");
     await expect(
-      esc.como("residente").mutation(api.soportesPago.crearMio, envio(esc, octubre._id, { fechaPago: mediodia("2026-10-11") })),
+      esc.como("residente").mutation(api.soportesPago.crearMio, await envio(esc, octubre._id, { fechaPago: mediodia("2026-10-11") })),
     ).rejects.toThrow(MENSAJE_FECHA);
     const id = await esc.como("residente").mutation(
       api.soportesPago.crearMio,
-      envio(esc, octubre._id, { fechaPago: mediodia("2026-10-09") }),
+      await envio(esc, octubre._id, { fechaPago: mediodia("2026-10-09") }),
     );
     expect((await listMios(esc)).find((s) => s._id === id)?.fechaPago).toBe(mediodia("2026-10-09"));
   });
@@ -186,19 +192,19 @@ describe("La fecha que manda la web · el día de Colombia", () => {
 describe("Accesos · quien no tiene un vínculo vigente con la unidad", () => {
   test("el vecino de otra casa: `opcionesDePago` no le ofrece nada, `crearMio` lo rechaza y no ve los de la 101", async () => {
     const { esc, septiembre } = await conSeptiembre();
-    await esc.como("residente").mutation(api.soportesPago.crearMio, envio(esc, septiembre._id));
+    await esc.como("residente").mutation(api.soportesPago.crearMio, await envio(esc, septiembre._id));
     expect(
       (await esc.como("vecino").query(api.pagos.opcionesDePago, { facturaId: septiembre._id })).debe,
     ).toBe(false);
     await expect(
-      esc.como("vecino").mutation(api.soportesPago.crearMio, envio(esc, septiembre._id)),
+      esc.como("vecino").mutation(api.soportesPago.crearMio, await envio(esc, septiembre._id, {}, "vecino")),
     ).rejects.toThrow("Esa factura no pertenece a tu unidad.");
     expect(await listMios(esc, "vecino")).toEqual([]);
   });
 
   test("la arrendataria con el contrato vencido: sin deuda que ofrecer, sin envío y sin comprobantes", async () => {
     const { esc, septiembre } = await conSeptiembre();
-    await esc.como("residente").mutation(api.soportesPago.crearMio, envio(esc, septiembre._id));
+    await esc.como("residente").mutation(api.soportesPago.crearMio, await envio(esc, septiembre._id));
     await esc.t.run(async (ctx) => {
       const userId = await ctx.db.insert("users", {
         name: "Arrendataria",
@@ -235,7 +241,7 @@ describe("Accesos · quien no tiene un vínculo vigente con la unidad", () => {
       motivo: "Esta factura no corresponde a una de sus unidades.",
     });
     await expect(
-      arrendataria.mutation(api.soportesPago.crearMio, envio(esc, septiembre._id)),
+      arrendataria.mutation(api.soportesPago.crearMio, await envio(esc, septiembre._id)),
     ).rejects.toThrow("No tienes unidades vinculadas en este condominio.");
     expect(await arrendataria.query(api.soportesPago.listMios, { condominioId: esc.condominioId })).toEqual([]);
   });

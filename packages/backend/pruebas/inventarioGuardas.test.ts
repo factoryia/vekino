@@ -4,6 +4,7 @@ import betterAuthTest from "@convex-dev/better-auth/test";
 import schema from "../convex/schema";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
+import { subidaValidada } from "./helpers/subidas";
 
 const modules = import.meta.glob("../convex/**/*.ts");
 
@@ -1593,11 +1594,24 @@ describe("endurecimiento: defectos encontrados en la auditoria final", () => {
       ),
     ).toContain("http");
 
-    /* Una URL normal sigue entrando. */
+    /* La foto que ella subió al inventario de su compañía sigue entrando
+     * (desde la Fase 4 de S3, solo esa: H-12). */
+    const aliciaId = await e.t.run(async (ctx) =>
+      (await ctx.db
+        .query("users")
+        .withIndex("by_email", (q) => q.eq("email", "alicia@andina.test"))
+        .unique())!._id,
+    );
+    const { url: foto } = await subidaValidada(e.t, {
+      userId: aliciaId,
+      carpeta: `inventario/${e.andina}`,
+      nombre: "radio.jpg",
+      tipo: "image/jpeg",
+    });
     const ok = await alicia.mutation(api.inventario.crear, {
       companiaId: e.andina,
       nombre: "Radio con foto",
-      fotoUrl: "https://bucket.s3.amazonaws.com/inventario/radio.jpg",
+      fotoUrl: foto,
     });
     expect(ok).toBeTruthy();
 

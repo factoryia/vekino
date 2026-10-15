@@ -5,6 +5,7 @@ import {
   bloquearRed,
   bogota,
   cargar,
+  comprobanteSubido,
   esperarProgramadas,
   facturaDe,
   fijarReloj,
@@ -139,7 +140,7 @@ describe("H2 · lo que NO es mora no se pinta vencido", () => {
     const soporte = await esc.como("residente").mutation(api.soportesPago.crearMio, {
       condominioId: esc.condominioId,
       facturaId: agosto,
-      url: "https://archivos.test/comprobante.png",
+      url: await comprobanteSubido(esc, "residente", "comprobante.png"),
       mimeType: "image/png",
       monto: 335_000,
       fechaPago: mediodia("2026-10-01"),
@@ -173,7 +174,7 @@ describe("H2 · lo que NO es mora no se pinta vencido", () => {
     const soporte = await esc.como("residente").mutation(api.soportesPago.crearMio, {
       condominioId: esc.condominioId,
       facturaId: agosto,
-      url: "https://archivos.test/comprobante.png",
+      url: await comprobanteSubido(esc, "residente", "comprobante.png"),
       mimeType: "image/png",
       monto: 200_000,
       fechaPago: mediodia("2026-10-09"),

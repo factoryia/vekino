@@ -391,7 +391,13 @@ describe("tamaño: límite efectivo en las dos formas", () => {
     expect(r.uploadUrl).toContain("vekino.s3.us-east-1.amazonaws.com");
     expect(aws.firmas).toHaveLength(1);
     const [firma] = aws.firmas;
-    expect(firma!.input).toMatchObject({ Key: r.key, ContentType: "application/pdf", ContentLength: 3 * MiB });
+    // Se firma la llave temporal (Fase 4): la definitiva solo existe cuando el
+    // servidor revisa lo que llegó (`files.confirmarSubida`).
+    expect(firma!.input).toMatchObject({
+      Key: expect.stringMatching(/^pendientes\/[0-9a-f]{32}$/),
+      ContentType: "application/pdf",
+      ContentLength: 3 * MiB,
+    });
     expect([...firma!.opciones.signableHeaders].sort()).toEqual(["content-length", "content-type"]);
     expect(firma!.opciones.expiresIn).toBe(600);
     // Una grabación de 40 MB (una parte reintentada) cabe; la de 60 no.
@@ -431,7 +437,10 @@ describe("subida intermediada (apps instaladas): PUT a la uploadUrl con su Conte
     expect(puts()).toHaveLength(1);
     expect(puts()[0]).toMatchObject({ Bucket: "vekino", Key: r.key, ContentType: "image/heic", IfNoneMatch: "*" });
     expect((puts()[0]!.Body as Buffer).byteLength).toBe(4_096);
-    expect(await pendientes()).toEqual([]);
+    // La fila queda validada, sin token, para que un registro la use una vez (H-12).
+    const [fila] = await pendientes();
+    expect(fila).toMatchObject({ key: r.key, estado: "validada", modo: "intermediado", tipo: "image/heic", bytes: 4_096 });
+    expect(fila!.tokenHash).toBeUndefined();
     expect(await temporales()).toEqual([]);
 
     // Y la URL pública es la que crearMio acepta para ese conjunto.

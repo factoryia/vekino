@@ -9,6 +9,7 @@ import {
   MENSAJE_COMPROBANTE_VACIO,
   tipoPorContenido,
 } from "../../convex/lib/comprobantes";
+import { MENSAJE_ARCHIVO_NO_AUTORIZADO } from "../../convex/model/registroArchivos";
 import { MENSAJE_COMPROBANTE_HISTORICA } from "../../convex/soportesPago";
 import {
   AHORA,
@@ -16,6 +17,7 @@ import {
   bloquearRed,
   bogota,
   cargar,
+  comprobanteSubido,
   facturaDe,
   fijarReloj,
   liberarRed,
@@ -289,7 +291,9 @@ describe("enviarMio · rechazos: cero llamadas a S3 y el mismo mensaje que crear
     {
       nombre: "ya hay uno pendiente",
       preparar: async (esc, f) => {
-        await esc.como("residente").mutation(api.soportesPago.crearMio, porCrearMio(esc, f));
+        await esc
+          .como("residente")
+          .mutation(api.soportesPago.crearMio, porCrearMio(esc, f, { url: await comprobanteSubido(esc) }));
         aws.send.mockClear();
         return { quien: esc.como("residente"), facturaId: f };
       },
@@ -440,13 +444,24 @@ describe("enviarMio · carreras: el registro revalida y solo se borra la llave p
 });
 
 describe("crearMio · la URL tiene que ser del bucket y de la carpeta del conjunto", () => {
-  /** La URL que de verdad le devuelve `generateUploadUrl` al móvil. */
+  /**
+   * La URL que de verdad le devuelve `generateUploadUrl` al móvil, después
+   * de subir la foto como la sube: PUT a la ruta del backend que le dieron
+   * (H-06). Sin ese PUT la subida no queda validada y `crearMio` no la
+   * registra (H-12).
+   */
   async function urlDelMovil(esc: Escenario, condominioId: string, fileName?: string) {
     const r = await esc.como("residente").action(api.files.generateUploadUrl, {
       folder: `condominios/soportes/${condominioId}`,
       contentType: "image/jpeg",
       ...(fileName !== undefined ? { fileName } : {}),
     });
+    const put = await esc.t.fetch(r.uploadUrl.slice("https://vekino-pruebas.convex.site".length), {
+      method: "PUT",
+      headers: { "Content-Type": "image/jpeg" },
+      body: new Uint8Array(jpeg()),
+    });
+    expect(put.status).toBe(200);
     return r.publicUrl;
   }
 
@@ -512,11 +527,16 @@ describe("crearMio · la URL tiene que ser del bucket y de la carpeta del conjun
     expect(await soportes(esc)).toHaveLength(0);
   });
 
-  test("sin bucket configurado no hay con qué comparar: acepta, como las pruebas de la Fase 0", async () => {
+  test("sin bucket configurado tampoco entra una URL que no salió de una subida (antes se aceptaba)", async () => {
     vi.stubEnv("AWS_S3_BUCKET_NAME", "");
     const { esc, septiembre } = await conSeptiembre();
-    await esc.como("residente").mutation(api.soportesPago.crearMio, porCrearMio(esc, septiembre._id, { url: "https://archivos.test/c.jpg" }));
-    expect(await soportes(esc)).toHaveLength(1);
+    for (const url of ["https://archivos.test/c.jpg", porCrearMio(esc, septiembre._id).url]) {
+      expect(
+        await mensajeDe(esc.como("residente").mutation(api.soportesPago.crearMio, porCrearMio(esc, septiembre._id, { url }))),
+        url,
+      ).toContain(MENSAJE_ARCHIVO_NO_AUTORIZADO);
+    }
+    expect(await soportes(esc)).toHaveLength(0);
   });
 
   test("una URL vacía sigue diciendo 'Falta el archivo del comprobante.'", async () => {

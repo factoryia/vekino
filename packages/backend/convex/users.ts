@@ -24,6 +24,7 @@ import { evaluarPassword } from "./lib/passwordFuerte";
 import { credencialDeAlta, fijarPasswordDeCuenta } from "./model/credencial";
 import { resolveUserImage } from "./model/userImage";
 import { exigirStorageIdDelRegistro } from "./model/files";
+import { exigirArchivoSubido, MENSAJE_ARCHIVO_NO_AUTORIZADO } from "./model/registroArchivos";
 import { misAsignacionesDesde, viasDeAsignacionDe } from "./model/asignacion";
 import {
   aplicarContexto,
@@ -289,7 +290,13 @@ export const updateMyProfile = mutation({
   },
   handler: async (ctx, args) => {
     const user = await requireAppUser(ctx);
-    const patch: Record<string, unknown> = { ...args, updatedAt: Date.now() };
+    /* La foto no se cambia aquí sino con `setMyAvatar`, que exige una subida
+     * propia validada. Ningún cliente la manda; reenviar la misma vale. */
+    const { image, ...datos } = args;
+    if (image !== undefined && (image.trim() || undefined) !== (user.image ?? undefined)) {
+      throw new Error(MENSAJE_ARCHIVO_NO_AUTORIZADO);
+    }
+    const patch: Record<string, unknown> = { ...datos, updatedAt: Date.now() };
     if (args.telefono !== undefined) {
       patch.telefonoE164 = normalizarTelefonoE164(args.telefono) ?? undefined;
     }
@@ -328,6 +335,10 @@ export const setMyAvatar = mutation({
     const user = await requireAppUser(ctx);
     const carpeta = carpetaAvatar(user._id);
     const s3Key = exigirLlaveDeCarpeta(args.s3Key, carpeta);
+    // Una foto nueva de S3 sale de una subida propia validada (`model/registroArchivos.ts`).
+    await exigirArchivoSubido(ctx, user._id, { url: args.url, s3Key: args.s3Key }, carpeta, {
+      previas: [{ url: user.image, s3Key: user.imageS3Key }],
+    });
     // De Convex Storage, solo la foto que ya tenía (`model/files.ts`).
     const storageId = exigirStorageIdDelRegistro(args.storageId, [user.imageStorageId]);
     let image = args.url?.trim();

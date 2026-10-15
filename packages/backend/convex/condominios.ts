@@ -15,6 +15,7 @@ import { resolverAcceso } from "./model/acceso";
 import { subscriptionPlanValidator } from "./model/roles";
 import { displayNameFromUser } from "./model/displayName";
 import { resolveUserImage } from "./model/userImage";
+import { exigirArchivoSubido } from "./model/registroArchivos";
 import { normalizarNura } from "./lib/avalConvenio";
 
 /** Admins operativos únicos de un condominio (sin duplicados por userId). */
@@ -283,11 +284,18 @@ export const update = mutation({
     }),
   },
   handler: async (ctx, args) => {
-    await requirePlatformStaff(ctx);
+    const user = await requirePlatformStaff(ctx);
     const condo = await ctx.db.get(args.condominioId);
     if (!condo) throw new Error("Condominio no encontrado.");
 
     const p = args.patch;
+    // Logo y portada nuevos salen de una subida validada (`model/registroArchivos.ts`).
+    await exigirArchivoSubido(ctx, user._id, { url: p.logo }, `condominios/${args.condominioId}/logo`, {
+      previas: [condo.logo],
+    });
+    await exigirArchivoSubido(ctx, user._id, { url: p.coverImage }, `condominios/${args.condominioId}/cover`, {
+      previas: [condo.coverImage],
+    });
     const next = {
       ...condo,
       ...(p.name !== undefined ? { name: p.name.trim() } : {}),

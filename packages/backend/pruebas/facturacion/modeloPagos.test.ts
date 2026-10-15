@@ -10,6 +10,7 @@ import {
   bogota,
   cargar,
   comoLaCargaPorPdf,
+  comprobanteSubido,
   datosDePagoBot,
   esperarProgramadas,
   facturaDe,
@@ -175,7 +176,7 @@ describe("bitácora: cada ruta que cambia una factura deja su evento", () => {
     const soporteId = await esc.como("vecino").mutation(api.soportesPago.crearMio, {
       condominioId: esc.condominioId,
       facturaId: de202._id,
-      url: "https://archivos.test/c.pdf",
+      url: await comprobanteSubido(esc, "vecino", "c.pdf"),
       monto: CUOTA,
       fechaPago: bogota("2026-09-10T10:00"),
     });
@@ -439,7 +440,7 @@ describe("comprobantes con monto, solo para la vigente", () => {
     const id = await esc.como("residente").mutation(api.soportesPago.crearMio, {
       condominioId: esc.condominioId,
       facturaId: agosto._id,
-      url: "https://archivos.test/c.jpg",
+      url: await comprobanteSubido(esc, "residente", "c.jpg"),
       monto: 250_000,
       fechaPago: bogota("2026-09-10T10:00"),
     });
@@ -456,7 +457,7 @@ describe("comprobantes con monto, solo para la vigente", () => {
     const id = await esc.como("residente").mutation(api.soportesPago.crearMio, {
       condominioId: esc.condominioId,
       facturaId: agosto._id,
-      url: "https://archivos.test/c.jpg",
+      url: await comprobanteSubido(esc, "residente", "c.jpg"),
     });
     await esc.como("admin").mutation(api.soportesPago.aprobar, { id });
     await esperarProgramadas(esc);
@@ -473,7 +474,7 @@ describe("comprobantes con monto, solo para la vigente", () => {
       esc.como("residente").mutation(api.soportesPago.crearMio, {
         condominioId: esc.condominioId,
         facturaId: agosto._id,
-        url: "https://archivos.test/c.jpg",
+        url: await comprobanteSubido(esc, "residente", "c.jpg"),
         monto: CUOTA,
       }),
     ).rejects.toThrow(MENSAJE_COMPROBANTE_HISTORICA);

@@ -6,6 +6,7 @@ import {
   bloquearRed,
   bogota,
   cargar,
+  comprobanteSubido,
   esperarProgramadas,
   facturaDe,
   fijarReloj,
@@ -72,7 +73,7 @@ async function comprobante(
   const id = await esc.como("residente").mutation(api.soportesPago.crearMio, {
     condominioId: esc.condominioId,
     facturaId,
-    url: "https://archivos.test/comprobante.png",
+    url: await comprobanteSubido(esc, "residente", "comprobante.png"),
     mimeType: "image/png",
     monto,
     fechaPago: mediodia(dia),
@@ -237,7 +238,7 @@ describe("H1 · la revisión de la administración parte de lo que falta, no del
     const viejo = await esc.como("residente").mutation(api.soportesPago.crearMio, {
       condominioId: esc.condominioId,
       facturaId: septiembre,
-      url: "https://archivos.test/comprobante-viejo.pdf",
+      url: await comprobanteSubido(esc, "residente", "comprobante-viejo.pdf"),
       mimeType: "application/pdf",
     });
     await esc.como("admin").mutation(api.soportesPago.aprobar, { id: viejo });

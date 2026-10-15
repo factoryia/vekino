@@ -3186,14 +3186,21 @@ export default defineSchema({
   }).index("by_incidente", ["incidenteId"]),
 
   /**
-   * Subidas a S3 autorizadas que todavía no llegan (`subidas.ts`, H-06 de la
-   * auditoría de S3). `files.generateUploadUrl` la crea —ya revisados el
-   * permiso, la carpeta y el tipo— y la ruta `/archivos/subida` la consume
-   * una sola vez al recibir el archivo. Del enlace solo se guarda la huella
-   * (SHA-256): con la base sola no se puede subir nada.
+   * Subidas a S3 autorizadas, pendientes de llegar o de registrarse
+   * (`subidas.ts`, H-06 y H-12 de la auditoría de S3).
+   *
+   * `files.generateUploadUrl` / `uploadBytes` la crean —ya revisados el
+   * permiso, la carpeta y el tipo—. Pasa a `validada` solo cuando el servidor
+   * leyó el objeto y su contenido es de un tipo permitido (la ruta
+   * `/archivos/subida`, `uploadBytes`, o `files.confirmarSubida` tras un PUT
+   * directo). Una entidad registra el archivo solo si hay una fila validada
+   * de quien registra, en su carpeta (`model/registroArchivos.ts`). Del
+   * enlace solo se guarda la huella (SHA-256): con la base sola no se sube
+   * nada.
    */
   subidasPendientes: defineTable({
-    tokenHash: v.string(),
+    /** Enlace de la subida intermediada; se borra al usarse (un solo uso). */
+    tokenHash: v.optional(v.string()),
     /** La llave que ya se le devolvió al cliente (con su URL pública). */
     key: v.string(),
     /** Qué se puede subir (`lib/subidas.ts`, `CATEGORIAS`). */
@@ -3201,10 +3208,34 @@ export default defineSchema({
     /** El tipo que declaró el cliente al pedir el enlace. */
     tipoDeclarado: v.string(),
     userId: v.id("users"),
+    /**
+     * Pendiente: plazo para subir (y confirmar). Validada: plazo para
+     * registrarla en su entidad (`model/registroArchivos.ts`).
+     */
     expiraEn: v.number(),
+    /* Fase 4 (opcionales: las filas de la Fase 3 no los tienen y no se
+     * pueden registrar). */
+    /** La carpeta autorizada (la entidad): la misma que exige quien registra. */
+    carpeta: v.optional(v.string()),
+    /** La URL pública que se le devolvió al cliente: la única que se registra. */
+    url: v.optional(v.string()),
+    /** Por dónde llega el archivo: URL firmada, ruta del backend o `uploadBytes`. */
+    modo: v.optional(v.union(v.literal("directo"), v.literal("intermediado"), v.literal("servidor"))),
+    /** Validada = el servidor leyó el objeto y su contenido es de un tipo permitido. */
+    estado: v.optional(v.union(v.literal("pendiente"), v.literal("validada"))),
+    /** Tamaño firmado en la URL (directo). */
+    size: v.optional(v.number()),
+    /** Llave provisional del PUT directo (`pendientes/…`), hasta validarlo. */
+    claveTemporal: v.optional(v.string()),
+    /** Tipo y tamaño comprobados en el objeto. */
+    tipo: v.optional(v.string()),
+    bytes: v.optional(v.number()),
+    /** Cuándo una entidad la registró (un solo uso, salvo los poderes). */
+    registradaEn: v.optional(v.number()),
   })
     .index("by_token", ["tokenHash"])
-    .index("by_expira", ["expiraEn"]),
+    .index("by_expira", ["expiraEn"])
+    .index("by_key", ["key"]),
 
   /** Historial inmutable del caso; solo se inserta mediante logIncidenteEvento. */
   incidenteEventos: defineTable({

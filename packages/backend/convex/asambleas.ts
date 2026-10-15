@@ -12,6 +12,7 @@ import {
 } from "./model/authz";
 import { calcularQuorum } from "./model/quorum";
 import { exigirStorageIdDelRegistro, resolveMediaUrl } from "./model/files";
+import { exigirArchivoSubido } from "./model/registroArchivos";
 import { resolveUserImage } from "./model/userImage";
 import {
   codigoActual,
@@ -1484,6 +1485,17 @@ export const otorgarPoder = mutation({
         if (m) representanteUserId = posible._id;
       }
     }
+
+    /* El documento sale de una subida validada de quien otorga, a la carpeta
+     * de poderes del conjunto. Se reutiliza: el mismo poder firmado se otorga
+     * por cada casa (`model/registroArchivos.ts`). */
+    await exigirArchivoSubido(
+      ctx,
+      user._id,
+      { url: args.documentoUrl },
+      `condominios/asambleas/${asamblea.condominioId}/poderes`,
+      { reutilizable: true },
+    );
 
     const now = Date.now();
     await ctx.db.insert("poderesAsamblea", {

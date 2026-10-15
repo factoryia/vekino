@@ -11,6 +11,8 @@ import {
   requirePlatformStaff,
 } from "./model/authz";
 import { displayNameFromUser } from "./model/displayName";
+import { exigirArchivoSubido } from "./model/registroArchivos";
+import type { MutationCtx } from "./_generated/server";
 
 const categoriaValidator = v.union(
   v.literal("factura"),
@@ -36,6 +38,36 @@ const archivoValidator = v.object({
   mimeType: v.string(),
   nombre: v.string(),
 });
+
+type Adjunto = { url: string; s3Key?: string; mimeType: string; nombre: string };
+
+/**
+ * Los adjuntos de un ticket o de su respuesta. Los que ya estaban se
+ * conservan como estaban guardados; uno nuevo sale de una subida validada de
+ * quien escribe, a la carpeta de soporte del ticket
+ * (`soporte/{conjunto}` o `soporte/plataforma`, `model/registroArchivos.ts`).
+ */
+async function exigirAdjuntosSoporte(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  archivos: Adjunto[],
+  carpeta: string,
+  previos: Adjunto[] = [],
+): Promise<Adjunto[]> {
+  const resultado: Adjunto[] = [];
+  for (const a of archivos) {
+    const previo = previos.find(
+      (p) => p.url === a.url && (p.s3Key ?? undefined) === (a.s3Key ?? undefined),
+    );
+    if (previo) {
+      resultado.push(previo);
+      continue;
+    }
+    await exigirArchivoSubido(ctx, userId, { url: a.url, s3Key: a.s3Key }, carpeta);
+    resultado.push(a);
+  }
+  return resultado;
+}
 
 export const crear = mutation({
   args: {
@@ -74,7 +106,14 @@ export const crear = mutation({
       categoria: args.categoria,
       asunto,
       mensaje,
-      archivos: args.archivos?.length ? args.archivos : undefined,
+      archivos: args.archivos?.length
+        ? await exigirAdjuntosSoporte(
+            ctx,
+            user._id,
+            args.archivos,
+            args.condominioId ? `soporte/${args.condominioId}` : "soporte/plataforma",
+          )
+        : undefined,
       estado: "abierto",
       createdAt: now,
       updatedAt: now,
@@ -208,11 +247,14 @@ export const responder = mutation({
     }
 
     const respuesta = args.respuesta.trim();
+    const carpetaRespuesta = ticket.condominioId ? `soporte/${ticket.condominioId}` : "soporte/plataforma";
     if (!respuesta) throw new Error("La respuesta es obligatoria.");
     const now = Date.now();
     await ctx.db.patch(args.id, {
       respuesta,
-      archivosRespuesta: args.archivos?.length ? args.archivos : undefined,
+      archivosRespuesta: args.archivos?.length
+        ? await exigirAdjuntosSoporte(ctx, user._id, args.archivos, carpetaRespuesta, ticket.archivosRespuesta)
+        : undefined,
       estado: args.estado ?? "resuelto",
       respondidoPorUserId: user._id,
       respondidoPorNombre: displayNameFromUser(user),

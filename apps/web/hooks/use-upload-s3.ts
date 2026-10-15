@@ -10,6 +10,7 @@ import { uploadToS3, type UploadToS3Options } from "@/lib/upload-s3";
  */
 export function useUploadToS3() {
   const generateUploadUrl = useAction(api.files.generateUploadUrl);
+  const confirmarSubida = useAction(api.files.confirmarSubida);
   const uploadBytes = useAction(api.files.uploadBytes);
 
   return useCallback(
@@ -17,7 +18,7 @@ export function useUploadToS3() {
       file: Blob & { name?: string },
       folder: string,
       options?: UploadToS3Options,
-    ) => uploadToS3(generateUploadUrl, file, folder, uploadBytes, options),
-    [generateUploadUrl, uploadBytes],
+    ) => uploadToS3(generateUploadUrl, confirmarSubida, file, folder, uploadBytes, options),
+    [generateUploadUrl, confirmarSubida, uploadBytes],
   );
 }

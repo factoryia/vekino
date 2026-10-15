@@ -6,11 +6,13 @@ import { internal } from "./_generated/api";
 import {
   MENSAJE_COMPROBANTE_URL,
   bucketPublico,
+  carpetaComprobantes,
   esUrlDeComprobante,
   exigirArchivoComprobante,
   tipoPorContenido,
   vTipoComprobante,
 } from "./lib/comprobantes";
+import { exigirArchivoSubido } from "./model/registroArchivos";
 import {
   requireCondominioRole,
   requireAppUser,
@@ -211,9 +213,10 @@ async function validarComprobanteMio(
  * aceptaba cualquier texto: la URL del comprobante de otro residente, o un
  * enlace externo que la administración abría al revisar.
  *
- * Sin `AWS_S3_BUCKET_NAME` no hay con qué comparar y no se valida: es el caso
- * de las pruebas de la red de la Fase 0, que usan URL de mentira. Un
- * deployment sin esa variable tampoco firma subidas (`generateUploadUrl`).
+ * Sin `AWS_S3_BUCKET_NAME` no hay prefijo con qué comparar y esto no valida
+ * nada; pero desde la Fase 4 de S3 el archivo tiene que salir además de una
+ * subida validada de quien envía (`model/registroArchivos.ts`), así que una
+ * URL de mentira tampoco entra sin bucket.
  */
 function exigirUrlDeComprobante(url: string, condominioId: Id<"condominios">) {
   const destino = bucketPublico(process.env);
@@ -248,6 +251,8 @@ export const crearMio = mutation({
       if (!url) throw new Error("Falta el archivo del comprobante.");
       exigirUrlDeComprobante(url, args.condominioId);
     });
+    // Y el archivo sale de una subida validada suya (`model/registroArchivos.ts`).
+    await exigirArchivoSubido(ctx, user._id, { url }, carpetaComprobantes(args.condominioId));
 
     return await ctx.db.insert("soportesPago", {
       condominioId: args.condominioId,

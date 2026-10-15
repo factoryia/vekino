@@ -5,6 +5,7 @@ import type { MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireCondominioRole } from "./model/authz";
 import { exigirStorageIdDelRegistro, resolveMediaUrl } from "./model/files";
+import { exigirArchivoSubido } from "./model/registroArchivos";
 import {
   carpetaDocumentos,
   exigirLlaveDeCarpeta,
@@ -137,6 +138,13 @@ export const create = mutation({
     );
     // Un documento nuevo no puede llevar un archivo de Convex Storage (`model/files.ts`).
     const storageId = exigirStorageIdDelRegistro(args.storageId);
+    // El archivo sale de una subida validada de quien registra, a esta carpeta.
+    await exigirArchivoSubido(
+      ctx,
+      user._id,
+      { url: args.url, s3Key: args.s3Key },
+      carpetaDocumentos(args.condominioId),
+    );
     return await ctx.db.insert("documentos", {
       condominioId: args.condominioId,
       nombre: args.nombre.trim(),

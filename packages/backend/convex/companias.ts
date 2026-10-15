@@ -12,6 +12,7 @@ import type { QueryCtx } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { createAuth } from "./auth";
+import { MENSAJE_ARCHIVO_NO_AUTORIZADO } from "./model/registroArchivos";
 import {
   getCurrentAppUser,
   requireAppUser,
@@ -541,7 +542,7 @@ export const update = mutation({
     primaryColor: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await exigirAccesoCompania(ctx, args.companiaId, "seguridad.personal");
+    const { compania } = await exigirAccesoCompania(ctx, args.companiaId, "seguridad.personal");
 
     const patch: Record<string, unknown> = { updatedAt: Date.now() };
     if (args.nombre !== undefined) {
@@ -560,7 +561,13 @@ export const update = mutation({
     if (args.contactoTelefono !== undefined) {
       patch.contactoTelefono = args.contactoTelefono.trim() || undefined;
     }
-    if (args.logo !== undefined) patch.logo = args.logo.trim() || undefined;
+    if (args.logo !== undefined) {
+      /* No hay subida de logos de compañía (ni pantalla que la use): uno nuevo
+       * no puede venir de una subida autorizada. Se conserva o se quita. */
+      const logo = args.logo.trim() || undefined;
+      if (logo && logo !== compania.logo) throw new Error(MENSAJE_ARCHIVO_NO_AUTORIZADO);
+      patch.logo = logo;
+    }
     if (args.primaryColor !== undefined) {
       patch.primaryColor = args.primaryColor.trim() || undefined;
     }

@@ -4,6 +4,7 @@ import schema from "../convex/schema";
 import { api, internal } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import { MENSAJE_STORAGE_AJENO } from "../convex/model/files";
+import { subidaValidada } from "./helpers/subidas";
 
 /**
  * CONVEX STORAGE HEREDADO — Fase 2 de S3 (H-16 de la auditoría,
@@ -236,7 +237,7 @@ describe("avatar: el storageId de otro no se asigna ni se borra", () => {
     const plantar = () => e.t.run((ctx) => ctx.db.patch(e.residenteA, { imageStorageId: fotoB }));
 
     await plantar();
-    const propia = llave(`avatars/${e.residenteA}`);
+    const { key: propia } = await subidaValidada(e.t, { userId: e.residenteA, carpeta: `avatars/${e.residenteA}` });
     await e.como("residenteA").mutation(api.users.setMyAvatar, { url: url(propia), s3Key: propia });
     expect(await existe(fotoB)).toBe(true);
 
@@ -285,7 +286,7 @@ describe("avatar: el storageId de otro no se asigna ni se borra", () => {
     expect((await e.t.run((ctx) => ctx.db.get(e.residenteA)))!.imageStorageId).toBe(propia);
 
     // Cambiarla por una de S3: el registro queda limpio; el archivo heredado se queda.
-    const s3 = llave(`avatars/${e.residenteA}`);
+    const { key: s3 } = await subidaValidada(e.t, { userId: e.residenteA, carpeta: `avatars/${e.residenteA}` });
     await e.como("residenteA").mutation(api.users.setMyAvatar, { url: url(s3), s3Key: s3 });
     const a = await e.t.run((ctx) => ctx.db.get(e.residenteA));
     expect(a).toMatchObject({ image: url(s3), imageS3Key: s3 });

@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "bun run test:facturacion && bun run test:operacion && bun run test:incidentes && bun run test:sesion && bun test pruebas/erroresCrudos.test.mjs && bun test pruebas/navegacionCompania.test.mjs && bun test pruebas/recordatorioCierre.test.mjs",
+    "test": "bun run test:facturacion && bun run test:operacion && bun run test:incidentes && bun run test:sesion && bun test pruebas/erroresCrudos.test.mjs && bun test pruebas/navegacionCompania.test.mjs && bun test pruebas/recordatorioCierre.test.mjs && bun test pruebas/subidaS3.test.mjs",
     "test:sesion": "bun test pruebas/fetchConSesion.test.mjs && bun test pruebas/sesionRutasApi.test.mjs",
     "test:operacion": "bun test pruebas/operacionCompania.test.mjs",
     "test:incidentes": "bun test pruebas/incidentes.test.mjs && bun test pruebas/incidentesFase5.test.mjs && bun test pruebas/incidentesFase6.test.mjs && bun test pruebas/incidentesFase7.test.mjs",

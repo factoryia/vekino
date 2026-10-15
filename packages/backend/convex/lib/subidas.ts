@@ -21,6 +21,23 @@ const MiB = 1024 * 1024;
  */
 export const MAX_INTERMEDIADA = 20 * MiB;
 
+/**
+ * Carpeta provisional del PUT directo (URL firmada). El objeto queda aquí,
+ * con una llave aleatoria, hasta que `files.confirmarSubida` lee su
+ * contenido; solo entonces se copia a su llave definitiva con el tipo
+ * verificado. Lo que nunca se confirma se borra al vencer.
+ */
+export const CARPETA_TEMPORAL = "pendientes";
+
+/** Plazo para subir y confirmar un PUT directo (la URL vale 10 minutos). */
+export const VIGENCIA_PENDIENTE_DIRECTA_MS = 20 * 60 * 1000;
+
+/**
+ * Plazo para registrar una subida ya validada en su entidad: las pantallas
+ * suben al guardar y registran enseguida; un día cubre reintentos.
+ */
+export const VIGENCIA_REGISTRO_MS = 24 * 60 * 60 * 1000;
+
 /* ── Tipos ────────────────────────────────────────────────────────────────── */
 
 const IMAGENES = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/heic", "image/heif"];
@@ -86,6 +103,7 @@ export type NombreCategoria = keyof typeof CATEGORIAS;
 export const MENSAJE_TIPO_NO_PERMITIDO = "Ese tipo de archivo no se puede subir aquí.";
 export const MENSAJE_ARCHIVO_GRANDE = "El archivo supera el tamaño permitido.";
 export const MENSAJE_CONTENIDO = "El contenido del archivo no corresponde a un tipo permitido.";
+export const MENSAJE_SUBIDA_NO_VALIDA = "La subida no existe o ya venció. Vuelve a subir el archivo.";
 
 /**
  * El tipo como lo manda el navegador o el celular, en minúsculas, sin

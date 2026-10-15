@@ -3,6 +3,7 @@ import { convexTest } from "convex-test";
 import schema from "../convex/schema";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
+import { subidaValidada } from "./helpers/subidas";
 
 const modules = import.meta.glob("../convex/**/*.ts");
 
@@ -90,6 +91,10 @@ async function escenario(t: T) {
 }
 
 type Escenario = Awaited<ReturnType<typeof escenario>>;
+
+/** La URL de una foto que el guarda subió a `uso` de portería (H-12, Fase 4 de S3). */
+const fotoDelGuarda = async (t: T, s: Escenario, uso: "incidentes" | "depositos", nombre: string) =>
+  (await subidaValidada(t, { userId: s.guardaId, carpeta: `condominios/guardia/${s.condominioId}/${uso}`, nombre, tipo: "image/jpeg" })).url;
 
 /** Reserva aprobada con el depósito recibido en portería (ingreso validado). */
 async function reservaConDeposito(t: T, s: Escenario, fecha = "2026-09-16") {
@@ -305,7 +310,7 @@ describe("el guarda reporta, la administración valora", () => {
     await como(t, "guarda").mutation(api.guardia.reportarIncidenteReserva, {
       reservaId,
       descripcion: "Se rompió una silla",
-      fotos: [{ url: "https://bucket.s3.amazonaws.com/silla.jpg" }],
+      fotos: [{ url: await fotoDelGuarda(t, s, "incidentes", "silla.jpg") }],
     });
 
     const [incidente] = await t.run(async (ctx) => await ctx.db.query("reservaIncidentes").collect());
@@ -589,7 +594,7 @@ describe("no hay retención a criterio ni doble devolución", () => {
         depositoId,
         devuelto: false,
         observaciones: "Daños",
-        fotoUrl: "https://bucket.s3.amazonaws.com/evidencia.jpg",
+        fotoUrl: await fotoDelGuarda(t, s, "depositos", "evidencia.jpg"),
       }),
     ).rejects.toThrow(/retener/);
     await expect(

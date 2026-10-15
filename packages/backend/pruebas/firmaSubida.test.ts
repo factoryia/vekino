@@ -11,6 +11,10 @@ import { api } from "../convex/_generated/api";
  * `host`, así que S3 aceptaba cualquier tipo y cualquier tamaño en el PUT.
  * Ahora cubre `content-type` y `content-length`: un PUT con otro tipo u otro
  * tamaño no coincide con la firma y S3 lo rechaza.
+ *
+ * Fase 4: el PUT firmado va a una llave temporal (`pendientes/…`), no a la
+ * definitiva. El objeto solo se publica en su llave cuando el servidor lo
+ * revisa (`files.confirmarSubida`).
  */
 
 const modules = import.meta.glob("../convex/**/*.ts");
@@ -73,7 +77,11 @@ test("con el tamaño, la URL de S3 firma el tipo y el tamaño, y vence a los 10 
   });
   const url = new URL(r.uploadUrl);
   expect(url.host).toBe("vekino.s3.us-east-1.amazonaws.com");
-  expect(decodeURIComponent(url.pathname.slice(1))).toBe(r.key);
+  const temporal = decodeURIComponent(url.pathname.slice(1));
+  expect(temporal).toMatch(/^pendientes\/[0-9a-f]{32}$/);
+  expect(r.key.startsWith(`condominios/documentos/${condominioId}/`)).toBe(true);
+  const [fila] = await t.run((ctx) => ctx.db.query("subidasPendientes").collect());
+  expect(fila).toMatchObject({ key: r.key, claveTemporal: temporal, size: 123_456, modo: "directo", estado: "pendiente" });
   expect(url.searchParams.get("X-Amz-SignedHeaders")).toBe("content-length;content-type;host");
   expect(url.searchParams.get("X-Amz-Expires")).toBe("600");
 });

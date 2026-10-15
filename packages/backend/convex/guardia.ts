@@ -42,6 +42,7 @@ import {
   resolveMediaUrl,
   resolveMediaUrlList,
 } from "./model/files";
+import { exigirArchivoSubido, exigirArchivosSubidos } from "./model/registroArchivos";
 import { calcularCosto } from "./lib/costoReserva";
 import { validarCierreTurno } from "./lib/cierreTurno";
 import { nombreDeQuienInicia } from "./lib/inicioTurno";
@@ -68,6 +69,15 @@ import {
 
 /** Roles que pueden operar la portería. */
 export const GUARD_ROLES = ["guardia", "administrador", "junta_directiva"] as const;
+
+/**
+ * La carpeta de portería de un conjunto donde se subió la foto
+ * (`condominios/guardia/{conjunto}/{rondas|paquetes|…}`, `subidas.ts`): una
+ * foto nueva tiene que salir de una subida validada de quien registra, a esa
+ * carpeta (`model/registroArchivos.ts`).
+ */
+const carpetaPorteria = (condominioId: Id<"condominios">, uso: string) =>
+  `condominios/guardia/${condominioId}/${uso}`;
 /** Roles que administran la configuración y el histórico. */
 const ADMIN_ROLES = ["administrador", "junta_directiva"] as const;
 
@@ -893,6 +903,12 @@ export const registrarRonda = mutation({
     const turno = await turnoAbierto(ctx, args.condominioId);
     if (!turno) throw new Error("Debes iniciar turno antes de registrar rondas.");
     if (args.fotos.length > 5) throw new Error("Máximo 5 fotos por ronda.");
+    await exigirArchivosSubidos(
+      ctx,
+      user._id,
+      args.fotos.map((url) => ({ url })),
+      carpetaPorteria(args.condominioId, "rondas"),
+    );
 
     let zona = args.zonaNombre?.trim() || "";
     if (args.zonaId) {
@@ -1546,6 +1562,7 @@ export const recibirPaquete = mutation({
       unidad = unidades.find((u) => norm(u.numero) === norm(unidadNumero));
     }
 
+    await exigirArchivoSubido(ctx, user._id, { url: args.fotoUrl }, carpetaPorteria(args.condominioId, "paquetes"));
     const now = Date.now();
     const id = await ctx.db.insert("paquetes", {
       condominioId: args.condominioId,
@@ -1611,6 +1628,9 @@ export const entregarPaquete = mutation({
     const fotoEntregaStorageId = exigirStorageIdDelRegistro(args.fotoEntregaStorageId, [
       p.fotoEntregaStorageId,
     ]);
+    await exigirArchivoSubido(ctx, user._id, { url: args.fotoEntregaUrl }, carpetaPorteria(p.condominioId, "paquetes"), {
+      previas: [p.fotoEntregaUrl],
+    });
     await ctx.db.patch(args.id, {
       estado: "entregado",
       entregadoPorNombre: user.name,
@@ -1739,6 +1759,7 @@ export const reportarIncidenteReserva = mutation({
     const r = await ctx.db.get(args.reservaId);
     if (!r) throw new Error("Reserva no encontrada.");
     const { user } = await requireCondominioRole(ctx, r.condominioId, [...GUARD_ROLES]);
+    await exigirArchivosSubidos(ctx, user._id, args.fotos ?? [], carpetaPorteria(r.condominioId, "incidentes"));
     const id = await crearIncidente(ctx, {
       reserva: r,
       user,
@@ -1802,6 +1823,7 @@ export const registrarDepositoReserva = mutation({
       .withIndex("by_reserva", (q) => q.eq("reservaId", args.reservaId))
       .first();
     if (existente) throw new Error("Esta reserva ya tiene un depósito registrado.");
+    await exigirArchivoSubido(ctx, user._id, { url: args.fotoUrl }, carpetaPorteria(r.condominioId, "depositos"));
 
     const now = Date.now();
     await ctx.db.insert("guardiaReservaDepositos", {
@@ -1897,6 +1919,9 @@ export const resolverDepositoReserva = mutation({
     const dep = await ctx.db.get(args.depositoId);
     if (!dep) throw new Error("Depósito no encontrado.");
     const { user, membership } = await requireCondominioRole(ctx, dep.condominioId, [...GUARD_ROLES]);
+    await exigirArchivoSubido(ctx, user._id, { url: args.fotoUrl }, carpetaPorteria(dep.condominioId, "depositos"), {
+      previas: [dep.fotoSalidaUrl],
+    });
     const liq = await liquidarYDevolver(ctx, {
       deposito: dep,
       user,
@@ -2567,6 +2592,9 @@ export const reportarNovedad = mutation({
     const titulo = args.titulo.trim();
     const descripcion = args.descripcion.trim();
     if (!titulo || !descripcion) throw new Error("Título y descripción son obligatorios.");
+    // El adjunto va a novedades; las fotos (del vehículo) a vehículos, como las sube la web.
+    await exigirArchivoSubido(ctx, user._id, { url: args.archivoUrl }, carpetaPorteria(args.condominioId, "novedades"));
+    await exigirArchivosSubidos(ctx, user._id, args.fotos ?? [], carpetaPorteria(args.condominioId, "vehiculos"));
 
     /* Los datos del vehículo se COPIAN, no se dejan solo referenciados: si
      * mañana venden el carro o lo reasignan, la novedad tiene que seguir

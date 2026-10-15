@@ -3,6 +3,7 @@ import { query, mutation } from "./_generated/server";
 import type { QueryCtx, MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { exigirAccesoCompania } from "./model/acceso";
+import { exigirArchivoSubido } from "./model/registroArchivos";
 import { logNovedadItem, historialDeItem } from "./model/inventarioNovedad";
 import {
   aVistaCustodia,
@@ -475,6 +476,8 @@ export const crear = mutation({
     const descripcion = normalizarTexto(args.descripcion);
     const fotoUrl = normalizarTexto(args.fotoUrl);
     exigirLongitudes({ nombre, serial, descripcion, fotoUrl });
+    // La foto sale de una subida validada de quien registra (`model/registroArchivos.ts`).
+    await exigirArchivoSubido(ctx, user._id, { url: fotoUrl }, `inventario/${args.companiaId}`);
 
     if (serial) {
       const choca = await serialEnUso(ctx, args.companiaId, serial);
@@ -555,6 +558,9 @@ export const editar = mutation({
     const descripcion = normalizarTexto(args.descripcion);
     const fotoUrl = normalizarTexto(args.fotoUrl);
     exigirLongitudes({ nombre, serial, descripcion, fotoUrl });
+    await exigirArchivoSubido(ctx, user._id, { url: fotoUrl }, `inventario/${item.companiaId}`, {
+      previas: [item.fotoUrl],
+    });
 
     if (serial) {
       const choca = await serialEnUso(ctx, item.companiaId, serial, item._id);
