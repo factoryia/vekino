@@ -294,6 +294,96 @@ export const uploadBytes = action({
   },
 });
 
+/** Publicaciones simultáneas en S3 dentro de una llamada a `publicarFacturas`. */
+const FACTURAS_EN_PARALELO = 6;
+
+/** S3 rechazó el `If-None-Match: *`: la llave ya existe. */
+function yaExiste(e: unknown): boolean {
+  const err = e as { name?: string; $metadata?: { httpStatusCode?: number } };
+  return err?.name === "PreconditionFailed" || err?.$metadata?.httpStatusCode === 412;
+}
+
+/**
+ * Publica los PDF de las facturas de una importación (Fase 5 de S3, H-12).
+ *
+ * Antes `/api/facturas/confirmar` los escribía con su propio cliente de S3 y
+ * mandaba la URL a `bulkUpsert`, que la guardaba sin saber de dónde salía.
+ * Ahora la ruta manda aquí los bytes que leyó, y:
+ *   - el permiso y el destino salen de la importación
+ *     (`facturas.destinoPublicacion`): en curso, rol de carga en su
+ *     conjunto, carpeta solo de ese conjunto;
+ *   - cada archivo tiene que ser un PDF por sus bytes —no por su nombre ni
+ *     por lo que diga quien llama—, no vacío y dentro del límite;
+ *   - la llave la arma el servidor: carpeta de la importación, casa y huella
+ *     del contenido. Nunca sobrescribe (`If-None-Match: *`): si ya existe es
+ *     un reintento de esta importación con el mismo contenido (nadie más
+ *     escribe en esa carpeta) y se da por publicado;
+ *   - cada PDF queda como subida validada (`subidas.registrarPublicadas`), y
+ *     `bulkUpsert` solo registra en una factura uno de esos.
+ * Todos se revisan antes de escribir el primero: un lote con un archivo malo
+ * no publica nada. Si falla una escritura, lo ya publicado queda registrado
+ * (un reintento lo reconoce) y la llamada falla. Nada se borra.
+ *
+ * Es una acción Node: recibe hasta 5 MiB por llamada, y la ruta manda los PDF
+ * en lotes por debajo de eso.
+ */
+export const publicarFacturas = action({
+  args: {
+    importacionId: v.id("importaciones"),
+    /** `unidad`: la casa que dice el documento, solo para el nombre del archivo. */
+    pdfs: v.array(v.object({ unidad: v.string(), bytes: v.bytes() })),
+  },
+  handler: async (ctx, args): Promise<{ key: string; publicUrl: string }[]> => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("No autenticado.");
+    const destino: { carpeta: string; userId: Id<"users"> } = await ctx.runQuery(
+      internal.facturas.destinoPublicacion,
+      { importacionId: args.importacionId },
+    );
+
+    const { maxBytes, tipos } = CATEGORIAS.facturaPdf;
+    const archivos = args.pdfs.map((p) => {
+      const bytes = new Uint8Array(p.bytes);
+      if (bytes.byteLength === 0) throw new Error("Archivo vacío.");
+      if (bytes.byteLength > maxBytes) throw new Error(MENSAJE_ARCHIVO_GRANDE);
+      if (!tipoVerificado(bytes.subarray(0, BYTES_CABECERA), "application/pdf", tipos)) {
+        throw new Error(MENSAJE_CONTENIDO);
+      }
+      const casa = (p.unidad || "sin-unidad").replace(/[^A-Za-z0-9-]/g, "_").slice(0, 40);
+      const huella = createHash("sha256").update(bytes).digest("hex").slice(0, 12);
+      const key = `${destino.carpeta}/unidad-${casa}-${huella}.pdf`;
+      return { key, url: publicUrlFor(key), bytes };
+    });
+
+    const publicadas: typeof archivos = [];
+    let fallo = false;
+    const cola = [...archivos];
+    await Promise.all(
+      Array.from({ length: Math.min(FACTURAS_EN_PARALELO, cola.length) }, async () => {
+        for (let a = cola.shift(); a; a = cola.shift()) {
+          try {
+            await ponerEnBucket(a.key, "application/pdf", Buffer.from(a.bytes));
+            publicadas.push(a);
+          } catch (e) {
+            if (yaExiste(e)) publicadas.push(a);
+            else fallo = true;
+          }
+        }
+      }),
+    );
+    if (publicadas.length > 0) {
+      await ctx.runMutation(internal.subidas.registrarPublicadas, {
+        carpeta: destino.carpeta,
+        userId: destino.userId,
+        archivos: publicadas.map(({ key, url, bytes }) => ({ key, url, bytes: bytes.byteLength })),
+      });
+    }
+    // Sin detalles de AWS: el registro del servidor los tiene.
+    if (fallo) throw new Error("No se pudo publicar el PDF de una factura. Intenta de nuevo.");
+    return archivos.map(({ key, url }) => ({ key, publicUrl: url }));
+  },
+});
+
 /**
  * El archivo de una subida intermediada (`subidas.recibirSubida`), ya
  * revisado allí: enlace válido, tamaño y tipo por contenido. Llega por el

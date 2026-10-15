@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { finDelDiaDelPeriodo, vencimientoDePeriodo } from "@vekino/backend/cartera";
 import { numeroFacturaDe } from "@vekino/backend/lecturaFactura";
-import { fetchAuthMutation } from "@/lib/auth-server";
+import { fetchAuthAction, fetchAuthMutation } from "@/lib/auth-server";
 import { hashDe, leerPdf, pdfDeFactura } from "../lectura";
 import { idsDelConjunto, rechazoSinSesion, validarDestino } from "../permiso";
 
@@ -26,12 +25,20 @@ export const maxDuration = 60;
  *      factura. Si el mismo archivo ya se confirmó para el período, devuelve
  *      el resultado anterior sin publicar ni escribir nada (doble clic,
  *      reintento).
- *   4. Publica en S3 SOLO las facturas que se insertan o actualizan, con una
- *      llave de esta importación y la huella del contenido, y con
- *      `If-None-Match: *`: un PDF publicado nunca se sobrescribe, y el
- *      `pdfUrl` anterior de una factura actualizada sigue sirviendo.
- *   5. `bulkUpsert` guarda (y vuelve a validar) y `finalizarImportacion`
+ *   4. Publica SOLO las facturas que se insertan o actualizan, y no lo hace
+ *      esta ruta: le manda a Convex (`files.publicarFacturas`) el PDF de
+ *      cada una, y Convex comprueba el permiso sobre la importación y que
+ *      sea un PDF, arma la llave (la de esta importación y la huella del
+ *      contenido), publica con `If-None-Match: *` —un PDF publicado nunca
+ *      se sobrescribe, y el `pdfUrl` anterior de una factura actualizada
+ *      sigue sirviendo— y deja cada PDF como subida validada.
+ *   5. `bulkUpsert` guarda (y vuelve a validar: un `pdfUrl` nuevo solo si es
+ *      un PDF publicado para esta importación) y `finalizarImportacion`
  *      cierra la carga con sus conteos.
+ *
+ * Fase 5 de S3 (H-12): antes esta ruta escribía en S3 con sus propias
+ * credenciales y `bulkUpsert` aceptaba cualquier `pdfUrl`. La web ya no
+ * escribe en S3.
  *
  * Fase 3: el vencimiento de lo que entra es el último día del mes del
  * período (`vencimientoDePeriodo`, decisión de la administración) y el plazo
@@ -39,53 +46,46 @@ export const maxDuration = 60;
  * documentos para la misma unidad no se guardan (`documento_repetido`).
  */
 
-const s3 = new S3Client({
-  region: process.env.AWS_REGION ?? "us-east-1",
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
-  },
-});
-const BUCKET = process.env.AWS_S3_BUCKET_NAME ?? "vekino";
-const REGION = process.env.AWS_REGION ?? "us-east-1";
 /** Facturas por llamada a `bulkUpsert`, como hacía la pantalla. */
 const LOTE = 20;
-/** Publicaciones simultáneas en S3. */
-const PARALELO = 6;
-
-function llaveDe(
-  carpeta: string,
-  periodo: string,
-  importacionId: string,
-  unidad: string,
-  bytes: Uint8Array,
-): string {
-  const casa = (unidad || "sin-unidad").replace(/[^A-Za-z0-9-]/g, "_");
-  return `condominios/facturas/${carpeta}/${periodo}/${importacionId}/unidad-${casa}-${hashDe(bytes).slice(0, 12)}.pdf`;
-}
-
 /**
- * Publica sin sobrescribir. Si la llave ya existe es un reintento de esta
- * misma importación con el mismo contenido (la llave lleva la huella): se da
- * por publicado.
+ * Bytes de PDF por llamada a `files.publicarFacturas`: es una acción Node,
+ * recibe hasta 5 MiB, y los bytes viajan en base64 (un tercio más).
  */
-async function publicar(key: string, bytes: Uint8Array): Promise<void> {
-  try {
-    await s3.send(
-      new PutObjectCommand({
-        Bucket: BUCKET,
-        Key: key,
-        Body: bytes,
-        ContentType: "application/pdf",
-        IfNoneMatch: "*",
-      }),
-    );
-  } catch (e) {
-    const err = e as { name?: string; $metadata?: { httpStatusCode?: number } };
-    if (err.$metadata?.httpStatusCode === 412 || err.name === "PreconditionFailed") return;
-    throw e;
+const MAX_LOTE_BYTES = 3 * 1024 * 1024;
+/** Llamadas a `publicarFacturas` a la vez. */
+const PARALELO = 3;
+
+/** El PDF de una factura (1–3 páginas) que no cabe en una llamada: el archivo está mal. */
+class PdfDeFacturaGrande extends Error {}
+
+type PdfPorPublicar = { indice: number; unidad: string; bytes: Uint8Array };
+
+/** Los PDF en lotes que no pasan de `max` bytes. */
+function enLotes(pdfs: readonly PdfPorPublicar[], max: number): PdfPorPublicar[][] {
+  const lotes: PdfPorPublicar[][] = [];
+  let lote: PdfPorPublicar[] = [];
+  let tamano = 0;
+  for (const p of pdfs) {
+    if (p.bytes.byteLength > max) {
+      throw new PdfDeFacturaGrande(
+        `El PDF de la casa ${p.unidad || "sin número"} pesa más de ${max / (1024 * 1024)} MB. Revisa el archivo y vuelve a cargarlo.`,
+      );
+    }
+    if (lote.length > 0 && tamano + p.bytes.byteLength > max) {
+      lotes.push(lote);
+      lote = [];
+      tamano = 0;
+    }
+    lote.push(p);
+    tamano += p.bytes.byteLength;
   }
+  if (lote.length > 0) lotes.push(lote);
+  return lotes;
 }
+
+const aArrayBuffer = (b: Uint8Array): ArrayBuffer =>
+  b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
 
 async function enParalelo<T>(items: readonly T[], n: number, fn: (item: T) => Promise<void>) {
   const cola = [...items];
@@ -134,8 +134,9 @@ export async function POST(req: NextRequest) {
 
     const permiso = await validarDestino(ids);
     if (permiso.rechazo) return permiso.rechazo;
-    /* El conjunto y la carpeta salen del backend, no del formulario. */
-    const { condominioId, carpeta } = permiso.destino;
+    /* El conjunto sale del backend, no del formulario. La carpeta de S3 la
+     * vuelve a resolver Convex al publicar (`files.publicarFacturas`). */
+    const { condominioId } = permiso.destino;
 
     const bytes = new Uint8Array(await file.arrayBuffer());
     if (hashDe(bytes) !== hash) {
@@ -178,16 +179,22 @@ export async function POST(req: NextRequest) {
     }
     importacionId = inicio.importacionId;
 
-    /* S3: solo lo que de verdad se va a escribir. Lo omitido ("solo
-     * nuevas") y lo rechazado no se publica. */
+    /* Solo lo que de verdad se va a escribir. Lo omitido ("solo nuevas") y
+     * lo rechazado no se publica. Publica Convex (`files.publicarFacturas`),
+     * que devuelve la URL de cada PDF: la única que `bulkUpsert` acepta. */
     const aPublicar = inicio.plan.filter((p) => p.accion === "insertar" || p.accion === "actualizar");
-    const urls = new Map<number, string>();
-    await enParalelo(aPublicar, PARALELO, async (p) => {
+    const pdfs: PdfPorPublicar[] = [];
+    for (const p of aPublicar) {
       const f = leido.facturas[p.indice]!;
-      const pdf = await pdfDeFactura(leido.doc, f.paginas);
-      const key = llaveDe(carpeta, periodo, importacionId!, f.unitIdentifier, pdf);
-      await publicar(key, pdf);
-      urls.set(p.indice, `https://${BUCKET}.s3.${REGION}.amazonaws.com/${key}`);
+      pdfs.push({ indice: p.indice, unidad: f.unitIdentifier, bytes: await pdfDeFactura(leido.doc, f.paginas) });
+    }
+    const urls = new Map<number, string>();
+    await enParalelo(enLotes(pdfs, MAX_LOTE_BYTES), PARALELO, async (lote) => {
+      const publicados = await fetchAuthAction(api.files.publicarFacturas, {
+        importacionId: importacionId!,
+        pdfs: lote.map((p) => ({ unidad: p.unidad, bytes: aArrayBuffer(p.bytes) })),
+      });
+      lote.forEach((p, i) => urls.set(p.indice, publicados[i]!.publicUrl));
     });
 
     const fechaEmision = Date.now();
@@ -271,6 +278,7 @@ export async function POST(req: NextRequest) {
         /* Si tampoco se puede cerrar, queda "en curso" y se retoma al reintentar. */
       }
     }
+    if (e instanceof PdfDeFacturaGrande) return NextResponse.json({ error: e.message }, { status: 413 });
     return NextResponse.json(
       { error: "No se pudo confirmar la carga. Intenta de nuevo; lo ya guardado no se duplica." },
       { status: 500 },

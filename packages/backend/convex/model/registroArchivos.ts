@@ -67,7 +67,12 @@ export async function exigirArchivoSubido(
   userId: Id<"users">,
   ref: RefArchivo,
   carpeta: string,
-  opciones: { previas?: Previa[]; reutilizable?: boolean } = {},
+  opciones: {
+    previas?: Previa[];
+    reutilizable?: boolean;
+    /** Si se indica, el tipo comprobado en el objeto tiene que ser uno de estos. */
+    tipos?: readonly string[];
+  } = {},
 ): Promise<void> {
   const url = limpio(ref.url);
   const s3Key = limpio(ref.s3Key);
@@ -93,7 +98,8 @@ export async function exigirArchivoSubido(
     subida.carpeta !== carpeta ||
     subida.expiraEn < Date.now() ||
     (subida.registradaEn !== undefined && !opciones.reutilizable) ||
-    (url !== undefined && url !== subida.url)
+    (url !== undefined && url !== subida.url) ||
+    (opciones.tipos !== undefined && !opciones.tipos.includes(subida.tipo ?? ""))
   ) {
     throw new Error(MENSAJE_ARCHIVO_NO_AUTORIZADO);
   }
@@ -111,4 +117,14 @@ export async function exigirArchivosSubidos(
   opciones: { previas?: Previa[] } = {},
 ): Promise<void> {
   for (const ref of refs) await exigirArchivoSubido(ctx, userId, ref, carpeta, opciones);
+}
+
+/**
+ * Para quien no puede recibir archivos nuevos por ese camino: pasa sin
+ * archivo, o con uno que el registro ya tenía, sin cambiar. Cualquier otro
+ * se rechaza (no hay una subida con qué compararlo).
+ */
+export function exigirArchivoPrevio(ref: RefArchivo, previas: Previa[]): void {
+  if (!limpio(ref.url) && !limpio(ref.s3Key)) return;
+  if (!yaEstaba(ref, previas)) throw new Error(MENSAJE_ARCHIVO_NO_AUTORIZADO);
 }

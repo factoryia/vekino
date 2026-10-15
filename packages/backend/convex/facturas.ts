@@ -1,4 +1,4 @@
-import { mutation, query, internalMutation } from "./_generated/server";
+import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
@@ -30,7 +30,7 @@ import {
 } from "./lib/lecturaFactura";
 import { planificarReproceso, type PlanUnidad } from "./lib/reproceso";
 import { exigirStorageIdDelRegistro } from "./model/files";
-import { exigirArchivoSubido } from "./model/registroArchivos";
+import { exigirArchivoPrevio, exigirArchivoSubido } from "./model/registroArchivos";
 import {
   recaudoContablePorPeriodo,
   recaudoVekinoPorPeriodo,
@@ -729,6 +729,29 @@ function carpetaDeFacturas(c: Doc<"condominios">): string {
 }
 
 /**
+ * La carpeta de facturas del conjunto, si es SOLO suya. Si otro la comparte
+ * (un `legacyId` repetido, o igual al `_id` de otro), `null`: sus PDF
+ * quedarían mezclados en la misma carpeta pública.
+ */
+async function carpetaExclusiva(ctx: QueryCtx, conjunto: Doc<"condominios">): Promise<string | null> {
+  const carpeta = carpetaDeFacturas(conjunto);
+  /* Son pocos (uno por conjunto) y no hay índice por `legacyId`. */
+  const todos = await ctx.db.query("condominios").collect();
+  return todos.some((c) => c._id !== conjunto._id && carpetaDeFacturas(c) === carpeta) ? null : carpeta;
+}
+
+/**
+ * Donde quedan los PDF de UNA importación: la carpeta del conjunto, el
+ * período y la importación. Solo `files.publicarFacturas` escribe ahí (las
+ * subidas de los clientes no pueden pedir esta carpeta, `subidas.ts`), y
+ * `bulkUpsert` solo registra en una factura un PDF de la importación que la
+ * está guardando y de su mismo período.
+ */
+export function carpetaDeImportacion(carpetaConjunto: string, periodo: string, importacionId: Id<"importaciones">): string {
+  return `condominios/facturas/${carpetaConjunto}/${periodo}/${importacionId}`;
+}
+
+/**
  * Permiso y destino de una carga de PDFs de facturas, por conjunto.
  *
  * `permisoSubida` resuelve el conjunto por `legacyId`, que solo tienen los
@@ -800,11 +823,32 @@ export const destinoCarga = query({
     if (porLegacy && !porLegacy.some((c) => c._id === conjunto._id)) {
       return { allowed: false, motivo: "no_coinciden" };
     }
-    const carpeta = carpetaDeFacturas(conjunto);
-    if (todos.some((c) => c._id !== conjunto._id && carpetaDeFacturas(c) === carpeta)) {
-      return { allowed: false, motivo: "carpeta_compartida" };
-    }
+    const carpeta = await carpetaExclusiva(ctx, conjunto);
+    if (!carpeta) return { allowed: false, motivo: "carpeta_compartida" };
     return { allowed: true, condominioId: conjunto._id, carpeta };
+  },
+});
+
+/**
+ * Dónde y para quién publica `files.publicarFacturas` los PDF de una
+ * importación: una carga que sigue en curso, de un conjunto donde quien
+ * publica tiene el rol de carga (el de `bulkUpsert`) y cuya carpeta es solo
+ * suya. El conjunto y el período salen de la importación, no de quien
+ * publica; la llave la arma `publicarFacturas` bajo esta carpeta.
+ */
+export const destinoPublicacion = internalQuery({
+  args: { importacionId: v.id("importaciones") },
+  handler: async (ctx, args): Promise<{ carpeta: string; userId: Id<"users"> }> => {
+    const importacion = await ctx.db.get(args.importacionId);
+    if (!importacion) throw new Error("Importación no encontrada.");
+    const { user } = await requireCondominioRole(ctx, importacion.condominioId, [...CARGA_ROLES]);
+    if (importacion.estado !== "en_curso") throw new Error("La importación ya se cerró.");
+    const conjunto = await ctx.db.get(importacion.condominioId);
+    const carpeta = conjunto ? await carpetaExclusiva(ctx, conjunto) : null;
+    if (!carpeta) {
+      throw new Error("La carpeta de facturas de este conjunto la usa otro conjunto. Avisa a soporte antes de cargar.");
+    }
+    return { carpeta: carpetaDeImportacion(carpeta, importacion.periodo, importacion._id), userId: user._id };
   },
 });
 
@@ -839,6 +883,15 @@ export const destinoCarga = query({
  *     septiembre de 2026).
  *   · El `fechaVencimiento` es el que manda quien carga (la confirmación de
  *     la web le pone la regla nueva a lo que entra).
+ *
+ * ── El PDF (Fase 5 de S3, H-12) ──────────────────────────────────────────
+ * Un `pdfUrl` NUEVO solo entra si es un PDF que el servidor publicó para
+ * ESTA importación y este período (`files.publicarFacturas`), con la URL
+ * exacta, sin vencer y sin haberse registrado en otra factura
+ * (`model/registroArchivos.ts`). El que la factura ya tenía se conserva: se
+ * reenvía tal cual o no se manda. Sin importación no entra ninguno nuevo. Un
+ * PDF que no cumple tumba el lote entero: la confirmación nunca lo manda,
+ * así que es un cliente manipulado, y no se guarda nada de ese lote.
  */
 export const bulkUpsert = mutation({
   args: {
@@ -871,6 +924,18 @@ export const bulkUpsert = mutation({
       if (importacion.estado !== "en_curso") throw new Error("La importación ya se cerró.");
     }
 
+    /* La carpeta de facturas de cada conjunto del lote (para la del PDF). */
+    const carpetas = new Map<Id<"condominios">, string>();
+    const carpetaDe = async (condominioId: Id<"condominios">) => {
+      let carpeta = carpetas.get(condominioId);
+      if (carpeta === undefined) {
+        const conjunto = await ctx.db.get(condominioId);
+        carpeta = conjunto ? carpetaDeFacturas(conjunto) : "";
+        carpetas.set(condominioId, carpeta);
+      }
+      return carpeta;
+    };
+
     const now = Date.now();
     let inserted = 0;
     let updated = 0;
@@ -888,7 +953,7 @@ export const bulkUpsert = mutation({
     }
 
     for (const [indice, entrada] of args.facturas.entries()) {
-      const { motivosLectura, estado: _estadoDelCliente, ...f } = entrada;
+      const { motivosLectura, estado: _estadoDelCliente, pdfUrl: pdfDelCliente, ...f } = entrada;
 
       /* Identidad: la unidad es de este conjunto, y el período es el que dice
        * el propio documento. Si no, la factura no se guarda. */
@@ -904,6 +969,26 @@ export const bulkUpsert = mutation({
         continue;
       }
 
+      /* El PDF (ver arriba). Vacío es lo mismo que no mandarlo: se conserva
+       * el que la factura tenía. */
+      const pdfUrl = pdfDelCliente?.trim() || undefined;
+      if (pdfUrl) {
+        const previas = (await facturasDeIdentidad(ctx, f.condominioId, f.unidadId, f.periodo)).map(
+          (x) => x.pdfUrl,
+        );
+        if (importacion) {
+          await exigirArchivoSubido(
+            ctx,
+            user._id,
+            { url: pdfUrl },
+            carpetaDeImportacion(await carpetaDe(f.condominioId), f.periodo, importacion._id),
+            { previas, tipos: ["application/pdf"] },
+          );
+        } else {
+          exigirArchivoPrevio({ url: pdfUrl }, previas);
+        }
+      }
+
       /* Lectura: lo que el backend comprueba con los números, más lo que el
        * parser vio en el PDF. Cualquier motivo deja la factura en revisión. */
       const motivos = motivosValidos([...validarLectura(f), ...(motivosLectura ?? [])]);
@@ -917,6 +1002,7 @@ export const bulkUpsert = mutation({
         ctx,
         {
           ...f,
+          ...(pdfUrl ? { pdfUrl } : {}),
           lecturaDudosa,
           origen: "pdf",
           ...(args.importacionId ? { importacionId: args.importacionId } : {}),

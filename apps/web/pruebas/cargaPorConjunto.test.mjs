@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getFunctionName } from "convex/server";
+import { publicacionSimulada } from "./facturacion/publicacionSimulada.mjs";
 
 /**
  * CARGA DE PDF POR CONJUNTO, NO POR `legacyId` (Hallazgo 2 de la QA en
@@ -20,6 +21,11 @@ import { getFunctionName } from "convex/server";
  *     previa, los dos al confirmar) sigue funcionando;
  *   · dos identificadores de conjuntos distintos se rechazan antes de S3.
  *
+ * Desde la Fase 5 de S3 publica Convex (`files.publicarFacturas`, simulado
+ * con sus reglas en `facturacion/publicacionSimulada.mjs`): la llave la
+ * arma el backend con la carpeta que resuelve para la importación, y la ruta
+ * no escribe en S3.
+ *
  * Proceso aparte en `test:facturacion`: simula `@/lib/auth-server` y S3 a su
  * manera.
  */
@@ -30,12 +36,12 @@ const HUELLA = createHash("sha256").update(PDF).digest("hex");
 /** cdc-control.pdf es de abril de 2026, casa 999. */
 const PERIODO = "2026-04";
 
-// ── S3 simulado
-let publicados;
+// ── S3 desde Next: ya nadie debería escribir por aquí (Fase 5)
+let escriturasDeNext;
 mock.module("@aws-sdk/client-s3", () => ({
   S3Client: class {
     async send(comando) {
-      publicados.push(comando.input);
+      escriturasDeNext.push(comando.input);
       return {};
     }
   },
@@ -55,6 +61,18 @@ let consultas;
 let llamadas;
 
 const carpetaDe = (c) => c.legacyId || c._id;
+
+/** Lo que publicó Convex, con la forma de un PutObject. */
+let publicados;
+/** La importación en curso: su conjunto y su período (los guarda el backend). */
+let importacion;
+const publicacion = publicacionSimulada({
+  destino: (importacionId) => {
+    const conjunto = conjuntos.find((c) => c._id === importacion.condominioId);
+    return `condominios/facturas/${carpetaDe(conjunto)}/${importacion.periodo}/${importacionId}`;
+  },
+  registro: () => publicados,
+});
 
 /** Lo que responde `facturas.destinoCarga`, con las mismas reglas que el backend. */
 function destinoCarga({ condominioId, condominioLegacyId }) {
@@ -88,11 +106,17 @@ mock.module("@/lib/auth-server", () => ({
     if (nombre === "facturas:destinoCarga") return destinoCarga(args);
     throw new Error(`Consulta inesperada: ${nombre}`);
   },
-  fetchAuthAction: async () => null,
+  fetchAuthAction: async (fn, args) => {
+    const nombre = getFunctionName(fn);
+    llamadas.push({ nombre, args });
+    if (nombre === "files:publicarFacturas") return await publicacion.publicarFacturas(args);
+    throw new Error(`Acción inesperada: ${nombre}`);
+  },
   fetchAuthMutation: async (fn, args) => {
     const nombre = getFunctionName(fn);
     llamadas.push({ nombre, args });
     if (nombre === "facturas:iniciarImportacion") {
+      importacion = { condominioId: args.condominioId, periodo: args.periodo };
       return {
         tipo: "nueva",
         importacionId: "imp1",
@@ -124,6 +148,8 @@ const FACTORY = { _id: "j570ttbjpy06q0nnd6k15gnxbx8fxvcz" };
 
 beforeEach(() => {
   publicados = [];
+  escriturasDeNext = [];
+  publicacion.olvidar();
   consultas = [];
   llamadas = [];
   conjuntos = [MIGRADO, FACTORY];
@@ -181,6 +207,7 @@ describe("conjunto SIN legacyId (como Factory): carga y confirma por condominioI
     const [factura] = mutacion("facturas:bulkUpsert").facturas;
     expect(factura.condominioId).toBe(FACTORY._id);
     expect(factura.pdfUrl).toEndWith(`/${publicados[0].Key}`);
+    expect(escriturasDeNext).toEqual([]);
   });
 });
 
@@ -198,6 +225,7 @@ describe("conjunto CON legacyId: la misma llave que hoy", () => {
     expect(nueva).toEqual([expect.stringMatching(llaveBajo("conjunto-de-prueba"))]);
     publicados = [];
     llamadas = [];
+    publicacion.olvidar();
     await confirmar({ condominioId: MIGRADO._id, condominioLegacyId: "conjunto-de-prueba" });
     expect(publicados.map((p) => p.Key)).toEqual(nueva);
   });

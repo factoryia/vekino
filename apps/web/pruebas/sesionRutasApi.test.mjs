@@ -118,6 +118,18 @@ function responder(funcion, args, quien) {
           plan: args.candidatas.map((c) => ({ indice: c.indice, accion: "insertar" })),
         })
       );
+    /* Fase 5 de S3: los PDF los publica Convex, con la sesión de quien confirma. */
+    case "files:publicarFacturas":
+      return (
+        exigirCarga() ??
+        ok(
+          args.pdfs.map((p, i) => {
+            const key = `condominios/facturas/${args.importacionId}/unidad-${p.unidad}-${i}.pdf`;
+            publicados.push(key);
+            return { key, publicUrl: `https://pruebas.s3.us-east-1.amazonaws.com/${key}` };
+          }),
+        )
+      );
     case "facturas:bulkUpsert":
       return (
         exigirCarga() ??
@@ -221,11 +233,14 @@ auth = betterAuth({
 let cabecerasEnCurso = new Headers();
 mock.module("next/headers", () => ({ headers: async () => cabecerasEnCurso }));
 mock.module("next/headers.js", () => ({ headers: async () => cabecerasEnCurso }));
+/** Lo que publicó Convex (`files.publicarFacturas`). */
 let publicados = [];
+/** S3 desde Next: ya nadie debería escribir por aquí (Fase 5 de S3). */
+let escriturasDeNext = [];
 mock.module("@aws-sdk/client-s3", () => ({
   S3Client: class {
     async send(comando) {
-      publicados.push(comando.input.Key);
+      escriturasDeNext.push(comando.input.Key);
       return {};
     }
   },
@@ -306,6 +321,7 @@ beforeEach(() => {
   aConvex = [];
   aNext = [];
   publicados = [];
+  escriturasDeNext = [];
   convexFalla = false;
 });
 
@@ -403,11 +419,13 @@ describe("confirmación de facturas: cada paso que escribe lleva la sesión", ()
     expect(aConvex.map((c) => c.funcion)).toEqual([
       "facturas:destinoCarga",
       "facturas:iniciarImportacion",
+      "files:publicarFacturas",
       "facturas:bulkUpsert",
       "facturas:finalizarImportacion",
     ]);
     expect(aConvex.every((c) => c.quien === CUENTAS.administracion.id)).toBe(true);
     expect(publicados).toHaveLength(previa.invoices.length);
+    expect(escriturasDeNext).toEqual([]);
   });
 
   test("sin sesión: 401 antes de leer el formulario; ni Convex ni S3", async () => {

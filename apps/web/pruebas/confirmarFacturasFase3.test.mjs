@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getFunctionName } from "convex/server";
+import { publicacionSimulada } from "./facturacion/publicacionSimulada.mjs";
 
 /**
  * CONFIRMACIÓN DE UNA CARGA — lo que agregó la Fase 3 de la auditoría de
@@ -24,11 +25,19 @@ const pdf = (archivo) => readFileSync(join(FIXTURES, archivo));
 const huella = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const bogota = (local) => Date.parse(`${local}:00-05:00`);
 
+/** Lo que publicó Convex (`files.publicarFacturas`, Fase 5 de S3). */
 let publicados;
+let periodoEnCurso;
+const publicacion = publicacionSimulada({
+  destino: (importacionId) => `condominios/facturas/conjunto-de-prueba/${periodoEnCurso}/${importacionId}`,
+  registro: () => publicados,
+});
+/* S3 desde Next: ya nadie debería escribir por aquí. */
+let escriturasDeNext;
 mock.module("@aws-sdk/client-s3", () => ({
   S3Client: class {
     async send(comando) {
-      publicados.push(comando.input);
+      escriturasDeNext.push(comando.input);
       return {};
     }
   },
@@ -47,11 +56,17 @@ mock.module("@/lib/auth-server", () => ({
   preloadAuthQuery: async () => ({}),
   /* `facturas.destinoCarga` (Hallazgo 2): el conjunto migrado de la prueba y su carpeta. */
   fetchAuthQuery: async () => ({ allowed: true, condominioId: "condo-1", carpeta: "conjunto-de-prueba" }),
-  fetchAuthAction: async () => null,
+  fetchAuthAction: async (fn, args) => {
+    const nombre = getFunctionName(fn);
+    llamadas.push({ nombre, args });
+    if (nombre === "files:publicarFacturas") return await publicacion.publicarFacturas(args);
+    throw new Error(`Acción inesperada: ${nombre}`);
+  },
   fetchAuthMutation: async (fn, args) => {
     const nombre = getFunctionName(fn);
     llamadas.push({ nombre, args });
     if (nombre === "facturas:iniciarImportacion") {
+      periodoEnCurso = args.periodo;
       /* Como el backend: dos documentos de la misma unidad se rechazan los dos. */
       const veces = new Map();
       for (const c of args.candidatas) veces.set(c.unidadId, (veces.get(c.unidadId) ?? 0) + 1);
@@ -88,6 +103,8 @@ const { POST } = await import("../app/api/facturas/confirmar/route");
 
 beforeEach(() => {
   publicados = [];
+  escriturasDeNext = [];
+  publicacion.olvidar();
   llamadas = [];
 });
 
@@ -138,6 +155,7 @@ describe("dos documentos para la misma unidad", () => {
     expect(status).toBe(200);
     expect(guardadas()).toEqual([]);
     expect(publicados).toEqual([]);
+    expect(escriturasDeNext).toEqual([]);
     const fin = llamadas.find((l) => l.nombre === "facturas:finalizarImportacion").args;
     expect(fin.rechazos).toEqual([
       { indice: 0, motivo: "documento_repetido" },

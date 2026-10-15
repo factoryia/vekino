@@ -287,6 +287,54 @@ async function porLlave(ctx: QueryCtx, key: string) {
 }
 
 /**
+ * Los PDF que el servidor publicó para una importación de facturas
+ * (`files.publicarFacturas`): validados desde ya, como los de `uploadBytes`.
+ *
+ * Sus llaves no son al azar: llevan la importación y la huella del contenido,
+ * así que un reintento de la misma importación publica en las mismas llaves
+ * y aquí encuentra su fila. No se duplica: si ninguna factura la registró
+ * todavía, pasa a quien reintenta (la importación pudo retomarla otra persona
+ * con el mismo rol) y se renueva el plazo; si ya se registró, queda como está
+ * (la factura la conserva como "la que ya tenía").
+ */
+export const registrarPublicadas = internalMutation({
+  args: {
+    carpeta: v.string(),
+    userId: v.id("users"),
+    archivos: v.array(v.object({ key: v.string(), url: v.string(), bytes: v.number() })),
+  },
+  handler: async (ctx, args) => {
+    await limpiarVencidas(ctx);
+    for (const a of args.archivos) {
+      const previa = await porLlave(ctx, a.key);
+      if (previa) {
+        // Solo puede ser una publicación anterior de esta misma importación.
+        if (previa.carpeta !== args.carpeta || previa.url !== a.url || previa.estado !== "validada") {
+          throw new Error(MENSAJE_SUBIDA_NO_VALIDA);
+        }
+        if (previa.registradaEn === undefined) {
+          await ctx.db.patch(previa._id, { userId: args.userId, expiraEn: Date.now() + VIGENCIA_REGISTRO_MS });
+        }
+        continue;
+      }
+      await ctx.db.insert("subidasPendientes", {
+        key: a.key,
+        url: a.url,
+        carpeta: args.carpeta,
+        categoria: "facturaPdf",
+        tipoDeclarado: "application/pdf",
+        userId: args.userId,
+        modo: "servidor",
+        estado: "validada",
+        tipo: "application/pdf",
+        bytes: a.bytes,
+        expiraEn: Date.now() + VIGENCIA_REGISTRO_MS,
+      });
+    }
+  },
+});
+
+/**
  * El contenido ya se leyó y es de un tipo permitido: la subida queda
  * validada, con el tipo y el tamaño comprobados, lista para registrarse.
  */
