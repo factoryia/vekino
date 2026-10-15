@@ -1451,6 +1451,9 @@ export const generateUploadUrl = mutation({
   },
 });
 
+/** Quién crea facturas a mano (y sube su PDF: `subidas.ts`). */
+export const MANUAL_ROLES = ["administrador", "contadora", "junta_directiva"] as const;
+
 /**
  * Crea una factura puntual para una unidad (montos manuales + PDF/imagen opcional).
  * Falla si ya existe factura para (condominio, unidad, período).
@@ -1474,11 +1477,7 @@ export const createManual = mutation({
     pdfUrl: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireCondominioRole(ctx, args.condominioId, [
-      "administrador",
-      "contadora",
-      "junta_directiva",
-    ]);
+    const { user } = await requireCondominioRole(ctx, args.condominioId, [...MANUAL_ROLES]);
 
     if (!/^\d{4}-\d{2}$/.test(args.periodo)) {
       throw new Error("El período debe tener formato YYYY-MM.");

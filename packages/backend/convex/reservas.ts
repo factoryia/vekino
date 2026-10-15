@@ -35,7 +35,7 @@ import {
 } from "./model/authz";
 import { ventanaDiaBogota } from "./model/visitantes";
 
-const ADMIN_ROLES = ["administrador", "junta_directiva", "contadora"] as const;
+export const ADMIN_ROLES = ["administrador", "junta_directiva", "contadora"] as const;
 
 /**
  * Lo que se pacta al crear una reserva: cuanto cuesta y cuanto se deja en

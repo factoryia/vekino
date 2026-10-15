@@ -67,7 +67,7 @@ import {
 } from "./model/depositoReserva";
 
 /** Roles que pueden operar la portería. */
-const GUARD_ROLES = ["guardia", "administrador", "junta_directiva"] as const;
+export const GUARD_ROLES = ["guardia", "administrador", "junta_directiva"] as const;
 /** Roles que administran la configuración y el histórico. */
 const ADMIN_ROLES = ["administrador", "junta_directiva"] as const;
 

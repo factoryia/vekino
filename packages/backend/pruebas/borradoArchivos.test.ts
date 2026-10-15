@@ -138,6 +138,8 @@ beforeEach(async () => {
   vi.stubEnv("AWS_REGION", "us-east-1");
   vi.stubEnv("AWS_ACCESS_KEY_ID", "fake");
   vi.stubEnv("AWS_SECRET_ACCESS_KEY", "fake-secret");
+  // El enlace de las apps instaladas va a la ruta del backend (H-06).
+  vi.stubEnv("CONVEX_SITE_URL", "https://vekino-pruebas.convex.site");
   // Nada sale a internet (p. ej. la difusión de un comunicado por WhatsApp).
   vi.stubGlobal(
     "fetch",
@@ -395,16 +397,23 @@ describe("borrado indirecto: otro conjunto no alcanza los archivos de A", () => 
 /* ── 3. Avatar ────────────────────────────────────────────────────────────── */
 
 describe("avatar: cambiar o quitar la foto nunca borra la de otro usuario", () => {
-  test("la subida va a la carpeta de quien sube, pida la carpeta que pida", async () => {
-    for (const folder of ["avatars", `avatars/${e.residenteB}`]) {
-      const subida = await e.como("residenteA").action(api.files.generateUploadUrl, {
-        folder,
+  test("la subida va a la carpeta de quien sube; la de otro usuario no se puede pedir", async () => {
+    const subida = await e.como("residenteA").action(api.files.generateUploadUrl, {
+      folder: "avatars",
+      contentType: "image/jpeg",
+      fileName: "yo.jpg",
+    });
+    expect(subida.key.startsWith(`${carpetaAvatar(e.residenteA)}/`)).toBe(true);
+    expect(subida.publicUrl).toBe(url(subida.key));
+    // Antes se reescribía a la propia; desde H-06 una carpeta que no es de un
+    // uso conocido se rechaza antes de firmar nada.
+    await expect(
+      e.como("residenteA").action(api.files.generateUploadUrl, {
+        folder: `avatars/${e.residenteB}`,
         contentType: "image/jpeg",
         fileName: "yo.jpg",
-      });
-      expect(subida.key.startsWith(`${carpetaAvatar(e.residenteA)}/`)).toBe(true);
-      expect(subida.publicUrl).toBe(url(subida.key));
-    }
+      }),
+    ).rejects.toThrow("No tienes permiso para subir archivos ahí.");
     const bytes = await e.como("residenteA").action(api.files.uploadBytes, {
       folder: "avatars",
       contentType: "image/jpeg",

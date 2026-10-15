@@ -63,6 +63,9 @@ beforeEach(() => {
   vi.stubEnv("AWS_REGION", "us-east-1");
   vi.stubEnv("AWS_ACCESS_KEY_ID", "fake");
   vi.stubEnv("AWS_SECRET_ACCESS_KEY", "fake-secret");
+  /* Las apps instaladas no mandan el tamaño: su enlace es la ruta
+   * /archivos/subida del backend (H-06). Convex inyecta esta variable. */
+  vi.stubEnv("CONVEX_SITE_URL", "https://vekino-pruebas.convex.site");
   aws.send.mockReset().mockImplementation(async () => ({}));
 });
 
@@ -483,7 +486,9 @@ describe("crearMio · la URL tiene que ser del bucket y de la carpeta del conjun
     const tramo = buena.slice(buena.lastIndexOf("/") + 1);
     const propia = `${BUCKET}/condominios/soportes/${esc.condominioId}`;
     for (const url of [
-      await urlDelMovil(esc, otroConjunto, "foto.jpg"),
+      // Con la forma de una URL del otro conjunto. Pedirla ya no se puede: la
+      // subida a la carpeta de otro conjunto se rechaza antes (H-06).
+      `${BUCKET}/condominios/soportes/${otroConjunto}/${tramo}`,
       `https://otro-bucket.s3.us-east-1.amazonaws.com/condominios/soportes/${esc.condominioId}/${tramo}`,
       `https://vekino.s3.us-west-2.amazonaws.com/condominios/soportes/${esc.condominioId}/${tramo}`,
       `https://archivos.test/condominios/soportes/${esc.condominioId}/${tramo}`,
@@ -549,16 +554,29 @@ describe("El bot de WhatsApp, sin cambios", () => {
     bloquearRed();
   });
 
-  test("uploadBytes sube igual que antes: misma carpeta, mismo tipo y los mismos límites", async () => {
+  /* Antes cualquier sesión subía a cualquier carpeta ("condominios/documentos/x")
+   * con el tipo que dijera. Desde H-06 la carpeta tiene que ser de un conjunto
+   * donde quien sube tiene permiso, y el tipo sale de los bytes. */
+  test("uploadBytes: carpeta autorizada, tipo por contenido y los mismos límites", async () => {
     const { esc } = await conSeptiembre();
     const r = await esc.como("residente").action(api.files.uploadBytes, {
-      folder: "condominios/documentos/x",
+      folder: `condominios/soportes/${esc.condominioId}`,
       contentType: "",
       fileName: "acta.pdf",
       bytes: pdf(),
     });
-    expect(comandos("PutObjectCommand")[0]).toMatchObject({ Bucket: "vekino", ContentType: "application/octet-stream" });
-    expect(r.key).toMatch(new RegExp(`^condominios/documentos/x/${AHORA}-[0-9a-f]{8}-acta\\.pdf$`));
+    expect(comandos("PutObjectCommand")[0]).toMatchObject({ Bucket: "vekino", ContentType: "application/pdf" });
+    expect(r.key).toMatch(new RegExp(`^condominios/soportes/${esc.condominioId}/${AHORA}-[0-9a-f]{8}-acta\\.pdf$`));
+    expect(
+      await mensajeDe(
+        esc.como("residente").action(api.files.uploadBytes, {
+          folder: "condominios/documentos/x",
+          contentType: "",
+          fileName: "acta.pdf",
+          bytes: pdf(),
+        }),
+      ),
+    ).toContain("No tienes permiso para subir archivos ahí.");
     expect(await mensajeDe(esc.como("residente").action(api.files.uploadBytes, { folder: "x", contentType: "a", bytes: new ArrayBuffer(0) }))).toContain(
       "Archivo vacío.",
     );

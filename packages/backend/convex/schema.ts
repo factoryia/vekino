@@ -3185,6 +3185,27 @@ export default defineSchema({
     evidenciaId: v.optional(v.id("incidenteEvidencias")),
   }).index("by_incidente", ["incidenteId"]),
 
+  /**
+   * Subidas a S3 autorizadas que todavía no llegan (`subidas.ts`, H-06 de la
+   * auditoría de S3). `files.generateUploadUrl` la crea —ya revisados el
+   * permiso, la carpeta y el tipo— y la ruta `/archivos/subida` la consume
+   * una sola vez al recibir el archivo. Del enlace solo se guarda la huella
+   * (SHA-256): con la base sola no se puede subir nada.
+   */
+  subidasPendientes: defineTable({
+    tokenHash: v.string(),
+    /** La llave que ya se le devolvió al cliente (con su URL pública). */
+    key: v.string(),
+    /** Qué se puede subir (`lib/subidas.ts`, `CATEGORIAS`). */
+    categoria: v.string(),
+    /** El tipo que declaró el cliente al pedir el enlace. */
+    tipoDeclarado: v.string(),
+    userId: v.id("users"),
+    expiraEn: v.number(),
+  })
+    .index("by_token", ["tokenHash"])
+    .index("by_expira", ["expiraEn"]),
+
   /** Historial inmutable del caso; solo se inserta mediante logIncidenteEvento. */
   incidenteEventos: defineTable({
     incidenteId: v.id("incidentes"),

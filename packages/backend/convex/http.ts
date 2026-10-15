@@ -3,6 +3,7 @@ import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { authComponent, createAuth } from "./auth";
 import { normalizarTelefonoE164 } from "./lib/telefono";
+import { opcionesSubida, recibirSubida } from "./subidas";
 
 
 /**
@@ -454,5 +455,15 @@ http.route({
     return Response.json({ ok: true });
   }),
 });
+
+// ─────────────────────────────────────────────────────────────
+// Subida intermediada a S3 (`subidas.ts`)
+//
+// La `uploadUrl` que `files.generateUploadUrl` da a las apps instaladas (no
+// mandan el tamaño): PUT con el archivo y su Content-Type. El enlace es de un
+// solo uso; aquí se revisan tamaño y contenido antes de escribir en S3.
+// ─────────────────────────────────────────────────────────────
+http.route({ path: "/archivos/subida", method: "PUT", handler: recibirSubida });
+http.route({ path: "/archivos/subida", method: "OPTIONS", handler: opcionesSubida });
 
 export default http;

@@ -12,7 +12,7 @@ import {
   scheduleDeleteS3Keys,
 } from "./model/s3";
 
-const ADMIN_ROLES = ["administrador", "junta_directiva", "contadora"] as const;
+export const ADMIN_ROLES = ["administrador", "junta_directiva", "contadora"] as const;
 
 const categoriaValidator = v.union(
   v.literal("reglamento"),

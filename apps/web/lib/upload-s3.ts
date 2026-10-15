@@ -5,6 +5,8 @@ type GenerateS3Upload = (args: {
   folder: string;
   contentType: string;
   fileName?: string;
+  /** Con el tamaño, la URL firmada de S3 exige ese tamaño y ese tipo exactos. */
+  size?: number;
 }) => Promise<FunctionReturnType<typeof api.files.generateUploadUrl>>;
 
 type UploadBytesFn = (args: {
@@ -133,6 +135,7 @@ async function putSigned(
     folder,
     contentType,
     fileName: file.name,
+    size: file.size,
   });
 
   onProgress?.({ percent: 0, label: "Subiendo a almacenamiento…" });

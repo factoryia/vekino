@@ -1,15 +1,20 @@
 "use node";
 
-import { randomUUID } from "crypto";
+import { createHash, randomBytes, randomUUID } from "crypto";
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { v } from "convex/values";
 import { action, internalAction } from "./_generated/server";
-import type { ActionCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { api, internal } from "./_generated/api";
 import { bucketPublico, carpetaComprobantes, urlPublica, vTipoComprobante } from "./lib/comprobantes";
-import { CARPETA_AVATARES, carpetaAvatar } from "./model/s3";
+import {
+  BYTES_CABECERA,
+  MENSAJE_CONTENIDO,
+  TIPOS_DESCARGA,
+  tipoNeutralizado,
+  tipoVerificado,
+} from "./lib/subidas";
 
 function requireS3Env() {
   /* Bucket y región como los lee `crearMio` para validar la URL de un
@@ -50,10 +55,9 @@ function sanitizeFileName(name: string) {
 /**
  * Sanea la carpeta destino.
  *
- * `folder` llega del cliente y va directo a la clave del objeto. Sin limpiarla,
- * cualquier usuario autenticado pod\u00eda escribir bajo cualquier prefijo del
- * bucket \u2014incluido el de otro conjunto\u2014 y, con `..`, salirse de la carpeta
- * que dijo estar usando.
+ * Las carpetas de las subidas de usuarios ya llegan autorizadas y exactas
+ * (`subidas.autorizar`); las de los procesos internos las arma el servidor.
+ * Esto queda como cinturón: nunca `..`, `.` ni caracteres raros en una llave.
  */
 function sanitizeFolder(folderArg: string): string {
   const limpio = folderArg
@@ -66,30 +70,37 @@ function sanitizeFolder(folderArg: string): string {
   return limpio || "uploads";
 }
 
-/**
- * La carpeta en la que de verdad se sube.
- *
- * Las fotos de perfil van a la carpeta de quien sube (`avatars/{userId}`),
- * la pida como la pida el cliente: la web y el móvil —también los builds ya
- * instalados— mandan `"avatars"`. Así la llave dice de quién es la foto, y
- * `users.setMyAvatar` solo borra fotos de esa carpeta. Nadie puede dejar
- * archivos en la carpeta de otro usuario.
- */
-async function carpetaDeSubida(ctx: ActionCtx, folderArg: string): Promise<string> {
-  const folder = sanitizeFolder(folderArg);
-  if (folder !== CARPETA_AVATARES && !folder.startsWith(`${CARPETA_AVATARES}/`)) {
-    return folder;
-  }
-  const userId: Id<"users"> = await ctx.runQuery(internal.users.miIdParaArchivos, {});
-  return carpetaAvatar(userId);
-}
-
-/** Key \u00fanico en el bucket: `{folder}/{timestamp}-{uuid corto}-{nombre saneado}`. */
+/** Key único en el bucket: `{folder}/{timestamp}-{uuid corto}-{nombre saneado}`. */
 function buildObjectKey(folderArg: string, fileNameArg?: string) {
   const folder = sanitizeFolder(folderArg);
   const rawName = fileNameArg?.trim() || "file";
   const safe = sanitizeFileName(rawName);
   return `${folder}/${Date.now()}-${randomUUID().slice(0, 8)}-${safe}`;
+}
+
+/**
+ * Escribe un objeto en el bucket. Nunca sobrescribe (`If-None-Match: *`): las
+ * llaves son nuevas, y si alguna ya existiera, falla en vez de pisarla. Lo que
+ * debe bajarse y no abrirse (`TIPOS_DESCARGA`, o lo que pida quien llama) va
+ * con `Content-Disposition: attachment`.
+ */
+async function ponerEnBucket(
+  key: string,
+  contentType: string,
+  body: Buffer,
+  descarga = false,
+): Promise<void> {
+  const { bucket } = requireS3Env();
+  await s3Client().send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      ContentType: contentType,
+      Body: body,
+      IfNoneMatch: "*",
+      ...(descarga || TIPOS_DESCARGA.has(contentType) ? { ContentDisposition: "attachment" } : {}),
+    }),
+  );
 }
 
 /**
@@ -102,33 +113,47 @@ async function subirAlBucket(
   fileName: string | undefined,
   contentType: string,
   body: Buffer,
+  descarga = false,
 ): Promise<{ key: string; publicUrl: string }> {
-  const { bucket } = requireS3Env();
-  const client = s3Client();
   const key = buildObjectKey(folder, fileName);
-  await client.send(
-    new PutObjectCommand({
-      Bucket: bucket,
-      Key: key,
-      ContentType: contentType,
-      Body: body,
-    }),
-  );
+  await ponerEnBucket(key, contentType, body, descarga);
   return { key, publicUrl: publicUrlFor(key) };
 }
 
+/** Lo que `subidas.autorizar` devuelve: dónde, y con qué reglas. */
+type Destino = {
+  carpeta: string;
+  categoria: string;
+  userId: Id<"users">;
+  tipos: string[];
+  maxBytes: number;
+};
+
+/** Vigencia de un enlace de subida. */
+const VIGENCIA_ENLACE_MS = 10 * 60 * 1000;
+
 /**
- * URL firmada (PUT) para subir directo al bucket S3.
- * El cliente debe hacer PUT con el Content-Type indicado.
+ * El enlace para subir un archivo. Antes de firmar nada, `subidas.autorizar`
+ * revisa la carpeta (que sea de un uso conocido y de un conjunto o entidad
+ * donde quien pide tiene el permiso de registrar ese archivo), el tipo y el
+ * tamaño. La llave la arma el servidor dentro de esa carpeta.
  *
- * Nota: en algunos entornos el PUT desde el browser falla por CORS
- * (`Failed to fetch`). Preferí `uploadBytes` desde el cliente cuando eso pase.
+ * Dos formas, con la misma respuesta `{uploadUrl, key, publicUrl}`:
+ *   - Con `size` (la web actual): URL firmada de S3 con el tipo y el tamaño
+ *     exactos firmados (`content-type`, `content-length`). S3 rechaza un PUT
+ *     con otro tipo u otro tamaño.
+ *   - Sin `size` (las apps instaladas y la web anterior, que hacen PUT a la
+ *     `uploadUrl` con su `Content-Type`): la URL es la ruta
+ *     `/archivos/subida` del backend, de un solo uso y 10 minutos, que revisa
+ *     el tamaño y el contenido antes de escribir en S3 (`subidas.ts`).
  */
 export const generateUploadUrl = action({
   args: {
     folder: v.string(),
     contentType: v.string(),
     fileName: v.optional(v.string()),
+    /** Bytes del archivo. Sin él, la subida pasa por el backend. */
+    size: v.optional(v.number()),
   },
   handler: async (
     ctx,
@@ -138,18 +163,44 @@ export const generateUploadUrl = action({
     if (!identity) throw new Error("No autenticado.");
 
     const { bucket } = requireS3Env();
-    const client = s3Client();
-    const key = buildObjectKey(await carpetaDeSubida(ctx, args.folder), args.fileName);
-
-    const command = new PutObjectCommand({
-      Bucket: bucket,
-      Key: key,
-      ContentType: args.contentType || "application/octet-stream",
+    const directo = args.size !== undefined;
+    const destino: Destino = await ctx.runQuery(internal.subidas.autorizar, {
+      folder: args.folder,
+      contentType: args.contentType,
+      ...(directo ? { size: args.size } : {}),
+      directo,
     });
+    const key = buildObjectKey(destino.carpeta, args.fileName);
 
-    const uploadUrl = await getSignedUrl(client, command, { expiresIn: 600 });
+    if (directo) {
+      /* El cliente manda en el PUT exactamente este `Content-Type`, y el
+       * navegador pone el `Content-Length`: los dos quedan firmados. */
+      const command = new PutObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        ContentType: args.contentType,
+        ContentLength: args.size,
+      });
+      const uploadUrl = await getSignedUrl(s3Client(), command, {
+        expiresIn: VIGENCIA_ENLACE_MS / 1000,
+        signableHeaders: new Set(["content-type", "content-length"]),
+      });
+      return { uploadUrl, key, publicUrl: publicUrlFor(key) };
+    }
+
+    const sitio = process.env.CONVEX_SITE_URL?.replace(/\/+$/, "");
+    if (!sitio) throw new Error("Falta CONVEX_SITE_URL en Convex.");
+    const token = randomBytes(32).toString("hex");
+    await ctx.runMutation(internal.subidas.registrarPendiente, {
+      tokenHash: createHash("sha256").update(token).digest("hex"),
+      key,
+      categoria: destino.categoria,
+      tipoDeclarado: args.contentType,
+      userId: destino.userId,
+      expiraEn: Date.now() + VIGENCIA_ENLACE_MS,
+    });
     return {
-      uploadUrl,
+      uploadUrl: `${sitio}/archivos/subida?token=${token}`,
       key,
       publicUrl: publicUrlFor(key),
     };
@@ -157,8 +208,12 @@ export const generateUploadUrl = action({
 });
 
 /**
- * Subida server-side (evita CORS del browser → S3).
- * Límite práctico ~15 MB (argumentos de action Convex).
+ * Subida server-side (evita CORS del browser → S3). Es una acción Node: los
+ * argumentos llegan hasta 5 MiB, así que en la práctica sirve para archivos
+ * de hasta ~3,7 MB; lo más grande va por `generateUploadUrl`.
+ *
+ * Misma autorización que `generateUploadUrl`, y además se revisan los bytes:
+ * se guarda con el tipo que dicen, si está permitido.
  */
 export const uploadBytes = action({
   args: {
@@ -180,12 +235,32 @@ export const uploadBytes = action({
       throw new Error("El archivo supera el límite de 15 MB.");
     }
 
-    return await subirAlBucket(
-      await carpetaDeSubida(ctx, args.folder),
-      args.fileName,
-      args.contentType || "application/octet-stream",
-      Buffer.from(args.bytes),
-    );
+    const destino: Destino = await ctx.runQuery(internal.subidas.autorizar, {
+      folder: args.folder,
+      contentType: args.contentType,
+      size,
+      directo: false,
+    });
+    const cabecera = new Uint8Array(args.bytes, 0, Math.min(size, BYTES_CABECERA));
+    const tipo = tipoVerificado(cabecera, args.contentType, destino.tipos);
+    if (!tipo) throw new Error(MENSAJE_CONTENIDO);
+
+    return await subirAlBucket(destino.carpeta, args.fileName, tipo, Buffer.from(args.bytes));
+  },
+});
+
+/**
+ * El archivo de una subida intermediada (`subidas.recibirSubida`), ya
+ * revisado allí: enlace válido, tamaño y tipo por contenido. Llega por el
+ * almacenamiento interno de Convex porque una acción Node solo recibe 5 MiB.
+ */
+export const publicarSubida = internalAction({
+  args: { storageId: v.id("_storage"), key: v.string(), contentType: v.string() },
+  handler: async (ctx, args): Promise<null> => {
+    const archivo = await ctx.storage.get(args.storageId);
+    if (!archivo) throw new Error("No se encontró el archivo de la subida.");
+    await ponerEnBucket(args.key, args.contentType, Buffer.from(await archivo.arrayBuffer()));
+    return null;
   },
 });
 
@@ -308,12 +383,16 @@ export const uploadFromUrl = internalAction({
       throw new Error("El archivo supera el límite de 25 MB.");
     }
 
-    const contentType =
-      args.contentType ||
-      response.headers.get("content-type") ||
-      "application/octet-stream";
+    /* La media la manda cualquiera por WhatsApp: no se rechaza (el mensaje ya
+     * llegó), pero se guarda con el tipo que dicen sus bytes, y lo que no es
+     * un tipo pasivo conocido (HTML, SVG, desconocido) va como binario para
+     * descargar. Nunca se sirve un HTML desde el bucket. */
+    const { contentType, descarga } = tipoNeutralizado(
+      bytes.subarray(0, BYTES_CABECERA),
+      args.contentType || response.headers.get("content-type"),
+    );
 
-    return await subirAlBucket(args.folder, args.fileName, contentType, bytes);
+    return await subirAlBucket(args.folder, args.fileName, contentType, bytes, descarga);
   },
 });
 

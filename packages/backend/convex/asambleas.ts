@@ -37,7 +37,7 @@ import {
 } from "./asambleaSala";
 import { registrarBitacora } from "./salaBitacora";
 
-const WRITE_ROLES = ["administrador", "junta_directiva", "representante_asamblea"] as const;
+export const WRITE_ROLES = ["administrador", "junta_directiva", "representante_asamblea"] as const;
 
 const tipoValidator = v.union(v.literal("ordinaria"), v.literal("extraordinaria"));
 const modalidadValidator = v.union(v.literal("presencial"), v.literal("virtual"), v.literal("mixta"));

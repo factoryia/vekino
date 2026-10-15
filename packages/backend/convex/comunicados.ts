@@ -34,7 +34,7 @@ const archivoValidator = v.object({
   nombre: v.string(),
 });
 
-const ADMIN_ROLES = ["administrador", "junta_directiva", "contadora"] as const;
+export const ADMIN_ROLES = ["administrador", "junta_directiva", "contadora"] as const;
 
 type Archivo = {
   storageId?: Id<"_storage">;

@@ -309,15 +309,6 @@ export const generateAvatarUploadUrl = mutation({
 });
 
 /**
- * El `_id` de quien sube, para la carpeta de su foto de perfil
- * (`files.generateUploadUrl` / `uploadBytes`, `avatars/{userId}`).
- */
-export const miIdParaArchivos = internalQuery({
-  args: {},
-  handler: async (ctx): Promise<Id<"users">> => (await requireAppUser(ctx))._id,
-});
-
-/**
  * Guarda el avatar (URL S3 preferida; storageId legacy). Borra la foto anterior de S3.
  *
  * Solo cuenta como foto propia una llave de `avatars/{su _id}`, la carpeta

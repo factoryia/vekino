@@ -65,8 +65,8 @@ async function borrarArchivosSinUso(
 }
 
 const VIEW_ROLES = ["administrador", "contadora", "junta_directiva"] as const;
-const UPLOAD_ROLES = ["administrador", "contadora"] as const;
-const ADMIN_ROLES = ["administrador"] as const;
+export const UPLOAD_ROLES = ["administrador", "contadora"] as const;
+export const ADMIN_ROLES = ["administrador"] as const;
 
 const cargoValidator = v.union(
   v.literal("presidente"),
