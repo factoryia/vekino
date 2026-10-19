@@ -31,6 +31,9 @@ export class PdfIlegible extends Error {
   }
 }
 
+/** Lo que ve quien sube un `PdfIlegible`, en la vista previa y en la confirmación (422). */
+export const MENSAJE_PDF_ILEGIBLE = "El archivo no es un PDF válido o está dañado. Revísalo y vuelve a subirlo.";
+
 export function hashDe(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }

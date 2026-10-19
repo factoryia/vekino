@@ -14,6 +14,7 @@ import {
 } from "@vekino/backend/lecturaFactura";
 import { emparejarLote, type ModoEmparejado } from "@/lib/emparejar-unidad";
 import { fetchConSesion } from "@/lib/fetch-con-sesion";
+import { leerRespuesta } from "@/lib/leer-respuesta";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import { Select } from "@/components/ui/input";
@@ -130,7 +131,7 @@ export function UploadFacturas({
 
     try {
       const res = await fetchConSesion("/api/facturas/upload", { method: "POST", body: form });
-      const data = await res.json();
+      const data = await leerRespuesta(res);
       if (!res.ok) throw new Error(data.error ?? "Error desconocido");
 
       /* Emparejamiento del LOTE COMPLETO, no factura por factura.
@@ -195,7 +196,7 @@ export function UploadFacturas({
     );
     try {
       const res = await fetchConSesion("/api/facturas/confirmar", { method: "POST", body: form });
-      const data = await res.json();
+      const data = await leerRespuesta(res);
       if (!res.ok) throw new Error(data.error ?? "Error desconocido");
       setResult(data as Resultado);
       setStep("done");

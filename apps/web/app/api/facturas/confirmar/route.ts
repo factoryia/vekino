@@ -4,7 +4,7 @@ import type { Id } from "@vekino/backend/dataModel";
 import { finDelDiaDelPeriodo, vencimientoDePeriodo } from "@vekino/backend/cartera";
 import { numeroFacturaDe } from "@vekino/backend/lecturaFactura";
 import { fetchAuthAction, fetchAuthMutation } from "@/lib/auth-server";
-import { hashDe, leerPdf, pdfDeFactura } from "../lectura";
+import { hashDe, leerPdf, MENSAJE_PDF_ILEGIBLE, pdfDeFactura, PdfIlegible, type PdfLeido } from "../lectura";
 import { idsDelConjunto, rechazoSinSesion, validarDestino } from "../permiso";
 
 export const runtime = "nodejs";
@@ -40,6 +40,13 @@ export const maxDuration = 60;
  * credenciales y `bulkUpsert` aceptaba cualquier `pdfUrl`. La web ya no
  * escribe en S3.
  *
+ * Fase 6: un PDF de factura que no cabe en una llamada a `publicarFacturas`
+ * (`MAX_LOTE_BYTES`) no se rechaza: sube por la ruta intermediada del backend
+ * (`/archivos/subida`, la de las apps instaladas) a la carpeta de esta
+ * importación, que revisa sesión, rol, contenido y tamaño (hasta 20 MiB) y
+ * publica sin sobrescribir. Pasa, p. ej., cuando las páginas comparten una
+ * imagen pesada: el PDF de cada factura la lleva entera.
+ *
  * Fase 3: el vencimiento de lo que entra es el último día del mes del
  * período (`vencimientoDePeriodo`, decisión de la administración) y el plazo
  * del descuento es el que dice el documento (`fechaLimiteDescuento`). Dos
@@ -56,22 +63,17 @@ const MAX_LOTE_BYTES = 3 * 1024 * 1024;
 /** Llamadas a `publicarFacturas` a la vez. */
 const PARALELO = 3;
 
-/** El PDF de una factura (1–3 páginas) que no cabe en una llamada: el archivo está mal. */
+/** El PDF de una factura que tampoco cabe en la ruta intermediada (más de 20 MiB). */
 class PdfDeFacturaGrande extends Error {}
 
 type PdfPorPublicar = { indice: number; unidad: string; bytes: Uint8Array };
 
-/** Los PDF en lotes que no pasan de `max` bytes. */
+/** Los PDF (cada uno de hasta `max` bytes) en lotes que no pasan de `max` bytes. */
 function enLotes(pdfs: readonly PdfPorPublicar[], max: number): PdfPorPublicar[][] {
   const lotes: PdfPorPublicar[][] = [];
   let lote: PdfPorPublicar[] = [];
   let tamano = 0;
   for (const p of pdfs) {
-    if (p.bytes.byteLength > max) {
-      throw new PdfDeFacturaGrande(
-        `El PDF de la casa ${p.unidad || "sin número"} pesa más de ${max / (1024 * 1024)} MB. Revisa el archivo y vuelve a cargarlo.`,
-      );
-    }
     if (lote.length > 0 && tamano + p.bytes.byteLength > max) {
       lotes.push(lote);
       lote = [];
@@ -86,6 +88,34 @@ function enLotes(pdfs: readonly PdfPorPublicar[], max: number): PdfPorPublicar[]
 
 const aArrayBuffer = (b: Uint8Array): ArrayBuffer =>
   b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
+
+/**
+ * Un PDF que no cabe en una llamada a `publicarFacturas`: sube por la ruta
+ * intermediada del backend a la carpeta de la importación (`subidas.ts`). El
+ * enlace lo pide Convex con la sesión de quien confirma, es de un solo uso y
+ * vence a los 10 minutos; el backend revisa el contenido y el tamaño antes de
+ * publicar. Devuelve la URL que `bulkUpsert` acepta para esa importación.
+ */
+async function publicarGrande(carpetaImportacion: string, p: PdfPorPublicar): Promise<string> {
+  const casa = p.unidad || "sin número";
+  const { uploadUrl, publicUrl } = await fetchAuthAction(api.files.generateUploadUrl, {
+    folder: carpetaImportacion,
+    contentType: "application/pdf",
+    fileName: `unidad-${p.unidad || "sin-unidad"}.pdf`,
+  });
+  const res = await fetch(uploadUrl, {
+    method: "PUT",
+    headers: { "Content-Type": "application/pdf" },
+    body: aArrayBuffer(p.bytes),
+  });
+  if (res.status === 413) {
+    throw new PdfDeFacturaGrande(
+      `El PDF de la casa ${casa} es demasiado grande para publicarse (más de 20 MiB, unos 21 MB). Revisa el archivo y vuelve a cargarlo.`,
+    );
+  }
+  if (!res.ok) throw new Error(`No se pudo publicar el PDF de la casa ${casa} (${res.status}).`);
+  return publicUrl;
+}
 
 async function enParalelo<T>(items: readonly T[], n: number, fn: (item: T) => Promise<void>) {
   const cola = [...items];
@@ -134,9 +164,9 @@ export async function POST(req: NextRequest) {
 
     const permiso = await validarDestino(ids);
     if (permiso.rechazo) return permiso.rechazo;
-    /* El conjunto sale del backend, no del formulario. La carpeta de S3 la
-     * vuelve a resolver Convex al publicar (`files.publicarFacturas`). */
-    const { condominioId } = permiso.destino;
+    /* El conjunto y su carpeta salen del backend, no del formulario. Al
+     * publicar, Convex vuelve a resolverlos desde la importación. */
+    const { condominioId, carpeta } = permiso.destino;
 
     const bytes = new Uint8Array(await file.arrayBuffer());
     if (hashDe(bytes) !== hash) {
@@ -146,7 +176,13 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const leido = await leerPdf(bytes);
+    let leido: PdfLeido;
+    try {
+      leido = await leerPdf(bytes);
+    } catch (e) {
+      if (!(e instanceof PdfIlegible)) throw e;
+      return NextResponse.json({ error: MENSAJE_PDF_ILEGIBLE }, { status: 422 });
+    }
     const asignaciones = leerAsignaciones(form.get("asignaciones") as string | null, leido.facturas.length);
     if (!asignaciones) {
       return NextResponse.json({ error: "Las unidades asignadas no son válidas." }, { status: 400 });
@@ -189,13 +225,17 @@ export async function POST(req: NextRequest) {
       pdfs.push({ indice: p.indice, unidad: f.unitIdentifier, bytes: await pdfDeFactura(leido.doc, f.paginas) });
     }
     const urls = new Map<number, string>();
-    await enParalelo(enLotes(pdfs, MAX_LOTE_BYTES), PARALELO, async (lote) => {
+    const caben = pdfs.filter((p) => p.bytes.byteLength <= MAX_LOTE_BYTES);
+    const grandes = pdfs.filter((p) => p.bytes.byteLength > MAX_LOTE_BYTES);
+    await enParalelo(enLotes(caben, MAX_LOTE_BYTES), PARALELO, async (lote) => {
       const publicados = await fetchAuthAction(api.files.publicarFacturas, {
         importacionId: importacionId!,
         pdfs: lote.map((p) => ({ unidad: p.unidad, bytes: aArrayBuffer(p.bytes) })),
       });
       lote.forEach((p, i) => urls.set(p.indice, publicados[i]!.publicUrl));
     });
+    const carpetaImportacion = `condominios/facturas/${carpeta}/${periodo}/${importacionId}`;
+    for (const p of grandes) urls.set(p.indice, await publicarGrande(carpetaImportacion, p));
 
     const fechaEmision = Date.now();
     /* Decisión de la administración para la Fase 3: "con descuento hasta el

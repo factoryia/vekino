@@ -4,6 +4,7 @@ import schema from "../convex/schema";
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import { MENSAJE_CONTENIDO } from "../convex/lib/subidas";
+import { MENSAJE_CARPETA } from "../convex/subidas";
 import { MENSAJE_ARCHIVO_NO_AUTORIZADO } from "../convex/model/registroArchivos";
 
 /**
@@ -818,5 +819,212 @@ describe("14. Los casos negativos no escriben en S3 ni en la base", () => {
     for (const intento of intentos) await expect(intento).rejects.toThrow();
     await nadaEscrito();
     expect(await e.t.run((ctx) => ctx.db.get(inicio.importacionId))).toEqual(importacionAntes);
+  });
+});
+
+/* ── Fase 6 · PDF grandes por la ruta intermediada ────────────────────────── */
+
+const MiB = 1024 * 1024;
+const MIN = 60 * 1000;
+const SITIO = "https://vekino-pruebas.convex.site";
+const carpetaDe = (importacionId: Id<"importaciones">, carpeta = "conjunto-a", periodo = PERIODO) =>
+  `condominios/facturas/${carpeta}/${periodo}/${importacionId}`;
+
+/** Lo que hace la confirmación con un PDF que no cabe en una llamada: pide el enlace y hace PUT. */
+async function subirGrande(quien: Quien, folder: string, bytes: Uint8Array) {
+  const r = await e.como(quien).action(api.files.generateUploadUrl, {
+    folder,
+    contentType: "application/pdf",
+    fileName: "unidad-101.pdf",
+  });
+  const respuesta = await e.t.fetch(r.uploadUrl.slice(SITIO.length), {
+    method: "PUT",
+    headers: { "Content-Type": "application/pdf" },
+    body: bytes,
+  });
+  return { ...r, status: respuesta.status };
+}
+
+describe("Fase 6 · un PDF que no cabe en una llamada sube por la ruta intermediada a la carpeta de la importación", () => {
+  test("4 MiB: queda validado en la carpeta de la importación, solo como PDF, y bulkUpsert lo registra", async () => {
+    const inicio = await iniciar("adminA", e.condoA, [{ unidadId: e.u101, unidad: "101" }]);
+    if (inicio.tipo !== "nueva") throw new Error();
+    const grande = conCabecera("%PDF-1.7\n% factura con una imagen pesada\n", 4 * MiB);
+    const r = await subirGrande("adminA", carpetaDe(inicio.importacionId), grande);
+    expect(r.status).toBe(200);
+    expect(r.key.startsWith(`${carpetaDe(inicio.importacionId)}/`)).toBe(true);
+    expect(s3.objetos.get(r.key)).toMatchObject({ tipo: "application/pdf" });
+    expect(s3.objetos.get(r.key)!.bytes.byteLength).toBe(4 * MiB);
+    expect(await fila(r.key)).toMatchObject({
+      carpeta: carpetaDe(inicio.importacionId),
+      categoria: "facturaPdf",
+      estado: "validada",
+      tipo: "application/pdf",
+      modo: "intermediado",
+    });
+    await guardar("adminA", [entrada(e.condoA, e.u101, r.publicUrl)], { importacionId: inicio.importacionId });
+    expect((await facturaDe(e.u101))?.pdfUrl).toBe(r.publicUrl);
+    expect(puts().every((p) => p.IfNoneMatch === "*")).toBe(true);
+    /* Es la primera petición HTTP del archivo: carga en frío todo `http.ts`
+     * (auth, WhatsApp…) y aquí tarda 10–20 s con la suite entera. La subida
+     * no: medida en caliente (Fase 6), 4 MiB tardan unos 40 ms. */
+  }, 60_000);
+
+  test("la carpeta de una importación solo la pide el rol de carga de ESE conjunto, con la importación en curso y su carpeta y período exactos", async () => {
+    const deA = await iniciar("adminA", e.condoA, [{ unidadId: e.u101, unidad: "101" }]);
+    const deB = await iniciar("adminB", e.condoB, [{ unidadId: e.u201, unidad: "201" }]);
+    if (deA.tipo !== "nueva" || deB.tipo !== "nueva") throw new Error();
+    const pedir = (quien: Quien, folder: string) =>
+      mensajeDe(e.como(quien).action(api.files.generateUploadUrl, { folder, contentType: "application/pdf" }));
+    for (const quien of ["juntaA", "residenteA", "guardaA", "adminB"] as const) {
+      expect(await pedir(quien, carpetaDe(deA.importacionId)), quien).toContain(MENSAJE_CARPETA);
+    }
+    for (const folder of [
+      carpetaDe(deA.importacionId, String(e.condoA)), // el _id, pero A usa su legacyId
+      carpetaDe(deA.importacionId, "conjunto-a", "2026-10"), // otro período
+      carpetaDe(deB.importacionId), // la importación de B bajo la carpeta de A
+      carpetaDe("abc123" as Id<"importaciones">),
+    ]) {
+      expect(await pedir("adminA", folder), folder).toContain(MENSAJE_CARPETA);
+    }
+    await expect(
+      e.t.action(api.files.generateUploadUrl, { folder: carpetaDe(deA.importacionId), contentType: "application/pdf" }),
+    ).rejects.toThrow();
+    await cerrar("adminA", deA.importacionId);
+    expect(await pedir("adminA", carpetaDe(deA.importacionId))).toContain(MENSAJE_CARPETA);
+    expect(await pedir("adminA", `${carpetaDe(deA.importacionId)}/x`)).toContain(MENSAJE_CARPETA);
+    await nadaEscrito();
+  });
+
+  test("lo que no es PDF (415) o pasa de 20 MiB (413) no se publica y no deja nada registrable", async () => {
+    const inicio = await iniciar("adminA", e.condoA, [{ unidadId: e.u101, unidad: "101" }]);
+    if (inicio.tipo !== "nueva") throw new Error();
+    const noPdf = await subirGrande("adminA", carpetaDe(inicio.importacionId), conCabecera("<!DOCTYPE html><html>", 4 * MiB));
+    expect(noPdf.status).toBe(415);
+    const enorme = conCabecera("%PDF-1.7\n", 20 * MiB + 1);
+    const grande = await subirGrande("adminA", carpetaDe(inicio.importacionId), enorme);
+    expect(grande.status).toBe(413);
+    expect(puts()).toEqual([]);
+    expect(await filas()).toEqual([]);
+    expect(
+      await mensajeDe(guardar("adminA", [entrada(e.condoA, e.u101, noPdf.publicUrl)], { importacionId: inicio.importacionId })),
+    ).toContain(MENSAJE_ARCHIVO_NO_AUTORIZADO);
+  });
+
+  test("un PDF subido a la carpeta de la importación no sirve para otra factura de otra importación ni como factura manual", async () => {
+    const inicio = await iniciar("adminA", e.condoA, [{ unidadId: e.u101, unidad: "101" }]);
+    const otra = await iniciar("adminA", e.condoA, [{ unidadId: e.u102, unidad: "102" }]);
+    if (inicio.tipo !== "nueva" || otra.tipo !== "nueva") throw new Error();
+    const r = await subirGrande("adminA", carpetaDe(inicio.importacionId), conCabecera("%PDF-1.7\n", 4 * MiB));
+    expect(
+      await mensajeDe(guardar("adminA", [entrada(e.condoA, e.u102, r.publicUrl)], { importacionId: otra.importacionId })),
+    ).toContain(MENSAJE_ARCHIVO_NO_AUTORIZADO);
+    expect(
+      await mensajeDe(
+        e.como("adminA").mutation(api.facturas.createManual, {
+          condominioId: e.condoA,
+          unidadId: e.u102,
+          periodo: PERIODO,
+          fechaVencimiento: Date.now() + 30 * DIA,
+          valor: 300_000,
+          pdfUrl: r.publicUrl,
+        }),
+      ),
+    ).toContain(MENSAJE_ARCHIVO_NO_AUTORIZADO);
+    expect(await facturas()).toEqual([]);
+  });
+});
+
+/* ── Fase 6 · fallos parciales y reintentos que faltaban ─────────────────── */
+
+describe("Fase 6 · la respuesta se pierde después de guardar, antes de cerrar", () => {
+  for (const soloNuevas of [true, false]) {
+    test(`reintento con soloNuevas=${soloNuevas}: primero 'en curso'; pasados 10 minutos se retoma sin duplicar nada`, async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const hash = huellaAlAzar();
+      const casa = [{ unidadId: e.u101, unidad: "101" }];
+      const archivo = [{ unidad: "101", bytes: pdf("101") }];
+      const primera = await iniciar("adminA", e.condoA, casa, { hash, soloNuevas });
+      if (primera.tipo !== "nueva") throw new Error();
+      const [publicado] = await publicar("adminA", primera.importacionId, archivo);
+      await guardar("adminA", [entrada(e.condoA, e.u101, publicado!.publicUrl)], {
+        importacionId: primera.importacionId,
+        skipExisting: soloNuevas,
+      });
+      // ...y se cortó: la importación no se cerró y la web no recibió respuesta.
+      expect((await iniciar("adminA", e.condoA, casa, { hash, soloNuevas })).tipo).toBe("en_curso");
+
+      vi.setSystemTime(Date.now() + 11 * MIN);
+      const retomada = await iniciar("adminA", e.condoA, casa, { hash, soloNuevas });
+      if (retomada.tipo !== "nueva") throw new Error();
+      expect(retomada.importacionId).toBe(primera.importacionId);
+      expect(retomada.plan).toEqual([{ indice: 0, accion: soloNuevas ? "omitir" : "actualizar" }]);
+      let url: string | undefined;
+      if (!soloNuevas) {
+        const [otra] = await publicar("adminA", retomada.importacionId, archivo);
+        expect(otra).toEqual(publicado);
+        url = otra!.publicUrl;
+      }
+      await guardar("adminA", [entrada(e.condoA, e.u101, url)], { importacionId: retomada.importacionId, skipExisting: soloNuevas });
+      await cerrar("adminA", retomada.importacionId);
+
+      expect(await facturas()).toHaveLength(1);
+      expect((await facturaDe(e.u101))?.pdfUrl).toBe(publicado!.publicUrl);
+      expect(s3.objetos.size).toBe(1);
+      expect(await filas()).toHaveLength(1);
+      expect(borrados()).toEqual([]);
+    });
+  }
+});
+
+describe("Fase 6 · una importación fallida que se retoma después de 24 horas", () => {
+  test("la URL vieja ya no vale; al republicar se reconoce el mismo objeto sin sobrescribirlo y la factura queda bien", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const hash = huellaAlAzar();
+    const casa = [{ unidadId: e.u101, unidad: "101" }];
+    const archivo = [{ unidad: "101", bytes: pdf("101") }];
+    const primera = await iniciar("adminA", e.condoA, casa, { hash });
+    if (primera.tipo !== "nueva") throw new Error();
+    const [publicado] = await publicar("adminA", primera.importacionId, archivo);
+    await cerrar("adminA", primera.importacionId, "fallida");
+    const original = s3.objetos.get(publicado!.key)!.bytes;
+
+    vi.setSystemTime(Date.now() + 25 * 60 * MIN);
+    const retomada = await iniciar("adminA", e.condoA, casa, { hash });
+    if (retomada.tipo !== "nueva") throw new Error();
+    expect(retomada.importacionId).toBe(primera.importacionId);
+    expect(
+      await mensajeDe(guardar("adminA", [entrada(e.condoA, e.u101, publicado!.publicUrl)], { importacionId: retomada.importacionId })),
+    ).toContain(MENSAJE_ARCHIVO_NO_AUTORIZADO);
+    const [otra] = await publicar("adminA", retomada.importacionId, archivo);
+    expect(otra).toEqual(publicado);
+    expect(s3.objetos.get(publicado!.key)!.bytes).toBe(original);
+    await guardar("adminA", [entrada(e.condoA, e.u101, otra!.publicUrl)], { importacionId: retomada.importacionId });
+    await cerrar("adminA", retomada.importacionId);
+    expect((await facturaDe(e.u101))?.pdfUrl).toBe(publicado!.publicUrl);
+    expect((await filas()).filter((f) => f.key === publicado!.key)).toHaveLength(1);
+  });
+});
+
+describe("Fase 6 · la web publicada (c89204a) contra este servidor", () => {
+  /* Lo que manda su pantalla: bulkUpsert desde el navegador, sin importación,
+   * con el pdfUrl que su ruta /api/facturas/upload escribió en S3 (llave fija
+   * por conjunto, período y casa). */
+  const urlAntigua = (casa: string) => `${BUCKET}/condominios/facturas/conjunto-a/${PERIODO}/unidad-${casa}.pdf`;
+
+  test("factura NUEVA: el lote completo se rechaza (la web antigua no puede cargar el mes)", async () => {
+    expect(
+      await mensajeDe(guardar("adminA", [entrada(e.condoA, e.u101, urlAntigua("101")), entrada(e.condoA, e.u102, urlAntigua("102"))])),
+    ).toContain(MENSAJE_ARCHIVO_NO_AUTORIZADO);
+    expect(await facturas()).toEqual([]);
+  });
+
+  test("re-carga de una factura que YA tiene esa misma URL: se acepta (su PDF ya lo pisó la ruta antigua en S3)", async () => {
+    await e.t.run(async (ctx) => {
+      await ctx.db.insert("facturas", { ...entrada(e.condoA, e.u101, urlAntigua("101")), origen: "pdf", createdAt: Date.now(), updatedAt: Date.now() });
+    });
+    const r = await guardar("adminA", [entrada(e.condoA, e.u101, urlAntigua("101"))], { skipExisting: false });
+    expect(r).toMatchObject({ rechazadas: 0 });
+    expect((await facturaDe(e.u101))?.pdfUrl).toBe(urlAntigua("101"));
   });
 });

@@ -95,9 +95,11 @@ export const CATEGORIAS = {
   novedad: { tipos: [...IMAGENES, ...PDF, ...VIDEO], maxBytes: 20 * MiB },
   grabacion: { tipos: ["video/webm"], maxBytes: 50 * MiB },
   whatsapp: { tipos: [...IMAGENES, ...PDF, ...AUDIO, ...VIDEO], maxBytes: 20 * MiB },
-  /* El PDF de cada factura de una importación. No lo sube ningún cliente: lo
-   * publica el servidor (`files.publicarFacturas`) con los bytes que leyó la
-   * confirmación (`/api/facturas/confirmar`). */
+  /* El PDF de cada factura de una importación, con los bytes que leyó la
+   * confirmación (`/api/facturas/confirmar`). Los que caben en una llamada los
+   * publica `files.publicarFacturas`; uno más grande sube por la ruta
+   * intermediada (máximo `MAX_INTERMEDIADA`), a la carpeta de la importación
+   * (`subidas.ts`, Fase 6). */
   facturaPdf: { tipos: PDF, maxBytes: 25 * MiB },
 } satisfies Record<string, Categoria>;
 

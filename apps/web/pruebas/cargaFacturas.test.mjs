@@ -72,7 +72,16 @@ beforeEach(() => {
   globalThis.fetch = async (url, init) => {
     peticiones.push({ url, body: init?.body, headers: new Headers(init?.headers) });
     const r = url === "/api/facturas/upload" ? vistaPrevia : confirmacion;
-    return { ok: r.status < 400, status: r.status, json: async () => r.cuerpo };
+    /* `sinJson`: lo que responde la plataforma (Vercel) a un archivo demasiado
+     * grande, antes de llegar a la ruta: un 413 que no es JSON. */
+    return {
+      ok: r.status < 400,
+      status: r.status,
+      json: async () => {
+        if (r.sinJson) throw new SyntaxError("Unexpected token R in JSON at position 0");
+        return r.cuerpo;
+      },
+    };
   };
   contenedor = document.createElement("div");
   document.body.append(contenedor);
@@ -249,6 +258,25 @@ describe("la sesión viaja a las dos rutas, y la ruta decide", () => {
     expect(pantalla()).toContain("No tienes permiso para subir facturas de este conjunto.");
     expect(pantalla()).not.toContain("¡Facturas cargadas!");
     expect(pantalla()).not.toContain("sesion-de-prueba");
+    expect(boton("Confirmar").disabled).toBe(false);
+  });
+});
+
+describe("Fase 6 · un archivo que la plataforma no admite (413 que no es JSON)", () => {
+  test("en la vista previa: un aviso que dice qué hacer, no un error de JSON", async () => {
+    vistaPrevia = { status: 413, sinJson: true };
+    await elegirPdf();
+    expect(alertas.join(" ")).toContain("demasiado grande para cargarlo de una vez");
+    expect(alertas.join(" ")).not.toMatch(/Unexpected token|JSON/);
+  });
+
+  test("en la confirmación: se ve el motivo y se puede reintentar", async () => {
+    await elegirPdf();
+    confirmacion = { status: 413, sinJson: true };
+    await click(boton("Confirmar"));
+    await esperar();
+    expect(pantalla()).toContain("demasiado grande para cargarlo de una vez");
+    expect(pantalla()).not.toMatch(/Unexpected token/);
     expect(boton("Confirmar").disabled).toBe(false);
   });
 });

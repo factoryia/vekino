@@ -11,7 +11,7 @@
     "test:sesion": "bun test pruebas/fetchConSesion.test.mjs && bun test pruebas/sesionRutasApi.test.mjs",
     "test:operacion": "bun test pruebas/operacionCompania.test.mjs",
     "test:incidentes": "bun test pruebas/incidentes.test.mjs && bun test pruebas/incidentesFase5.test.mjs && bun test pruebas/incidentesFase6.test.mjs && bun test pruebas/incidentesFase7.test.mjs",
-    "test:facturacion": "bun test pruebas/subidaFacturas.test.mjs && bun test pruebas/confirmarFacturas.test.mjs && bun test pruebas/confirmarFacturasFase3.test.mjs && bun test pruebas/fase4Facturacion.test.mjs && bun test pruebas/ingestionFacturas.test.mjs && bun test pruebas/cargaFacturas.test.mjs && bun test pruebas/cargaPorConjunto.test.mjs && bun test pruebas/finanzasCarga.test.mjs && bun test pruebas/comprobanteResidente.test.mjs && bun test pruebas/qaComprobantesResidente.test.mjs && bun test pruebas/facturacion",
+    "test:facturacion": "bun test pruebas/subidaFacturas.test.mjs && bun test pruebas/confirmarFacturas.test.mjs && bun test pruebas/confirmarFacturasFase3.test.mjs && bun test pruebas/tamanosFacturas.test.mjs && bun test pruebas/leerRespuesta.test.mjs && bun test pruebas/fase4Facturacion.test.mjs && bun test pruebas/ingestionFacturas.test.mjs && bun test pruebas/cargaFacturas.test.mjs && bun test pruebas/cargaPorConjunto.test.mjs && bun test pruebas/finanzasCarga.test.mjs && bun test pruebas/comprobanteResidente.test.mjs && bun test pruebas/qaComprobantesResidente.test.mjs && bun test pruebas/facturacion",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

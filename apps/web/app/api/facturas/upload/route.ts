@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { MENSAJE_LECTURA } from "@vekino/backend/lecturaFactura";
-import { leerPdf, PdfIlegible, type PdfLeido } from "../lectura";
+import { leerPdf, MENSAJE_PDF_ILEGIBLE, PdfIlegible, type PdfLeido } from "../lectura";
 import { idsDelConjunto, rechazoSinSesion, validarDestino } from "../permiso";
 
 /* Mensajes estables: la pantalla los muestra tal cual. */
 const ARCHIVO_VACIO = "El archivo está vacío. Elige el PDF con las cuentas de cobro.";
-const PDF_ILEGIBLE = "El archivo no es un PDF válido o está dañado. Revísalo y vuelve a subirlo.";
 
 /**
  * VISTA PREVIA de un PDF de cuentas de cobro.
@@ -51,7 +50,7 @@ export async function POST(req: NextRequest) {
     } catch (e) {
       if (!(e instanceof PdfIlegible)) throw e;
       console.error("[facturas/upload] PDF ilegible:", e.message);
-      return NextResponse.json({ error: PDF_ILEGIBLE }, { status: 422 });
+      return NextResponse.json({ error: MENSAJE_PDF_ILEGIBLE }, { status: 422 });
     }
 
     /* Una factura que no cuadra sale igual en `invoices` (con sus motivos),

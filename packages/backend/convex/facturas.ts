@@ -830,25 +830,36 @@ export const destinoCarga = query({
 });
 
 /**
- * Dónde y para quién publica `files.publicarFacturas` los PDF de una
- * importación: una carga que sigue en curso, de un conjunto donde quien
- * publica tiene el rol de carga (el de `bulkUpsert`) y cuya carpeta es solo
- * suya. El conjunto y el período salen de la importación, no de quien
- * publica; la llave la arma `publicarFacturas` bajo esta carpeta.
+ * Dónde se publican los PDF de una importación, y quién puede hacerlo: una
+ * carga que sigue en curso, de un conjunto donde quien publica tiene el rol
+ * de carga (el de `bulkUpsert`) y cuya carpeta es solo suya. El conjunto y el
+ * período salen de la importación, no de quien publica. Lo usan las dos vías
+ * de publicación de esos PDF: `files.publicarFacturas` (los que caben en una
+ * llamada, vía `destinoPublicacion`) y la subida intermediada de los más
+ * grandes (`subidas.ts`, Fase 6).
  */
+export async function carpetaParaPublicar(
+  ctx: QueryCtx,
+  importacionId: Id<"importaciones">,
+): Promise<{ carpeta: string; user: Doc<"users"> }> {
+  const importacion = await ctx.db.get(importacionId);
+  if (!importacion) throw new Error("Importación no encontrada.");
+  const { user } = await requireCondominioRole(ctx, importacion.condominioId, [...CARGA_ROLES]);
+  if (importacion.estado !== "en_curso") throw new Error("La importación ya se cerró.");
+  const conjunto = await ctx.db.get(importacion.condominioId);
+  const carpeta = conjunto ? await carpetaExclusiva(ctx, conjunto) : null;
+  if (!carpeta) {
+    throw new Error("La carpeta de facturas de este conjunto la usa otro conjunto. Avisa a soporte antes de cargar.");
+  }
+  return { carpeta: carpetaDeImportacion(carpeta, importacion.periodo, importacion._id), user };
+}
+
+/** Dónde y para quién publica `files.publicarFacturas` (ver `carpetaParaPublicar`). */
 export const destinoPublicacion = internalQuery({
   args: { importacionId: v.id("importaciones") },
   handler: async (ctx, args): Promise<{ carpeta: string; userId: Id<"users"> }> => {
-    const importacion = await ctx.db.get(args.importacionId);
-    if (!importacion) throw new Error("Importación no encontrada.");
-    const { user } = await requireCondominioRole(ctx, importacion.condominioId, [...CARGA_ROLES]);
-    if (importacion.estado !== "en_curso") throw new Error("La importación ya se cerró.");
-    const conjunto = await ctx.db.get(importacion.condominioId);
-    const carpeta = conjunto ? await carpetaExclusiva(ctx, conjunto) : null;
-    if (!carpeta) {
-      throw new Error("La carpeta de facturas de este conjunto la usa otro conjunto. Avisa a soporte antes de cargar.");
-    }
-    return { carpeta: carpetaDeImportacion(carpeta, importacion.periodo, importacion._id), userId: user._id };
+    const { carpeta, user } = await carpetaParaPublicar(ctx, args.importacionId);
+    return { carpeta, userId: user._id };
   },
 });
 

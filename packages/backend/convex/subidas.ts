@@ -19,7 +19,7 @@ import { ADMIN_ROLES as ROLES_ICONOS_CONSEJO, UPLOAD_ROLES as ROLES_CONSEJO } fr
 import { GUARD_ROLES } from "./guardia";
 import { ADMIN_ROLES as ROLES_RESERVAS } from "./reservas";
 import { WRITE_ROLES as ROLES_MESA } from "./asambleas";
-import { MANUAL_ROLES } from "./facturas";
+import { MANUAL_ROLES, carpetaParaPublicar } from "./facturas";
 import {
   BYTES_CABECERA,
   CARPETA_TEMPORAL,
@@ -123,6 +123,18 @@ async function destinoPara(ctx: QueryCtx, folder: string, userId: Id<"users">): 
     if (!asamblea) throw new Error(MENSAJE_CARPETA);
     await requireCondominioRole(ctx, asamblea.condominioId, [...ROLES_MESA]);
     return en("grabacion");
+  }
+  // El PDF de una factura de una importación que no cabe en una llamada a
+  // `files.publicarFacturas` (`/api/facturas/confirmar`, Fase 6):
+  // condominios/facturas/{carpeta}/{período}/{importación}. Es la carpeta que
+  // exige `bulkUpsert`, con el mismo permiso que esa publicación: importación
+  // en curso, rol de carga, carpeta solo del conjunto. Solo PDF.
+  if (t.length === 5 && t[0] === "condominios" && t[1] === "facturas") {
+    const importacionId = ctx.db.normalizeId("importaciones", t[4]!);
+    if (!importacionId) throw new Error(MENSAJE_CARPETA);
+    const { carpeta } = await carpetaParaPublicar(ctx, importacionId);
+    if (carpeta !== folder) throw new Error(MENSAJE_CARPETA);
+    return en("facturaPdf");
   }
   if (t[0] !== "condominios") throw new Error(MENSAJE_CARPETA);
 
