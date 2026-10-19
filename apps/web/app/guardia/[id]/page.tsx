@@ -23,6 +23,7 @@ import { StatCard } from "@/components/layout/stat-card";
 import { cn, mensajeErrorUsuario } from "@/lib/utils";
 import { EtiquetaRonda } from "@/components/guardia/etiqueta-ronda";
 import { CerrarTurnoModal } from "@/components/guardia/cerrar-turno-modal";
+import { AvisoTurnoDeCompanero, CerrarTurnoCompaneroModal } from "@/components/guardia/cerrar-turno-companero";
 import { useUploadToS3 } from "@/hooks/use-upload-s3";
 import Link from "next/link";
 
@@ -67,7 +68,10 @@ export default function GuardiaMinutaHome() {
   const turno = useQuery(api.guardia.turnoActivo, { condominioId });
   const minuta = useQuery(api.guardia.listMinuta, { condominioId, limit: 150 });
 
-  const [modal, setModal] = useState<"iniciar" | "cerrar" | "ronda" | "nota" | null>(null);
+  const [modal, setModal] = useState<"iniciar" | "cerrar" | "cerrar-companero" | "ronda" | "nota" | null>(null);
+  /* El turno abierto es de otro guarda: no lo cierra por la vía de siempre y
+   * no puede abrir el suyo hasta que se cierre (`turnoActivo.cierraComo`). */
+  const deCompanero = turno?.cierraComo === "companero";
 
   const eventosTurno = useMemo(
     () => (minuta ?? []).filter((e) => turno && e.turnoId === turno._id),
@@ -100,9 +104,11 @@ export default function GuardiaMinutaHome() {
                     <Footprints className="h-4 w-4" /> Rondas
                   </Link>
                 </Button>
-                <Button size="sm" variant="destructive" onClick={() => setModal("cerrar")}>
-                  <StopCircle className="h-4 w-4" /> Cerrar turno
-                </Button>
+                {!deCompanero && (
+                  <Button size="sm" variant="destructive" onClick={() => setModal("cerrar")}>
+                    <StopCircle className="h-4 w-4" /> Cerrar turno
+                  </Button>
+                )}
               </>
             ) : undefined
           }
@@ -149,6 +155,11 @@ export default function GuardiaMinutaHome() {
                 </div>
               </div>
             </div>
+            {deCompanero && (
+              <div className="mt-4">
+                <AvisoTurnoDeCompanero turno={turno} onCerrar={() => setModal("cerrar-companero")} />
+              </div>
+            )}
           </Card>
 
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -173,6 +184,15 @@ export default function GuardiaMinutaHome() {
       {modal === "iniciar" && <IniciarTurnoModal condominioId={condominioId} onClose={() => setModal(null)} />}
       {modal === "cerrar" && turno && (
         <CerrarTurnoModal turno={turno} stats={stats} onClose={() => setModal(null)} />
+      )}
+      {/* Cerrado el del compañero, sigue el flujo de siempre: iniciar el suyo. */}
+      {modal === "cerrar-companero" && turno && (
+        <CerrarTurnoCompaneroModal
+          turno={turno}
+          condominioId={condominioId}
+          onClose={() => setModal(null)}
+          onCerrado={() => setModal("iniciar")}
+        />
       )}
       {modal === "nota" && <NotaModal condominioId={condominioId} onClose={() => setModal(null)} />}
       </div>

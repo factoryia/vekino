@@ -180,18 +180,34 @@ export const home = query({
 // Turnos — el turno gobierna la operación
 // ─────────────────────────────────────────────────────────────
 
-/** Turno abierto del condominio (o null). Solo puede haber uno a la vez. */
+/**
+ * Turno abierto del condominio (o null). Solo puede haber uno a la vez.
+ *
+ * `cierraComo` dice por qué vía lo cierra quien consulta: `propio` si es del
+ * turno o administra (`cerrarTurno`), `companero` si es otro guarda de la
+ * portería (`cerrarTurnoDeCompanero`). Con la misma regla que el cierre
+ * (`cierraComoPropio`), para que la pantalla no ofrezca lo que el servidor
+ * rechaza. Las apps que no lo leen siguen como antes.
+ */
 export const turnoActivo = query({
   args: { condominioId: v.id("condominios") },
   handler: async (ctx, args) => {
-    await requireCondominioRole(ctx, args.condominioId, [...GUARD_ROLES]);
+    const { user, membership } = await requireCondominioRole(ctx, args.condominioId, [
+      ...GUARD_ROLES,
+    ]);
     const turno = await turnoAbierto(ctx, args.condominioId);
     if (!turno) return null;
     const rondas = await ctx.db
       .query("guardiaRondas")
       .withIndex("by_turno", (q) => q.eq("turnoId", turno._id))
       .collect();
-    return { ...turno, rondasCount: rondas.length };
+    return {
+      ...turno,
+      rondasCount: rondas.length,
+      cierraComo: cierraComoPropio(user, membership, turno)
+        ? ("propio" as const)
+        : ("companero" as const),
+    };
   },
 });
 
@@ -363,6 +379,82 @@ export const iniciarTurno = mutation({
 
 function esDelTurno(turno: Doc<"guardiaTurnos">, userId: Id<"users">): boolean {
   return turno.guardiaUserId === userId || turno.guardiaSecundarioUserId === userId;
+}
+
+/**
+ * Si lo cierra por la vía de siempre (`cerrarTurno`): es del turno, titular o
+ * secundario, o administra el conjunto. Cualquier otro guarda de la portería
+ * lo cierra como compañero (`cerrarTurnoDeCompanero`). Lo comparten el cierre
+ * y `turnoActivo`.
+ */
+function cierraComoPropio(
+  user: Doc<"users">,
+  membership: Doc<"memberships"> | null,
+  turno: Doc<"guardiaTurnos">,
+): boolean {
+  const esAdmin =
+    hasPlatformRole(user, "superadmin", "admin") ||
+    (membership?.roles ?? []).some((r) => (ADMIN_ROLES as readonly string[]).includes(r));
+  return esAdmin || esDelTurno(turno, user._id);
+}
+
+/** Lo que cada cierre puede dejar escrito en el turno, además de quién y cuándo. */
+type CamposDeCierre = Partial<
+  Pick<
+    Doc<"guardiaTurnos">,
+    | "consignas"
+    | "recibe"
+    | "recibeUserId"
+    | "observacionesCierre"
+    | "novedadesElementos"
+    | "novedadesElementosDetalle"
+  >
+>;
+
+/**
+ * LO QUE ESCRIBE TODO CIERRE, lo haga quien lo haga: el turno pasa a cerrado
+ * con quién lo cerró y cuándo, y la minuta lo cuenta.
+ *
+ * Las dos escrituras van en la mutación que llama, y Convex la confirma entera
+ * o no confirma nada: no puede quedar un turno cerrado sin su entrada de
+ * minuta, ni una entrada que cuente un cierre que no ocurrió. Si dos cierran
+ * el mismo turno a la vez, Convex reintenta la segunda mutación, que encuentra
+ * el turno ya cerrado y falla aquí sin escribir nada.
+ *
+ * Quien cierra es siempre `ejecutor`, el de la sesión. El titular del turno
+ * (`guardiaUserId`, `guardiaNombre`) no se toca.
+ */
+async function sellarCierreDeTurno(
+  ctx: MutationCtx,
+  turno: Doc<"guardiaTurnos">,
+  cierre: {
+    ejecutor: Doc<"users">;
+    ejecutorNombre: string;
+    campos: CamposDeCierre;
+    tipo: string;
+    resumen: string;
+  },
+): Promise<void> {
+  if (turno.estado !== "abierto") throw new Error("El turno ya está cerrado.");
+  const now = Date.now();
+  await ctx.db.patch(turno._id, {
+    ...cierre.campos,
+    cerradoPorUserId: cierre.ejecutor._id,
+    estado: "cerrado",
+    fechaCierre: now,
+    updatedAt: now,
+  });
+  await logMinuta(ctx, {
+    condominioId: turno.condominioId,
+    modulo: "minuta",
+    tipo: cierre.tipo,
+    unidad: "Portería",
+    resumen: cierre.resumen,
+    estado: "cerrado",
+    actorUserId: cierre.ejecutor._id,
+    actorNombre: cierre.ejecutorNombre,
+    turnoId: turno._id,
+  });
 }
 
 /**
@@ -584,7 +676,8 @@ export const relevosDelTurno = query({
  * recibe, consignas para el relevo y observaciones generales.
  * Solo el guardia del turno (principal o secundario) o un administrador.
  * El guarda que hoy cubre otro conjunto puede cerrar el suyo si ya estaba
- * abierto cuando empezó la cobertura (`puedeCerrarloPorCobertura`).
+ * abierto cuando empezó la cobertura (`puedeCerrarloPorCobertura`). El turno
+ * que otro guarda dejó abierto se cierra con `cerrarTurnoDeCompanero`.
  *
  * Los elementos NO se reciben aquí: son el `checklist` que se firmó al iniciar
  * el turno y no se tocan. El cierre solo dice si volvieron con novedad; no
@@ -616,10 +709,7 @@ export const cerrarTurno = mutation({
     const { user, membership } = await autorizarCierre(ctx, turno);
     if (turno.estado !== "abierto") throw new Error("El turno ya está cerrado.");
 
-    const esAdmin =
-      hasPlatformRole(user, "superadmin", "admin") ||
-      (membership?.roles ?? []).some((r) => (ADMIN_ROLES as readonly string[]).includes(r));
-    if (!esAdmin && !esDelTurno(turno, user._id)) {
+    if (!cierraComoPropio(user, membership, turno)) {
       throw new Error("Solo el guardia del turno puede cerrarlo.");
     }
 
@@ -649,25 +739,18 @@ export const cerrarTurno = mutation({
       elementosAsignados: turno.checklist.length,
     });
 
-    const now = Date.now();
-    await ctx.db.patch(args.turnoId, {
-      consignas: cierre.consignas,
-      recibe: cierre.recibe,
-      recibeUserId: args.recibeUserId,
-      observacionesCierre: cierre.observacionesCierre,
-      novedadesElementos: cierre.novedadesElementos,
-      novedadesElementosDetalle: cierre.novedadesElementosDetalle,
-      cerradoPorUserId: user._id,
-      estado: "cerrado",
-      fechaCierre: now,
-      updatedAt: now,
-    });
-
-    await logMinuta(ctx, {
-      condominioId: turno.condominioId,
-      modulo: "minuta",
+    await sellarCierreDeTurno(ctx, turno, {
+      ejecutor: user,
+      ejecutorNombre: user.name,
+      campos: {
+        consignas: cierre.consignas,
+        recibe: cierre.recibe,
+        recibeUserId: args.recibeUserId,
+        observacionesCierre: cierre.observacionesCierre,
+        novedadesElementos: cierre.novedadesElementos,
+        novedadesElementosDetalle: cierre.novedadesElementosDetalle,
+      },
       tipo: "Cierre de Turno",
-      unidad: "Portería",
       /* Solo lo que se dijo: sin relevo no hay "Recibe", y si no se preguntó
        * por los elementos no se afirma que volvieron sin novedad. */
       resumen:
@@ -678,11 +761,73 @@ export const cerrarTurno = mutation({
           : cierre.novedadesElementos === false
             ? " Elementos sin novedad."
             : ""),
-      estado: "cerrado",
-      actorUserId: user._id,
-      actorNombre: user.name,
-      turnoId: args.turnoId,
     });
+  },
+});
+
+/** Cómo queda dicho en la minuta y en el turno el cierre por un compañero. */
+const TIPO_CIERRE_COMPANERO = "Cierre de Turno por Compañero";
+const MOTIVO_CIERRE_COMPANERO = "Cierre por compañero (turno olvidado)";
+
+/**
+ * EL TURNO QUE UN COMPAÑERO DEJÓ ABIERTO.
+ *
+ * El guarda A termina su jornada sin cerrar el turno; llega B y no puede abrir
+ * el suyo, porque en la portería solo hay un turno abierto a la vez
+ * (`iniciarTurno`) y `cerrarTurno` solo lo cierra el guarda del turno o la
+ * administración. Esta es la vía explícita para que B lo cierre. `cerrarTurno`
+ * no se afloja: un cierre normal sigue diciendo que lo cerró su guarda.
+ *
+ * Todo se comprueba aquí, contra la base y no contra lo que diga el cliente:
+ *   - quien cierra tiene HOY una vía de guarda en el conjunto que tiene
+ *     seleccionado (`requireCondominioRole` con el contexto de cobertura: el
+ *     guarda que hoy cubre otro conjunto no cierra aquí). Ser administrador no
+ *     basta: la administración ya cierra con `cerrarTurno`;
+ *   - el turno es de ESE conjunto. Un id de otra portería responde lo mismo
+ *     que uno que no existe, para que no sirva de sonda;
+ *   - sigue abierto. Si entre que lo vio y confirmó lo cerró otro (su titular,
+ *     otro compañero), no se vuelve a cerrar ni se escribe nada;
+ *   - y no es suyo. El suyo lo cierra con `cerrarTurno`.
+ *
+ * Lo firma quien lo hace (`cerradoPorUserId` y actor de la minuta); el titular
+ * sigue siendo el titular. Queda en la minuta como "Cierre de Turno por
+ * Compañero", con el motivo, y en el turno como su observación de cierre,
+ * igual que el cierre administrativo de un turno huérfano. Sin relevo: nadie
+ * entregó la portería, y decirlo sería falso.
+ */
+export const cerrarTurnoDeCompanero = mutation({
+  args: {
+    turnoId: v.id("guardiaTurnos"),
+    /** El conjunto que el guarda tiene seleccionado. Se comprueba, no se cree. */
+    condominioId: v.id("condominios"),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireCondominioRole(ctx, args.condominioId, ["guardia"]);
+    const turno = await ctx.db.get(args.turnoId);
+    if (!turno || turno.condominioId !== args.condominioId) {
+      throw new Error("Turno no encontrado en esta portería.");
+    }
+    if (turno.estado !== "abierto") throw new Error("El turno ya está cerrado.");
+    if (esDelTurno(turno, user._id)) {
+      throw new Error("Este turno es tuyo: ciérralo con «Cerrar turno».");
+    }
+
+    const quien = displayNameFromUser(user);
+    const deQuien =
+      turno.guardiaNombre +
+      (turno.guardiaSecundarioNombre ? ` (compartido con ${turno.guardiaSecundarioNombre})` : "");
+    await sellarCierreDeTurno(ctx, turno, {
+      ejecutor: user,
+      ejecutorNombre: quien,
+      campos: {
+        observacionesCierre: `${MOTIVO_CIERRE_COMPANERO}: lo cerró ${quien}, que no es del turno.`,
+      },
+      tipo: TIPO_CIERRE_COMPANERO,
+      resumen:
+        `Turno de ${deQuien} cerrado por ${quien}, compañero de portería: ` +
+        `quedó abierto sin cerrar (turno olvidado). Estado: abierto → cerrado.`,
+    });
+    return { ok: true as const };
   },
 });
 
@@ -731,27 +876,17 @@ export const cerrarTurnoHuerfano = mutation({
     if (motivo.length > 500) throw new Error("El motivo admite hasta 500 caracteres.");
 
     const quien = displayNameFromUser(acceso.user);
-    const now = Date.now();
-    await ctx.db.patch(turno._id, {
-      estado: "cerrado",
-      recibe: "Cierre administrativo",
-      observacionesCierre: `Cierre administrativo: ${motivo}`,
-      cerradoPorUserId: acceso.user._id,
-      fechaCierre: now,
-      updatedAt: now,
-    });
-    await logMinuta(ctx, {
-      condominioId: turno.condominioId,
-      modulo: "minuta",
+    await sellarCierreDeTurno(ctx, turno, {
+      ejecutor: acceso.user,
+      ejecutorNombre: quien,
+      campos: {
+        recibe: "Cierre administrativo",
+        observacionesCierre: `Cierre administrativo: ${motivo}`,
+      },
       tipo: "Cierre de Turno",
-      unidad: "Portería",
       resumen:
         `Turno de ${turno.guardiaNombre} cerrado por la administración de la compañía (${quien}): ` +
         `la cobertura terminó sin que se cerrara. Motivo: ${motivo}`,
-      estado: "cerrado",
-      actorUserId: acceso.user._id,
-      actorNombre: quien,
-      turnoId: turno._id,
     });
     return { ok: true as const };
   },

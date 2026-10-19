@@ -24,6 +24,7 @@ import { Tap } from "@/components/ui/tap";
 import { AuthUI } from "@/lib/auth-ui";
 import { C } from "@/lib/theme";
 import { uploadLocalFile } from "@/lib/guardia-upload";
+import { etiquetaHasta } from "@/lib/contexto-guardia";
 import {
   CerrarTurnoModal,
   Field,
@@ -116,6 +117,40 @@ function Inner() {
   const [modal, setModal] = useState<"iniciar" | "cerrar" | "ronda" | "nota" | null>(
     null,
   );
+  const cerrarDeCompanero = useMutation(api.guardia.cerrarTurnoDeCompanero);
+  /* El turno abierto es de otro guarda: no lo cierra por la vía de siempre y
+   * no puede abrir el suyo hasta que se cierre (`turnoActivo.cierraComo`). */
+  const deCompanero = turno?.cierraComo === "companero";
+
+  /* Confirmación explícita: dice de quién es el turno y que el cierre quedará
+   * a su nombre. Cerrado, sigue el flujo de siempre: iniciar el suyo. */
+  function confirmarCierreDeCompanero() {
+    if (!turno || !condominioId) return;
+    Alert.alert(
+      "Cerrar el turno de otro guarda",
+      `Vas a cerrar el turno de ${turno.guardiaNombre}, abierto desde el ${etiquetaHasta(turno.fechaInicio)}. ` +
+        "Hazlo solo si ya terminó su jornada y olvidó cerrarlo. En la minuta quedará que lo cerraste tú, como compañero.",
+      [
+        { text: "Cancelar", style: "cancel" },
+        {
+          text: "Cerrar su turno",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await cerrarDeCompanero({ turnoId: turno._id, condominioId });
+              setModal("iniciar");
+            } catch (e) {
+              const raw = e instanceof Error ? e.message : "";
+              Alert.alert(
+                "No se pudo cerrar el turno",
+                raw.match(/Uncaught Error:\s*(.+?)(?:\n|$)/i)?.[1] ?? (raw || "Inténtalo de nuevo."),
+              );
+            }
+          },
+        },
+      ],
+    );
+  }
 
   const eventosTurno = useMemo(
     () => (minuta ?? []).filter((e) => turno && e.turnoId === turno._id),
@@ -207,6 +242,13 @@ function Inner() {
                       </Text>
                     </View>
                   </View>
+                  {deCompanero ? (
+                    <Text style={styles.companeroHint}>
+                      Este turno es de {turno.guardiaNombre} y sigue abierto: para
+                      iniciar el tuyo, primero debe cerrarse. Si ya terminó su jornada
+                      y no lo cerró, puedes cerrarlo tú.
+                    </Text>
+                  ) : null}
                 </GlassCard>
 
                 <View style={styles.stats}>
@@ -242,11 +284,15 @@ function Inner() {
                   </Tap>
                 </View>
                 <Tap
-                  onPress={() => setModal("cerrar")}
+                  onPress={
+                    deCompanero ? confirmarCierreDeCompanero : () => setModal("cerrar")
+                  }
                   style={styles.closeBtn}
                 >
                   <Ionicons name="stop-circle-outline" size={18} color="#fff" />
-                  <Text style={styles.closeBtnText}>Cerrar turno</Text>
+                  <Text style={styles.closeBtnText}>
+                    {deCompanero ? `Cerrar turno de ${turno.guardiaNombre}` : "Cerrar turno"}
+                  </Text>
                 </Tap>
               </>
             )}
@@ -738,6 +784,15 @@ const styles = StyleSheet.create({
   },
   turnoName: { fontSize: 15, fontFamily: AuthUI.font.semibold, color: AuthUI.text },
   turnoMeta: { fontSize: 12, color: AuthUI.textMuted, marginTop: 2 },
+  companeroHint: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: "#92400E",
+    backgroundColor: "rgba(245,158,11,0.10)",
+    borderRadius: 10,
+    padding: 10,
+    marginTop: 10,
+  },
   stats: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 12 },
   statCard: { width: "47%", padding: 12, alignItems: "center" },
   statValue: { fontSize: 20, fontFamily: AuthUI.font.semibold, color: AuthUI.text },

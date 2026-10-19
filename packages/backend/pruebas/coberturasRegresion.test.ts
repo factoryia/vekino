@@ -197,7 +197,14 @@ describe("Fase 8: sin cobertura, la portería responde igual que antes", () => {
       condominioId: e.alamos,
       checklist: CHECKLIST,
     });
-    salida["turnoActivo tras abrir"] = await jason.query(api.guardia.turnoActivo, { condominioId: e.alamos });
+    /* `cierraComo` es posterior a la instantánea (el cierre por compañero): se
+     * comprueba aparte y no entra en la comparación, como lo nuevo de
+     * `miAcceso`. */
+    const { cierraComo, ...turnoTrasAbrir } = (await jason.query(api.guardia.turnoActivo, {
+      condominioId: e.alamos,
+    }))!;
+    expect(cierraComo).toBe("propio");
+    salida["turnoActivo tras abrir"] = turnoTrasAbrir;
     salida["iniciarTurno repetido"] = await respuesta(
       e.como("mateo").mutation(api.guardia.iniciarTurno, { condominioId: e.alamos, checklist: CHECKLIST }),
     );
