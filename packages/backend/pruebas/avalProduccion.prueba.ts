@@ -41,14 +41,23 @@ test("reconoce la llave de ejemplo del manual y se niega", () => {
   assert.match(r.join(" "), /AVAL_X_AUTHORIZATION/);
 });
 
-test("los usuarios de ejemplo tampoco pasan", () => {
+test("el SecretList tiene que estar puesto", () => {
   assert.match(
-    faltantesParaProduccion({ ...buena, secretUser: "usuario1" }).join(" "),
+    faltantesParaProduccion({ ...buena, secretUser: "" }).join(" "),
     /AVAL_SECRET_USER/,
   );
   assert.match(
-    faltantesParaProduccion({ ...buena, secretPassword: "usuario1951" }).join(" "),
+    faltantesParaProduccion({ ...buena, secretPassword: "" }).join(" "),
     /AVAL_SECRET_USER/,
+  );
+});
+
+test("el SecretList del manual vale en produccion", () => {
+  /* prd.psp.ath.com.co acepto una Trn del 00030713 con usuario1 / usuario1951
+   * el 13-nov-2026: no son solo de QA. */
+  assert.deepEqual(
+    faltantesParaProduccion({ ...buena, secretUser: "usuario1", secretPassword: "usuario1951" }),
+    [],
   );
 });
 
@@ -67,7 +76,7 @@ test("cuando falta todo, lo dice todo de una vez", () => {
     endpoint: "https://qa.psp.ath.com.co",
     authBasic:
       "MzFoMHJlbzJwbTBndmhndjZyOGsycnFnamg6MTc0Y2o0bmp1bjYybXIzYmMxanRmY3Vsb2RsbmFjZmdmNDBvdDVkYzZjaHVvZG9rbDRxcA==",
-    secretUser: "usuario1",
+    secretUser: "",
     insecureTls: true,
   });
   assert.equal(r.length, 4);

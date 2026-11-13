@@ -66,13 +66,12 @@ export function faltantesParaProduccion(cfg: ConfigRevisable): string[] {
   if (!cfg.xAuthorization || cfg.xAuthorization === QA_X_AUTHORIZATION) {
     faltan.push(`AVAL_X_AUTHORIZATION${suf} falta o es la de ejemplo del manual`);
   }
-  if (
-    !cfg.secretUser ||
-    !cfg.secretPassword ||
-    cfg.secretUser === QA_SECRET_USER ||
-    cfg.secretPassword === QA_SECRET_PASSWORD
-  ) {
-    faltan.push(`AVAL_SECRET_USER${suf} / AVAL_SECRET_PASSWORD${suf} faltan o son las de QA`);
+  /* El SecretList solo tiene que estar puesto a mano, no ser distinto del
+   * manual: en produccion credencialesConvenio ya no cae a ningun valor por
+   * defecto. El usuario y la clave del manual SON los de produccion: el
+   * 13-nov-2026 prd.psp.ath.com.co acepto con ellos una Trn del 00030713. */
+  if (!cfg.secretUser || !cfg.secretPassword) {
+    faltan.push(`AVAL_SECRET_USER${suf} / AVAL_SECRET_PASSWORD${suf} faltan`);
   }
   if (cfg.insecureTls) {
     faltan.push("AVAL_INSECURE_TLS=1: en un canal de pagos el TLS no se relaja");
