@@ -6,18 +6,24 @@ import { ChevronDown, Loader2 } from "lucide-react";
 import { api } from "@vekino/backend/api";
 import type { Id } from "@vekino/backend/dataModel";
 import { cn } from "@/lib/utils";
+import { CargarMasRondas, useRondasPaginadas } from "@/components/vigilancia/rondas-paginadas";
 import { LineaDeTiempo } from "./linea-de-tiempo";
 
-/** Rondas anteriores, con su reporte consolidado al desplegarlas. */
+/**
+ * Rondas anteriores, con su reporte consolidado al desplegarlas.
+ *
+ * Por páginas: las 20 más recientes y "Cargar más" hasta la primera. La ronda
+ * desplegada sigue abierta al cargar más, porque se recuerda por su id.
+ */
 export function HistorialRondas({
   condominioId,
 }: {
   condominioId: Id<"condominios">;
 }) {
-  const rondas = useQuery(api.rondas.listar, { condominioId, limite: 50 });
+  const { results: rondas, status, loadMore } = useRondasPaginadas(condominioId);
   const [abierta, setAbierta] = useState<Id<"guardiaRondas"> | null>(null);
 
-  if (rondas === undefined) {
+  if (status === "LoadingFirstPage") {
     return (
       <div className="flex justify-center py-8">
         <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -79,6 +85,7 @@ export function HistorialRondas({
           {abierta === r._id && <Reporte rondaId={r._id} />}
         </div>
       ))}
+      <CargarMasRondas status={status} loadMore={loadMore} cargadas={rondas.length} />
     </div>
   );
 }

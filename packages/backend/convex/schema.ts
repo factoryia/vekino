@@ -2061,7 +2061,11 @@ export default defineSchema({
     .index("by_turno", ["turnoId"])
     .index("by_condominio", ["condominioId"])
     .index("by_condominio_fecha", ["condominioId", "createdAt"])
-    .index("by_condominio_estado", ["condominioId", "estado"]),
+    .index("by_condominio_estado", ["condominioId", "estado"])
+    /* El historial de un guarda en un conjunto (`rondas.listarPagina`), sin
+     * recorrer las del resto para filtrarlas. Las rondas viejas no tienen
+     * guarda y no salen por aquí, como no salían al filtrar. */
+    .index("by_condominio_guardia", ["condominioId", "guardiaUserId"]),
 
   /**
    * Minuta digital (bitácora append-only). Los eventos se generan
