@@ -233,7 +233,20 @@ export const activa = query({
   },
 });
 
-/** Reúne todo lo que ocurrió durante una ronda. */
+/**
+ * Reúne todo lo que ocurrió durante una ronda.
+ *
+ * LEE SOLO LO DE ESTA RONDA, por `by_condominio_ronda`. Antes recorría la
+ * minuta y las novedades enteras del conjunto y se quedaba con lo suyo en
+ * memoria; `listar` la llama por cada ronda, así que eso eran 50 lecturas del
+ * historial completo por consulta, y en un conjunto con unos meses de portería
+ * pasaba del límite de 16 MiB que Convex permite leer en una ejecución.
+ *
+ * El índice devuelve exactamente lo mismo que aquel filtro —el mismo conjunto
+ * y la misma ronda— y en el mismo orden de creación, así que la línea de
+ * tiempo no cambia ni siquiera en los empates que `ordenarLineaDeTiempo`
+ * resuelve por orden de llegada.
+ */
 async function hitosDeRonda(
   ctx: QueryCtx,
   ronda: Doc<"guardiaRondas">,
@@ -249,10 +262,11 @@ async function hitosDeRonda(
 
   const novedades = await ctx.db
     .query("guardiaNovedadReportes")
-    .withIndex("by_condominio", (q) => q.eq("condominioId", ronda.condominioId))
+    .withIndex("by_condominio_ronda", (q) =>
+      q.eq("condominioId", ronda.condominioId).eq("rondaId", ronda._id),
+    )
     .collect();
   for (const n of novedades) {
-    if (n.rondaId !== ronda._id) continue;
     hitos.push({
       en: n.ocurrioEn ?? n.createdAt,
       /* Un reporte con placa se lee como vehículo aunque viaje por la misma
@@ -266,10 +280,11 @@ async function hitosDeRonda(
 
   const eventos = await ctx.db
     .query("minutaEventos")
-    .withIndex("by_condominio", (q) => q.eq("condominioId", ronda.condominioId))
+    .withIndex("by_condominio_ronda", (q) =>
+      q.eq("condominioId", ronda.condominioId).eq("rondaId", ronda._id),
+    )
     .collect();
   for (const e of eventos) {
-    if (e.rondaId !== ronda._id) continue;
     /* La apertura y el cierre ya son hitos propios; repetirlos desde la
      * minuta duplicaría las dos puntas de la línea de tiempo. */
     if (e.tipo === "Inicio de ronda" || e.tipo === "Fin de ronda") continue;

@@ -2099,7 +2099,11 @@ export default defineSchema({
   })
     .index("by_condominio", ["condominioId"])
     .index("by_condominio_fecha", ["condominioId", "createdAt"])
-    .index("by_turno", ["turnoId"]),
+    .index("by_turno", ["turnoId"])
+    /* Lo que pasó durante UNA ronda (`rondas.hitosDeRonda`). Sin él había que
+     * leer la minuta entera del conjunto por cada ronda listada. Con el
+     * conjunto delante para que la consulta no pueda salir de él. */
+    .index("by_condominio_ronda", ["condominioId", "rondaId"]),
 
   /** Reporte de novedad / incidente de seguridad (con adjunto opcional). */
   guardiaNovedadReportes: defineTable({
@@ -2236,7 +2240,9 @@ export default defineSchema({
     .index("by_condominio_fecha", ["condominioId", "createdAt"])
     // Historial de un vehiculo: "esta placa ya lleva tres veces este mes".
     .index("by_vehiculo", ["vehiculoId"])
-    .index("by_cargo", ["cargoId"]),
+    .index("by_cargo", ["cargoId"])
+    // Los reportes de una ronda, igual que en `minutaEventos`.
+    .index("by_condominio_ronda", ["condominioId", "rondaId"]),
 
   /**
    * Cobro de parqueadero: lo que se le pasa a una casa por un vehiculo en un
