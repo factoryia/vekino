@@ -3,7 +3,9 @@
 import { Footprints } from "lucide-react";
 import type { FunctionReturnType } from "convex/server";
 import type { api } from "@vekino/backend/api";
+import type { Id } from "@vekino/backend/dataModel";
 import { EtiquetaCobertura } from "@/components/vigilancia/etiqueta-cobertura";
+import { CargarMasRondas, useRondasPaginadas } from "@/components/vigilancia/rondas-paginadas";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -15,14 +17,16 @@ import { EmptyState } from "@/components/ui/empty-state";
  * Una sola tabla para las dos vistas que lo miran: la compañía desde
  * `/vigilancia/:condominioId` y el conjunto desde su propia sección. Es
  * literalmente la misma pregunta —qué recorrió la portería de este conjunto—
- * y la responde la misma consulta (`rondas.listar`), así que tener dos tablas
- * solo garantizaba que una de las dos se quedara atrás.
+ * y la responde la misma consulta (`rondas.listarPagina`), así que tener dos
+ * tablas solo garantizaba que una de las dos se quedara atrás.
  *
  * No decide nada: recibe lo que devolvió el servidor. Quién puede ver estas
- * rondas lo resuelve `rondas.listar` exigiendo `porteria.ver` sobre ESE
+ * rondas lo resuelve `rondas.listarPagina` exigiendo `porteria.ver` sobre ESE
  * conjunto, no esta tabla.
  */
-export type RondaListada = FunctionReturnType<typeof api.rondas.listar>[number];
+export type RondaListada = FunctionReturnType<
+  typeof api.rondas.listarPagina
+>["page"][number];
 
 const TONO_RONDA = {
   en_curso: "brand",
@@ -118,5 +122,35 @@ export function TablaRondas({
         </table>
       </div>
     </Card>
+  );
+}
+
+/**
+ * La tabla con su historial completo, por páginas: las 20 más recientes y
+ * "Cargar más" hasta la primera. Se monta solo donde se muestra, así que la
+ * consulta tampoco corre mientras se mira otra pestaña.
+ */
+export function TablaRondasPaginada({
+  condominioId,
+  guardiaUserId,
+  vacio,
+}: {
+  condominioId: Id<"condominios">;
+  /** Solo las de este guarda. Al cambiarlo, la paginación vuelve a empezar. */
+  guardiaUserId?: Id<"users">;
+  vacio?: string;
+}) {
+  const { results, status, loadMore } = useRondasPaginadas(
+    condominioId,
+    guardiaUserId,
+  );
+  return (
+    <div className="space-y-3">
+      <TablaRondas
+        rondas={status === "LoadingFirstPage" ? undefined : results}
+        vacio={vacio}
+      />
+      <CargarMasRondas status={status} loadMore={loadMore} cargadas={results.length} />
+    </div>
   );
 }

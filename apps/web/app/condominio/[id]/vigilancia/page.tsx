@@ -21,7 +21,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input, Select } from "@/components/ui/input";
 import { EtiquetaRonda } from "@/components/guardia/etiqueta-ronda";
-import { TablaRondas } from "@/components/vigilancia/tabla-rondas";
+import { TablaRondasPaginada } from "@/components/vigilancia/tabla-rondas";
 import { cn, mensajeErrorUsuario } from "@/lib/utils";
 
 type Modulo = Doc<"minutaEventos">["modulo"];
@@ -113,7 +113,7 @@ type TabKey = (typeof TABS)[number]["key"];
  * La portería vista desde el conjunto: quién la cubre, qué recorre y qué
  * anota. Es la contraparte de `/vigilancia/:condominioId` —la misma operación
  * mirada desde la compañía que la presta— y comparte con ella las consultas
- * (`rondas.listar`, `guardia.listMinuta`) y la tabla de rondas. Lo que cambia
+ * (`rondas.listarPagina`, `guardia.listMinuta`) y la tabla de rondas. Lo que cambia
  * es por dónde llega el permiso: aquí por el rol en el conjunto y allí por el
  * contrato de la empresa. En los dos casos lo resuelve el servidor exigiendo
  * `porteria.ver` sobre ESE conjunto; el id de la URL no autoriza nada.
@@ -450,12 +450,12 @@ function GrupoPersonal({
 /* ───────── Rondas ───────── */
 
 /**
- * El historial de recorridos. Misma consulta y misma tabla que usa la
- * compañía en `/vigilancia/:condominioId`: aquí solo cambia quién pregunta.
+ * El historial de recorridos, completo y por páginas. Misma consulta y misma
+ * tabla que usa la compañía en `/vigilancia/:condominioId`: aquí solo cambia
+ * quién pregunta.
  */
 function RondasTab({ condominioId }: { condominioId: Id<"condominios"> }) {
-  const rondas = useQuery(api.rondas.listar, { condominioId, limite: 50 });
-  return <TablaRondas rondas={rondas} />;
+  return <TablaRondasPaginada condominioId={condominioId} />;
 }
 
 /* ───────── Minuta (auditoría) ───────── */

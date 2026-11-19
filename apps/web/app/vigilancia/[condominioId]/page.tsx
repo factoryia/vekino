@@ -21,7 +21,7 @@ import { Select } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { EtiquetaRonda } from "@/components/guardia/etiqueta-ronda";
-import { TablaRondas } from "@/components/vigilancia/tabla-rondas";
+import { TablaRondasPaginada } from "@/components/vigilancia/tabla-rondas";
 import { PanelInventarioConjunto } from "@/components/vigilancia/panel-inventario-conjunto";
 import { cn } from "@/lib/utils";
 
@@ -71,10 +71,9 @@ export default function SupervisionConjuntoPage({
   );
 
   const filtro = guardaId ? (guardaId as Id<"users">) : undefined;
-  const rondas = useQuery(
-    api.rondas.listar,
-    conjunto ? { condominioId, guardiaUserId: filtro, limite: 50 } : "skip",
-  );
+  /* Las rondas no se piden aquí: las pide `TablaRondasPaginada`, que solo se
+   * monta con la pestaña de rondas a la vista. Antes se leían siempre, aunque
+   * se estuviera mirando la minuta. */
   const minuta = useQuery(
     api.guardia.listMinuta,
     conjunto ? { condominioId, actorUserId: filtro, limit: 100 } : "skip",
@@ -153,12 +152,13 @@ export default function SupervisionConjuntoPage({
         </Card>
 
         <div className="flex gap-1 border-b border-border">
+          {/* Sin contador: con el historial por páginas, lo cargado no es el
+              total, y antes tampoco lo era (se cortaba en 50). */}
           <Tab
             activo={tab === "rondas"}
             onClick={() => setTab("rondas")}
             icon={Footprints}
             label="Rondas"
-            n={rondas?.length}
           />
           <Tab
             activo={tab === "minuta"}
@@ -188,8 +188,9 @@ export default function SupervisionConjuntoPage({
         )}
 
         {tab === "rondas" ? (
-          <TablaRondas
-            rondas={rondas}
+          <TablaRondasPaginada
+            condominioId={condominioId}
+            guardiaUserId={filtro}
             vacio={
               guarda
                 ? `${guarda.nombre} todavía no tiene rondas en este conjunto.`

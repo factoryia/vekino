@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { paginationOptsValidator } from "convex/server";
 import { mutation, query } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -233,7 +234,20 @@ export const activa = query({
   },
 });
 
-/** Reúne todo lo que ocurrió durante una ronda. */
+/**
+ * Reúne todo lo que ocurrió durante una ronda.
+ *
+ * LEE SOLO LO DE ESTA RONDA, por `by_condominio_ronda`. Antes recorría la
+ * minuta y las novedades enteras del conjunto y se quedaba con lo suyo en
+ * memoria; `listar` la llama por cada ronda, así que eso eran 50 lecturas del
+ * historial completo por consulta, y en un conjunto con unos meses de portería
+ * pasaba del límite de 16 MiB que Convex permite leer en una ejecución.
+ *
+ * El índice devuelve exactamente lo mismo que aquel filtro —el mismo conjunto
+ * y la misma ronda— y en el mismo orden de creación, así que la línea de
+ * tiempo no cambia ni siquiera en los empates que `ordenarLineaDeTiempo`
+ * resuelve por orden de llegada.
+ */
 async function hitosDeRonda(
   ctx: QueryCtx,
   ronda: Doc<"guardiaRondas">,
@@ -249,10 +263,11 @@ async function hitosDeRonda(
 
   const novedades = await ctx.db
     .query("guardiaNovedadReportes")
-    .withIndex("by_condominio", (q) => q.eq("condominioId", ronda.condominioId))
+    .withIndex("by_condominio_ronda", (q) =>
+      q.eq("condominioId", ronda.condominioId).eq("rondaId", ronda._id),
+    )
     .collect();
   for (const n of novedades) {
-    if (n.rondaId !== ronda._id) continue;
     hitos.push({
       en: n.ocurrioEn ?? n.createdAt,
       /* Un reporte con placa se lee como vehículo aunque viaje por la misma
@@ -266,10 +281,11 @@ async function hitosDeRonda(
 
   const eventos = await ctx.db
     .query("minutaEventos")
-    .withIndex("by_condominio", (q) => q.eq("condominioId", ronda.condominioId))
+    .withIndex("by_condominio_ronda", (q) =>
+      q.eq("condominioId", ronda.condominioId).eq("rondaId", ronda._id),
+    )
     .collect();
   for (const e of eventos) {
-    if (e.rondaId !== ronda._id) continue;
     /* La apertura y el cierre ya son hitos propios; repetirlos desde la
      * minuta duplicaría las dos puntas de la línea de tiempo. */
     if (e.tipo === "Inicio de ronda" || e.tipo === "Fin de ronda") continue;
@@ -330,7 +346,71 @@ export const detalle = query({
   },
 });
 
-/** Historial de rondas, de la más reciente a la más vieja. */
+/** Lo más que devuelve una consulta del historial: `listar` o una página de `listarPagina`. */
+const MAXIMO_POR_CONSULTA = 200;
+
+/**
+ * Las rondas de un conjunto —o de un guarda en él—, de la más nueva a la más
+ * vieja, por índice en los dos casos.
+ *
+ * Con guarda, `by_condominio_guardia`. Antes se recorría el conjunto entero
+ * filtrando en memoria, y paginar eso da páginas cortas o vacías: la página
+ * se corta por lo leído, no por lo que pasa el filtro. El orden es el mismo
+ * que el de aquel recorrido, porque dentro de un índice manda la creación.
+ */
+function rondasDelHistorial(
+  ctx: QueryCtx,
+  condominioId: Id<"condominios">,
+  guardiaUserId: Id<"users"> | undefined,
+) {
+  const rondas = ctx.db.query("guardiaRondas");
+  return (
+    guardiaUserId
+      ? rondas.withIndex("by_condominio_guardia", (q) =>
+          q.eq("condominioId", condominioId).eq("guardiaUserId", guardiaUserId),
+        )
+      : rondas.withIndex("by_condominio", (q) => q.eq("condominioId", condominioId))
+  ).order("desc");
+}
+
+/**
+ * Una ronda como la muestran los historiales: sus datos y sus contadores.
+ *
+ * Los contadores se calculan aquí y no se guardan en la ronda: un contador
+ * denormalizado se desincroniza en cuanto alguien borra un reporte, y el
+ * historial es justo donde se notaría. Cuestan lo que tenga la ronda
+ * (`hitosDeRonda` lee por su índice), no lo que tenga el conjunto.
+ */
+async function resumenDeRonda(
+  ctx: QueryCtx,
+  r: Doc<"guardiaRondas">,
+  contexto: ReturnType<typeof lectorDeCoberturasHistoricas>,
+) {
+  const hitos = await hitosDeRonda(ctx, r);
+  const inicio = r.fechaInicio ?? r.createdAt;
+  return {
+    _id: r._id,
+    numero: r.numero ?? null,
+    zona: r.zona,
+    guardiaNombre: r.guardiaNombre ?? null,
+    /* Si la hizo cubriendo este conjunto, de su sello. */
+    ...(await contexto(r)),
+    estado: estadoDeRonda(r.estado),
+    fechaInicio: inicio,
+    fechaCierre: r.fechaCierre ?? null,
+    duracion: duracionTexto(inicio, r.fechaCierre),
+    totales: contar(hitos),
+  };
+}
+
+/**
+ * Historial de rondas, de la más reciente a la más vieja: las últimas
+ * `limite` (50 por defecto, 200 como mucho).
+ *
+ * Se queda por compatibilidad: las pantallas ya usan `listarPagina`, pero
+ * mientras convivan este backend y una web anterior, esa web sigue llamando a
+ * esta. Mismos argumentos y misma respuesta que siempre.
+ */
 export const listar = query({
   args: {
     condominioId: v.id("condominios"),
@@ -349,57 +429,59 @@ export const listar = query({
   },
   handler: async (ctx, args) => {
     await exigirAcceso(ctx, args.condominioId, "porteria.ver");
-    const limite = Math.min(args.limite ?? 50, 200);
+    const limite = Math.min(args.limite ?? 50, MAXIMO_POR_CONSULTA);
+    const rondas = await rondasDelHistorial(
+      ctx,
+      args.condominioId,
+      args.guardiaUserId,
+    ).take(limite);
 
-    let rondas: Doc<"guardiaRondas">[];
-    if (args.guardiaUserId) {
-      /* Se recorre el índice de la más nueva a la más vieja y se corta al
-       * llegar al límite. Sin `.collect()`: en una portería con años de
-       * histórico eso sería leer la tabla entera para mostrar veinte filas. */
-      rondas = [];
-      const guardiaUserId = args.guardiaUserId;
-      for await (const r of ctx.db
-        .query("guardiaRondas")
-        .withIndex("by_condominio", (q) =>
-          q.eq("condominioId", args.condominioId),
-        )
-        .order("desc")) {
-        if (r.guardiaUserId !== guardiaUserId) continue;
-        rondas.push(r);
-        if (rondas.length >= limite) break;
-      }
-    } else {
-      rondas = await ctx.db
-        .query("guardiaRondas")
-        .withIndex("by_condominio", (q) =>
-          q.eq("condominioId", args.condominioId),
-        )
-        .order("desc")
-        .take(limite);
-    }
-
-    /* Los contadores se calculan aquí y no se guardan en la ronda: un contador
-     * denormalizado se desincroniza en cuanto alguien borra un reporte, y el
-     * historial es justo donde se notaría. */
     const salida = [];
     const contexto = lectorDeCoberturasHistoricas(ctx);
-    for (const r of rondas) {
-      const hitos = await hitosDeRonda(ctx, r);
-      const inicio = r.fechaInicio ?? r.createdAt;
-      salida.push({
-        _id: r._id,
-        numero: r.numero ?? null,
-        zona: r.zona,
-        guardiaNombre: r.guardiaNombre ?? null,
-        /* Si la hizo cubriendo este conjunto, de su sello. */
-        ...(await contexto(r)),
-        estado: estadoDeRonda(r.estado),
-        fechaInicio: inicio,
-        fechaCierre: r.fechaCierre ?? null,
-        duracion: duracionTexto(inicio, r.fechaCierre),
-        totales: contar(hitos),
-      });
-    }
+    for (const r of rondas) salida.push(await resumenDeRonda(ctx, r, contexto));
     return salida;
+  },
+});
+
+/**
+ * EL HISTORIAL COMPLETO, POR PÁGINAS.
+ *
+ * `listar` corta en las últimas 50 (200 como mucho) y lo de antes no se
+ * podía ver: en Ciudad del Campo II quedaban nueve rondas fuera. Esta pagina
+ * en la base, con los cursores de Convex: cada página lee sus rondas y lo que
+ * cuelga de ellas, nunca el historial entero.
+ *
+ * Mismos permisos, mismo filtro, mismo orden y los mismos elementos que
+ * `listar` (`resumenDeRonda`); solo que llegan por páginas
+ * (`usePaginatedQuery`).
+ *
+ * El tamaño de página lo pide el cliente, pero no pasa de
+ * `MAXIMO_POR_CONSULTA`: es el mismo techo de `listar`, y lo que impide que
+ * una llamada a mano pida mil rondas con sus hitos de una vez. Recortar
+ * `numItems` es seguro: la página siguiente sale del cursor, no del número.
+ */
+export const listarPagina = query({
+  args: {
+    condominioId: v.id("condominios"),
+    /** Solo las de este guarda, como en `listar`. */
+    guardiaUserId: v.optional(v.id("users")),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => {
+    await exigirAcceso(ctx, args.condominioId, "porteria.ver");
+    const numItems = Math.max(
+      1,
+      Math.min(args.paginationOpts.numItems, MAXIMO_POR_CONSULTA),
+    );
+    const pagina = await rondasDelHistorial(
+      ctx,
+      args.condominioId,
+      args.guardiaUserId,
+    ).paginate({ ...args.paginationOpts, numItems });
+
+    const page = [];
+    const contexto = lectorDeCoberturasHistoricas(ctx);
+    for (const r of pagina.page) page.push(await resumenDeRonda(ctx, r, contexto));
+    return { ...pagina, page };
   },
 });
